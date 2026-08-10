@@ -191,12 +191,12 @@ void display_clear(void) {
   memset(s_fb, 0, sizeof(s_fb));
 }
 
-void display_text(int col, int row, const char *text) {
+// scale_y of 2 draws each glyph row twice, doubling the height without
+// touching the width (see display_text_tall in the header for why).
+static void draw_text(int x, int y, const char *text, int scale_y) {
   if (!s_present || text == NULL) {
     return;
   }
-  int x = col * 4;
-  const int y = row * 6;
   for (const char *p = text; *p; p++) {
     if (x + 3 > BOARD_OLED_WIDTH) {
       return;  // clip rather than wrap
@@ -212,12 +212,22 @@ void display_text(int col, int row, const char *text) {
     for (int gx = 0; gx < 3; gx++) {
       for (int gy = 0; gy < 5; gy++) {
         if (glyph[gx] & (1u << gy)) {
-          set_pixel(x + gx, y + gy, true);
+          for (int rep = 0; rep < scale_y; rep++) {
+            set_pixel(x + gx, y + gy * scale_y + rep, true);
+          }
         }
       }
     }
     x += 4;
   }
+}
+
+void display_text(int col, int row, const char *text) {
+  draw_text(col * DISPLAY_CELL_W, row * DISPLAY_CELL_H, text, 1);
+}
+
+void display_text_tall(int col, int y_px, const char *text) {
+  draw_text(col * DISPLAY_CELL_W, y_px, text, 2);
 }
 
 void display_bar(int col, int row, int width, int filled) {
@@ -276,6 +286,11 @@ void display_clear(void) {}
 void display_text(int col, int row, const char *text) {
   (void)col;
   (void)row;
+  (void)text;
+}
+void display_text_tall(int col, int y_px, const char *text) {
+  (void)col;
+  (void)y_px;
   (void)text;
 }
 void display_bar(int col, int row, int width, int filled) {

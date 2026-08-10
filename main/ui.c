@@ -42,41 +42,59 @@ static int rssi_bars(int8_t rssi) {
   return 1;
 }
 
+// Laid out in pixels rather than rows because the address is drawn at double
+// height and everything else is not. 40 pixels, spent deliberately:
+//
+//   y 0..5    header      identity + who holds the keyboard      (6px)
+//   y 7..16   ADDRESS     double height, the one thing you read  (10px)
+//   y 18..23  network     SSID + signal bars                     (6px)
+//   y 24..29  target      USB state and the event counter        (6px)
+//   y 30..35  debug       only when physically enabled (R-006)   (6px)
+//
+// The lower three are multiples of the 6px cell so they land exactly where
+// this comment says; display_text takes a row, and a value that is not a
+// multiple would be silently snapped down.
+#define UI_Y_ADDRESS 7
+#define UI_Y_NETWORK 18
+#define UI_Y_TARGET 24
+#define UI_Y_DEBUG 30
+
 static void draw(const struct status_snapshot *s) {
   display_clear();
 
-  // Row 0: identity and who holds the keyboard. The client state is the thing
-  // you check when the console feels unresponsive, so it goes top-right.
+  // Identity, and who holds the keyboard — the thing you check first when the
+  // console feels unresponsive, so it sits top-right.
   display_text(0, 0, "AIRKVM");
   display_text(11, 0, s->client_connected ? "BOUND" : "IDLE");
 
-  // Row 1: the IP, the whole reason this screen exists — you read it off the
-  // board and type it into a browser.
-  display_text(0, 1, s->wifi_connected ? s->ip : "NO WIFI");
+  // The address, at double height: this is what the screen is *for*, and at
+  // single height it was technically legible rather than actually readable.
+  // Stretched vertically only so a 15-character IP still fits on one line
+  // (see display_text_tall).
+  display_text_tall(0, UI_Y_ADDRESS, s->wifi_connected ? s->ip : "NO WIFI");
 
-  // Row 2: SSID, truncated by the clip in display_text, with signal bars right.
   if (s->wifi_connected) {
-    display_text(0, 2, s->ssid);
-    display_bar(14, 2, 4, rssi_bars(s->rssi));
+    display_text(0, UI_Y_NETWORK / DISPLAY_CELL_H, s->ssid);
+    display_bar(14, UI_Y_NETWORK / DISPLAY_CELL_H, 4, rssi_bars(s->rssi));
   }
 
-  // Row 3: whether a target is actually listening. On the bench board this
-  // always reads NO HID, which is the honest answer for a board that cannot be
-  // a keyboard rather than a fault to hide.
-  display_text(0, 3, s->usb_mounted ? "USB: TARGET UP" : "USB: NO HID");
-
-  // Row 4: event counter — proof that input is arriving even when the target
-  // appears to do nothing, which is exactly the "is it me or the machine?"
-  // question this device gets used to answer.
+  // Whether a target is actually listening, and proof that input is arriving —
+  // together these separate "my input isn't getting there" from "the target is
+  // ignoring me", which is the question this device gets used to answer.
   char line[DISPLAY_COLS + 1];
-  snprintf(line, sizeof(line), "EVENTS %lu", (unsigned long)s->events);
-  display_text(0, 4, line);
+  if (s->usb_mounted) {
+    snprintf(line, sizeof(line), "USB OK  %lu", (unsigned long)s->events);
+  } else {
+    snprintf(line, sizeof(line), "NO HID  %lu", (unsigned long)s->events);
+  }
+  display_text(0, UI_Y_TARGET / DISPLAY_CELL_H, line);
 
-  // Row 5: debug. Off by default and only reachable by physically pressing the
-  // button on the device (R-006) — this row shows what is being typed, so it
-  // must never be enable-able from the network.
+  // Debug row. Off by default and only reachable by physically pressing the
+  // button on the device (R-006) — this shows what is being typed, so it must
+  // never be enable-able from the network.
   if (s->debug) {
-    display_text(0, 5, s->last_event[0] ? s->last_event : "DEBUG ON");
+    display_text(0, UI_Y_DEBUG / DISPLAY_CELL_H,
+                 s->last_event[0] ? s->last_event : "DEBUG ON");
   }
 
   display_flush();

@@ -17,6 +17,11 @@
 #define DISPLAY_COLS 18
 #define DISPLAY_ROWS 6
 
+// Pixel geometry, for callers that mix text sizes and therefore need to place
+// things by pixel rather than by row.
+#define DISPLAY_CELL_W 4
+#define DISPLAY_CELL_H 6
+
 esp_err_t display_init(void);
 
 // True when init succeeded. Every draw call is a no-op otherwise, so a board
@@ -29,6 +34,16 @@ void display_clear(void);
 // Draws text at a character cell. Text is clipped, never wrapped: wrapping an
 // IP address onto a second line reads as two different numbers.
 void display_text(int col, int row, const char *text);
+
+// Draws text at double height, positioned by pixel row, for the one or two
+// things actually read at a glance.
+//
+// Stretched vertically only, not both axes. Doubling the width too would cut
+// the line to 9 characters, and "192.168.100.100" is 15 — so the legible
+// version of the IP would be the one that no longer fits. Tall-and-narrow
+// digits stay readable in a way tall-and-narrow prose would not, which is why
+// this is used for the address and not for labels.
+void display_text_tall(int col, int y_px, const char *text);
 
 // Draws a horizontal bar in the given cell row, `filled` of `width` cells.
 // Used for signal strength, where a shape is readable at a glance and a number
