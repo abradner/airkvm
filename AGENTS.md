@@ -412,8 +412,26 @@ code is written.*
    `sizeof(buf)` makes the read pull bytes belonging to the next frame. Symptom overlaps with
    entry 1, which made both harder to see; they were separate bugs and both had to be fixed.
 
-4. **Bench hardware that cannot do the headline feature still finds the headline bugs.** All three
-   entries above were found on an ESP32-C3, a board that physically cannot be a USB keyboard, via
+4. **"It got slow" is a measurement, not a diagnosis — and the first suspect is usually wrong.**
+   A report of pages taking 20+ seconds looked like a memory or socket leak introduced by the UI
+   work. It was neither. The evidence that settled it, in the order it should be gathered:
+   *heap free and low-water flat across minutes* (no leak), *every request eventually returning
+   200* (no fd exhaustion), *the periodic health log arriving exactly on schedule* (no starved
+   scheduler or blocked task), and decisively *ICMP round trips already showing 30–1130ms* —
+   latency below the application layer cannot be caused by application code. The actual cause was
+   an RSSI of −85 dBm after the board moved to a different room. The general rule: **before
+   attributing a slowdown to the code you just wrote, measure a layer underneath it.** Ping costs
+   nothing and would have pointed the right way in the first minute. The health line in `ui.c`
+   exists so the heap half of this is answerable without a rebuild.
+
+5. **ESP-IDF defaults WiFi to `WIFI_PS_MIN_MODEM`, which is wrong for anything interactive.**
+   The radio parks between beacons; measured cost here was 30ms best-case round trips becoming
+   450ms average and 1130ms worst, with zero packet loss to hint at what was happening. It
+   presents as "the page won't load", not as power management. `esp_wifi_set_ps(WIFI_PS_NONE)` in
+   `net.c`, justified by principle 6 — this device is mains-powered by definition.
+
+6. **Bench hardware that cannot do the headline feature still finds the headline bugs.** Entries
+   1-3 above were found on an ESP32-C3, a board that physically cannot be a USB keyboard, via
    the `log` HID backend (`main/hid_out_log.c`). None were reachable from host tests or a green
    firmware build. When the real board is late, ask what fraction of the system the wrong board
    can still exercise — here it was everything except the last inch.

@@ -6,6 +6,7 @@
 #include "board.h"
 #include "display.h"
 #include "driver/gpio.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
@@ -21,6 +22,11 @@ static const char *TAG = "ui";
 #define TICK_MS 30
 #define DISPLAY_EVERY_TICKS (250 / TICK_MS)
 #define RSSI_EVERY_TICKS (2000 / TICK_MS)
+
+// Periodic health line. Exists so "is it leaking?" has an answer that is not
+// somebody's opinion: free heap trending down across minutes is a leak, a flat
+// line is not, and the low-water mark catches a transient the average hides.
+#define HEALTH_EVERY_TICKS (30000 / TICK_MS)
 
 // Long enough to reject contact bounce, short enough that a deliberate press
 // always registers.
@@ -115,6 +121,15 @@ static void ui_task(void *arg) {
   for (;;) {
     poll_button();
     indicator_tick();
+
+    if (tick % HEALTH_EVERY_TICKS == 0) {
+      struct status_snapshot health;
+      status_get(&health);
+      ESP_LOGI(TAG, "health: heap %u free / %u low-water, rssi %d, events %lu",
+               (unsigned)esp_get_free_heap_size(),
+               (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT),
+               (int)health.rssi, (unsigned long)health.events);
+    }
 
     if (tick % RSSI_EVERY_TICKS == 0) {
       wifi_ap_record_t ap;

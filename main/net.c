@@ -32,13 +32,14 @@
 
 static const char *TAG = "net";
 
-// Embedded console assets (see main/CMakeLists.txt EMBED_FILES).
-extern const uint8_t index_html_start[] asm("_binary_index_html_start");
-extern const uint8_t index_html_end[] asm("_binary_index_html_end");
-extern const uint8_t app_js_start[] asm("_binary_app_js_start");
-extern const uint8_t app_js_end[] asm("_binary_app_js_end");
-extern const uint8_t style_css_start[] asm("_binary_style_css_start");
-extern const uint8_t style_css_end[] asm("_binary_style_css_end");
+// Embedded console assets, stored gzipped (see main/CMakeLists.txt) and served
+// without decompressing — the browser does that.
+extern const uint8_t index_html_start[] asm("_binary_index_html_gz_start");
+extern const uint8_t index_html_end[] asm("_binary_index_html_gz_end");
+extern const uint8_t app_js_start[] asm("_binary_app_js_gz_start");
+extern const uint8_t app_js_end[] asm("_binary_app_js_gz_end");
+extern const uint8_t style_css_start[] asm("_binary_style_css_gz_start");
+extern const uint8_t style_css_end[] asm("_binary_style_css_gz_end");
 
 // Exactly one console session drives HID at a time. Two clients interleaving
 // modifiers into one HID state is risk R-003; refusing the second is the
@@ -48,6 +49,9 @@ static int s_active_fd = -1;
 static esp_err_t send_static(httpd_req_t *req, const char *type,
                              const uint8_t *start, const uint8_t *end) {
   httpd_resp_set_type(req, type);
+  // Every asset is stored gzipped; without this header the browser renders the
+  // compressed bytes as text.
+  httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
   // EMBED_FILES does not NUL-terminate (EMBED_TXTFILES does), so end - start is
   // already the exact byte count — subtracting one here truncated every asset.
   return httpd_resp_send(req, (const char *)start, end - start);
@@ -273,6 +277,16 @@ static esp_err_t start_wifi(void) {
           sizeof(wifi_config.sta.password));
 
   ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "set_mode failed");
+
+  // Power save off. ESP-IDF defaults to WIFI_PS_MIN_MODEM, which parks the
+  // radio between the AP's beacons — measured here as ICMP round trips of
+  // 30ms best, 450ms average, 1130ms worst, with zero packet loss. For a
+  // battery sensor that is a good trade; for a keyboard it is the whole
+  // product, and it presents as "the page won't load" rather than as anything
+  // recognisable as power management (AGENTS.md §2, principle 6: latency is a
+  // feature). This device is USB-powered by definition — it is plugged into
+  // the machine it types on.
+  ESP_RETURN_ON_ERROR(esp_wifi_set_ps(WIFI_PS_NONE), TAG, "set_ps failed");
   ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &wifi_config), TAG,
                       "set_config failed");
   ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "esp_wifi_start failed");
