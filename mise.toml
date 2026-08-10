@@ -1,0 +1,114 @@
+# Toolchain pins — run `mise install` before working in this repo.
+
+[tools]
+python = "3.14"
+cmake = "3.31"
+ninja = "1.12"
+ruff = "0.9"
+clang-format = "19"
+
+# ESP-IDF itself is not a mise-managed tool: it is a git checkout plus its own
+# installer that fetches per-target compilers. `mise run setup` handles both and
+# is idempotent. IDF_PATH/IDF_TOOLS_PATH below point at that checkout.
+
+[env]
+IDF_PATH = "{{config_root}}/.esp-idf"
+IDF_TOOLS_PATH = "{{config_root}}/.esp-idf-tools"
+# Deliberately no IDF_TARGET here: the target belongs to the build, not the
+# shell. Setting it globally makes it conflict with the bench build's esp32c3
+# and produces a "not consistent with target in the environment" error that
+# looks like a project bug rather than an env var. Each build carries its own.
+# Serial port for flashing. The dongle only enumerates as serial in bootloader
+# mode (hold BOOT, tap RESET) — see AGENTS.md §6.1. Override per machine:
+#   PORT=/dev/tty.usbmodem1101 mise run flash
+PORT = "/dev/ttyACM0"
+
+[tasks.setup]
+shell = "bash -c"
+description = "Clone and install ESP-IDF v5.5 + toolchains (one-time, idempotent, ~4GB)"
+run = """
+set -e
+if [ ! -d "$IDF_PATH" ]; then
+  git clone --branch v5.5 --depth 1 --recursive \
+    https://github.com/espressif/esp-idf.git "$IDF_PATH"
+fi
+# esp32c3 as well as esp32s3: the C3 can't do USB HID, but it runs everything
+# else, so it is the bench board for the network/console/protocol paths.
+"$IDF_PATH/install.sh" esp32c3,esp32s3
+echo "ESP-IDF ready. Subsequent tasks source it automatically."
+"""
+
+[tasks.config]
+shell = "bash -c"
+description = "Open menuconfig (WiFi credentials live under the 'airhid' menu)"
+run = '. "$IDF_PATH/export.sh" >/dev/null && idf.py menuconfig'
+
+[tasks.build]
+shell = "bash -c"
+description = "Build the ESP32-S3 firmware image (the real dongle)"
+run = """
+. "$IDF_PATH/export.sh" >/dev/null
+idf.py -B build \
+  -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.local" build
+"""
+
+[tasks.build-bench]
+shell = "bash -c"
+description = "Build the ESP32-C3 bench image — no USB HID, logs intents instead"
+# Separate build dir: switching IDF_TARGET in one directory forces a full
+# reconfigure every time you alternate boards.
+run = """
+. "$IDF_PATH/export.sh" >/dev/null
+idf.py -B build-bench -DIDF_TARGET=esp32c3 \
+  -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.bench;sdkconfig.local" \
+  -DSDKCONFIG=sdkconfig.bench.generated build
+"""
+
+[tasks.flash-bench]
+shell = "bash -c"
+description = "Flash + monitor the ESP32-C3 bench board"
+run = """
+. "$IDF_PATH/export.sh" >/dev/null
+idf.py -B build-bench -DSDKCONFIG=sdkconfig.bench.generated -p "$PORT" flash monitor
+"""
+
+[tasks.flash]
+shell = "bash -c"
+description = "Flash and monitor (board must be in bootloader mode — see AGENTS.md §6.1)"
+run = '. "$IDF_PATH/export.sh" >/dev/null && idf.py -p "$PORT" flash monitor'
+
+[tasks.clean]
+shell = "bash -c"
+description = "Remove build artifacts"
+run = '. "$IDF_PATH/export.sh" >/dev/null && idf.py fullclean'
+
+[tasks.test]
+description = "Host-side unit tests for pure logic (keymap, protocol) — no hardware needed"
+dir = "test/host"
+run = """
+cmake -B build -G Ninja
+cmake --build build
+ctest --test-dir build --output-on-failure
+"""
+
+[tasks.lint]
+description = "Check formatting and lint (firmware C, tools Python)"
+run = """
+set -e
+# `-name build -prune` matters: CMake generates its own .c files under
+# test/host/build, and formatting those fails lint on any machine that has run
+# the tests. CI never saw it because a fresh checkout has no build dir.
+find main test -name build -prune -o \\( -name '*.c' -o -name '*.h' \\) -print \\
+  | xargs -r clang-format --dry-run --Werror
+ruff check tools
+ruff format --check tools
+"""
+
+[tasks.fmt]
+description = "Apply formatting"
+run = """
+set -e
+find main test -name build -prune -o \\( -name '*.c' -o -name '*.h' \\) -print \\
+  | xargs -r clang-format -i
+ruff format tools
+"""

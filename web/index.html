@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>airhid console</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>airhid</h1>
+      <div id="status" class="status" role="status" aria-live="polite">
+        connecting…
+      </div>
+    </header>
+
+    <main>
+      <!-- Video is the operator's local capture device, opened by the browser.
+           It never touches the dongle or the network (docs/repo-map.md). -->
+      <section id="stage" class="stage" tabindex="0">
+        <video id="video" playsinline autoplay muted></video>
+        <div id="overlay" class="overlay">
+          <p class="overlay-title">Click to capture keyboard &amp; mouse</p>
+          <p class="overlay-hint">Press <kbd>Esc</kbd> to release.</p>
+        </div>
+      </section>
+
+      <aside class="panel">
+        <section>
+          <h2>Video</h2>
+          <select id="camera" aria-label="Capture device"></select>
+          <button id="start-video" type="button">Show capture</button>
+        </section>
+
+        <section>
+          <h2>Send keys</h2>
+          <!-- Chords the browser can't deliver: the OS eats them before any page
+               sees them. Buttons are the honest workaround, not a nicety. -->
+          <button type="button" data-combo="ControlLeft+AltLeft+Delete">
+            Ctrl+Alt+Del
+          </button>
+          <button type="button" data-combo="MetaLeft+Tab">Cmd/Win+Tab</button>
+          <button type="button" data-combo="MetaLeft+KeyQ">Cmd+Q</button>
+          <button type="button" data-combo="AltLeft+F4">Alt+F4</button>
+          <button type="button" data-combo="Escape">Esc</button>
+        </section>
+
+        <section>
+          <h2>Type text</h2>
+          <textarea
+            id="paste-text"
+            rows="3"
+            placeholder="Paste here, then send as keystrokes"
+          ></textarea>
+          <button id="send-text" type="button">Send as keystrokes</button>
+        </section>
+
+        <section>
+          <h2>Mouse</h2>
+          <label for="sensitivity">Sensitivity</label>
+          <input
+            id="sensitivity"
+            type="range"
+            min="0.2"
+            max="3"
+            step="0.1"
+            value="1"
+          />
+        </section>
+
+        <section>
+          <button id="release-all" type="button" class="danger">
+            Release all keys
+          </button>
+        </section>
+      </aside>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

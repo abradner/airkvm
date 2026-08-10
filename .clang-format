@@ -1,0 +1,13 @@
+---
+Language: Cpp
+BasedOnStyle: Google
+IndentWidth: 2
+ColumnLimit: 80
+DerivePointerAlignment: false
+PointerAlignment: Right
+AllowShortFunctionsOnASingleLine: Inline
+SortIncludes: CaseSensitive
+# Reflowing turned a hand-aligned wire-format table in protocol.h into
+# unreadable run-on text. Comments here carry the reasoning that makes this code
+# reviewable, so they are authored, not generated.
+ReflowComments: false

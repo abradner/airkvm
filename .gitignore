@@ -1,0 +1,49 @@
+# --- Universal ---
+.DS_Store
+Thumbs.db
+*.log
+tmp/
+*.swp
+*.swo
+
+# Local agent config (per-machine permissions — never shared)
+.claude/settings.local.json
+
+# Env files — commit templates (.env.template*), never real values
+.env
+.env.*
+!.env.template
+!.env.template.*
+
+# IDE local state (uncomment if unwanted in this repo)
+# .idea/
+# .vscode/
+
+# --- ESP-IDF / CMake ---
+build/
+build-*/
+managed_components/
+
+# Generated sdkconfigs hold real WiFi credentials — ignore every variant, then
+# re-allow only the checked-in templates. Listing files individually let
+# `sdkconfig.bench.generated` through once; a deny-all-then-allow rule cannot
+# make that mistake again as new targets are added.
+sdkconfig*
+!sdkconfig.defaults
+!sdkconfig.bench
+!sdkconfig.ci
+dependencies.lock
+*.bin
+*.elf
+*.map
+
+# ESP-IDF checkout and its downloaded toolchains (installed by `mise run setup`,
+# pinned in mise.toml — several GB, never committed)
+.esp-idf/
+.esp-idf-tools/
+
+# --- Python (tools/) ---
+__pycache__/
+*.pyc
+.venv/
+.ruff_cache/

@@ -1,0 +1,337 @@
+// airhid console.
+//
+// No build step, no framework, no CDN: the dongle serves everything, because a
+// machine you walked up to may be on a network with no internet (AGENTS.md §4).
+//
+// UNVERIFIED — this has never talked to a real dongle.
+
+"use strict";
+
+const FRAME = {
+  KEY_DOWN: 0x01,
+  KEY_UP: 0x02,
+  MOUSE_MOVE: 0x03,
+  MOUSE_BUTTON: 0x04,
+  MOUSE_SCROLL: 0x05,
+  RELEASE_ALL: 0x06,
+  PING: 0x07,
+};
+
+// `?ws=host:port` points the console at a dongle while serving this page from
+// somewhere else (`python3 -m http.server` in web/) for UI-only work.
+const wsOverride = new URLSearchParams(location.search).get("ws");
+const wsUrl = wsOverride
+  ? `ws://${wsOverride}/ws`
+  : `ws://${location.host}/ws`;
+
+const el = {
+  status: document.getElementById("status"),
+  stage: document.getElementById("stage"),
+  overlay: document.getElementById("overlay"),
+  video: document.getElementById("video"),
+  camera: document.getElementById("camera"),
+  startVideo: document.getElementById("start-video"),
+  pasteText: document.getElementById("paste-text"),
+  sendText: document.getElementById("send-text"),
+  sensitivity: document.getElementById("sensitivity"),
+  releaseAll: document.getElementById("release-all"),
+};
+
+let socket = null;
+let reconnectDelay = 500;
+
+function setStatus(text, kind) {
+  el.status.textContent = text;
+  el.status.className = `status ${kind || ""}`;
+}
+
+function connect() {
+  socket = new WebSocket(wsUrl);
+  socket.binaryType = "arraybuffer";
+
+  socket.onopen = () => {
+    reconnectDelay = 500;
+    setStatus("connected", "ok");
+  };
+
+  // Every terminal event releases: a stuck modifier on someone's machine is the
+  // failure that matters, and a spurious release costs nothing (AGENTS.md §2).
+  socket.onclose = () => {
+    setStatus("disconnected — reconnecting…", "bad");
+    exitCapture();
+    socket = null;
+    setTimeout(connect, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 2, 10000);
+  };
+
+  socket.onerror = () => setStatus("connection error", "bad");
+}
+
+function send(bytes) {
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(new Uint8Array(bytes));
+    return true;
+  }
+  return false;
+}
+
+function sendKey(type, code) {
+  const encoded = new TextEncoder().encode(code);
+  if (encoded.length > 23) return false; // matches AIRHID_MAX_CODE_LEN
+  return send([type, encoded.length, ...encoded]);
+}
+
+function sendReleaseAll() {
+  send([FRAME.RELEASE_ALL]);
+}
+
+// --- capture ---------------------------------------------------------------
+
+let captured = false;
+
+function enterCapture() {
+  // Chrome 111+ returns a promise, older browsers return undefined. The usual
+  // rejection is the re-lock cooldown right after an Esc exit — without this the
+  // click just silently does nothing.
+  const pending = el.stage.requestPointerLock();
+  if (pending && typeof pending.catch === "function") {
+    pending.catch(() => setStatus("capture refused — click again", "bad"));
+  }
+}
+
+function exitCapture() {
+  if (document.pointerLockElement) document.exitPointerLock();
+  if (captured) {
+    captured = false;
+    el.overlay.hidden = false;
+    sendReleaseAll();
+  }
+}
+
+document.addEventListener("pointerlockchange", () => {
+  captured = document.pointerLockElement === el.stage;
+  el.overlay.hidden = captured;
+  if (!captured) sendReleaseAll();
+});
+
+el.stage.addEventListener("click", () => {
+  if (!captured) enterCapture();
+});
+
+// Leaving the tab with keys held would leave them held on the target, because
+// the browser stops delivering keyup once the page is hidden.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) exitCapture();
+});
+window.addEventListener("blur", exitCapture);
+window.addEventListener("pagehide", sendReleaseAll);
+
+document.addEventListener("keydown", (e) => {
+  if (!captured) return;
+  e.preventDefault();
+  // Esc is the release gesture and is not forwarded; the sidebar button sends it
+  // to the target when that is what you actually want.
+  if (e.code === "Escape") {
+    exitCapture();
+    return;
+  }
+  // `code` is the physical key position, which is what HID usage codes mean —
+  // `key` would be layout- and shift-dependent and send the wrong key.
+  sendKey(FRAME.KEY_DOWN, e.code);
+});
+
+document.addEventListener("keyup", (e) => {
+  if (!captured) return;
+  e.preventDefault();
+  sendKey(FRAME.KEY_UP, e.code);
+});
+
+// --- mouse -----------------------------------------------------------------
+
+// Motion is accumulated and flushed once per animation frame rather than sent
+// per event. Un-coalesced, a fast flick fills the dongle's HID queue, and a full
+// queue used to trigger release-all — mouse movement tearing down a held chord.
+// Firefox and Safari deliver mousemove at device rate, so this is not academic.
+let pendingDx = 0;
+let pendingDy = 0;
+let flushScheduled = false;
+
+function flushMotion() {
+  flushScheduled = false;
+  // Only whole units can be sent; the sub-pixel remainder stays in the
+  // accumulator so slow movement adds up instead of rounding away to nothing.
+  let ix = Math.trunc(pendingDx);
+  let iy = Math.trunc(pendingDy);
+  pendingDx -= ix;
+  pendingDy -= iy;
+
+  // A HID report carries one signed byte per axis. Anything larger goes as
+  // successive frames rather than being clamped, so a fast flick travels its
+  // full distance instead of silently under-shooting.
+  while (ix !== 0 || iy !== 0) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      pendingDx = pendingDy = 0;
+      return;
+    }
+    const dx = Math.max(-127, Math.min(127, ix));
+    const dy = Math.max(-127, Math.min(127, iy));
+    ix -= dx;
+    iy -= dy;
+    const buf = new ArrayBuffer(5);
+    const view = new DataView(buf);
+    view.setUint8(0, FRAME.MOUSE_MOVE);
+    view.setInt16(1, dx, true);
+    view.setInt16(3, dy, true);
+    socket.send(buf);
+  }
+}
+
+document.addEventListener("mousemove", (e) => {
+  if (!captured) return;
+  const scale = parseFloat(el.sensitivity.value);
+  pendingDx += e.movementX * scale;
+  pendingDy += e.movementY * scale;
+  if (!flushScheduled) {
+    flushScheduled = true;
+    requestAnimationFrame(flushMotion);
+  }
+});
+
+// Buttons go as an absolute mask, so a dropped frame self-corrects instead of
+// leaving a button held (protocol.h).
+function sendButtons(e) {
+  if (!captured) return;
+  e.preventDefault();
+  const mask =
+    (e.buttons & 1 ? 1 : 0) | (e.buttons & 2 ? 2 : 0) | (e.buttons & 4 ? 4 : 0);
+  send([FRAME.MOUSE_BUTTON, mask]);
+}
+document.addEventListener("mousedown", sendButtons);
+document.addEventListener("mouseup", sendButtons);
+document.addEventListener("contextmenu", (e) => {
+  if (captured) e.preventDefault();
+});
+
+document.addEventListener(
+  "wheel",
+  (e) => {
+    if (!captured) return;
+    e.preventDefault();
+    const v = Math.max(-127, Math.min(127, -Math.sign(e.deltaY)));
+    const h = Math.max(-127, Math.min(127, Math.sign(e.deltaX)));
+    send([FRAME.MOUSE_SCROLL, v & 0xff, h & 0xff]);
+  },
+  { passive: false },
+);
+
+// --- sidebar ---------------------------------------------------------------
+
+document.querySelectorAll("[data-combo]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const codes = button.dataset.combo.split("+");
+    codes.forEach((code) => sendKey(FRAME.KEY_DOWN, code));
+    // Released in reverse order, the way a human's hand does it: modifiers last.
+    codes
+      .slice()
+      .reverse()
+      .forEach((code) => sendKey(FRAME.KEY_UP, code));
+  });
+});
+
+el.releaseAll.addEventListener("click", sendReleaseAll);
+
+// Typing text is a convenience for URLs and long commands. Only the characters
+// in this table are sent; anything else is reported rather than silently
+// dropped, because "half my password went in" is worse than "nothing went in".
+const SHIFT = 1;
+const CHAR_MAP = (() => {
+  const map = new Map();
+  const add = (ch, code, shift) => map.set(ch, { code, shift: !!shift });
+  "abcdefghijklmnopqrstuvwxyz".split("").forEach((c) => {
+    add(c, `Key${c.toUpperCase()}`, false);
+    add(c.toUpperCase(), `Key${c.toUpperCase()}`, SHIFT);
+  });
+  "0123456789".split("").forEach((d) => add(d, `Digit${d}`, false));
+  const pairs = [
+    [" ", "Space"], ["\n", "Enter"], ["\t", "Tab"],
+    ["-", "Minus"], ["=", "Equal"], ["[", "BracketLeft"], ["]", "BracketRight"],
+    ["\\", "Backslash"], [";", "Semicolon"], ["'", "Quote"], ["`", "Backquote"],
+    [",", "Comma"], [".", "Period"], ["/", "Slash"],
+  ];
+  pairs.forEach(([ch, code]) => add(ch, code, false));
+  const shifted = [
+    ["!", "Digit1"], ["@", "Digit2"], ["#", "Digit3"], ["$", "Digit4"],
+    ["%", "Digit5"], ["^", "Digit6"], ["&", "Digit7"], ["*", "Digit8"],
+    ["(", "Digit9"], [")", "Digit0"], ["_", "Minus"], ["+", "Equal"],
+    ["{", "BracketLeft"], ["}", "BracketRight"], ["|", "Backslash"],
+    [":", "Semicolon"], ['"', "Quote"], ["~", "Backquote"], ["<", "Comma"],
+    [">", "Period"], ["?", "Slash"],
+  ];
+  shifted.forEach(([ch, code]) => add(ch, code, SHIFT));
+  return map;
+})();
+
+el.sendText.addEventListener("click", async () => {
+  const text = el.pasteText.value;
+  // The shifted characters above assume a US layout on the *target*: the target
+  // decides what a physical key position produces. Non-US targets will get the
+  // wrong punctuation, which is a known limitation, not a bug to fix here.
+  const unsupported = [...new Set([...text].filter((c) => !CHAR_MAP.has(c)))];
+  if (unsupported.length) {
+    setStatus(`can't type: ${unsupported.join(" ")}`, "bad");
+    return;
+  }
+  for (const ch of text) {
+    const { code, shift } = CHAR_MAP.get(ch);
+    if (shift) sendKey(FRAME.KEY_DOWN, "ShiftLeft");
+    sendKey(FRAME.KEY_DOWN, code);
+    sendKey(FRAME.KEY_UP, code);
+    if (shift) sendKey(FRAME.KEY_UP, "ShiftLeft");
+    // Targets drop keystrokes that arrive faster than they poll; this is a guess
+    // at a safe rate and wants measuring on real hardware.
+    await new Promise((r) => setTimeout(r, 8));
+  }
+  setStatus(`sent ${text.length} characters`, "ok");
+});
+
+// --- local capture video ----------------------------------------------------
+
+async function listCameras() {
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  el.camera.innerHTML = "";
+  devices
+    .filter((d) => d.kind === "videoinput")
+    .forEach((d) => {
+      const option = document.createElement("option");
+      option.value = d.deviceId;
+      option.textContent = d.label || "capture device";
+      el.camera.append(option);
+    });
+}
+
+el.startVideo.addEventListener("click", async () => {
+  try {
+    const deviceId = el.camera.value;
+    el.video.srcObject = await navigator.mediaDevices.getUserMedia({
+      video: deviceId ? { deviceId: { exact: deviceId } } : true,
+      audio: false,
+    });
+    // Labels are only populated after permission is granted, so refresh.
+    await listCameras();
+  } catch (err) {
+    setStatus(`no video: ${err.message}`, "bad");
+  }
+});
+
+// getUserMedia needs a secure context, and this page is served over plain HTTP.
+// Browsers treat localhost as secure but not a LAN IP — so this is a real
+// limitation of the no-TLS design, and saying so beats a silently dead button.
+if (!navigator.mediaDevices) {
+  el.startVideo.disabled = true;
+  el.startVideo.title =
+    "Video needs a secure context; this page is served over plain HTTP.";
+} else {
+  listCameras().catch(() => {});
+}
+
+connect();

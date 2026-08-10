@@ -1,0 +1,55 @@
+name: CI
+
+# No path filters, deliberately: the repo is small enough that filtering would
+# save seconds and cost trust in the green check (AGENTS.md §7).
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  host-tests:
+    name: Host tests (keymap, protocol)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
+      - name: Configure
+        run: cmake -B test/host/build -G Ninja -S test/host
+      - name: Build
+        run: cmake --build test/host/build
+      - name: Run
+        run: ctest --test-dir test/host/build --output-on-failure
+
+  firmware-build:
+    name: Firmware build (esp32s3)
+    runs-on: ubuntu-latest
+    container: espressif/idf:release-v5.5
+    steps:
+      - uses: actions/checkout@v4
+      # This job proves the image compiles and links. It observes nothing about
+      # USB enumeration, HID delivery, or latency — see AGENTS.md §7.
+      - name: Build
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py set-target esp32s3
+          idf.py build
+
+  lint:
+    name: Lint (clang-format, ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: clang-format
+        run: |
+          sudo apt-get update && sudo apt-get install -y clang-format
+          find main test -name build -prune -o \( -name '*.c' -o -name '*.h' \) -print \
+            | xargs -r clang-format --dry-run --Werror
+      - uses: astral-sh/ruff-action@v3
+        with:
+          args: check tools
+      - uses: astral-sh/ruff-action@v3
+        with:
+          args: format --check tools

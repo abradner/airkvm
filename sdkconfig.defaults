@@ -1,0 +1,25 @@
+# Defaults applied on a fresh `idf.py build`. sdkconfig itself is gitignored:
+# it is generated, machine-specific, and merge-hostile.
+#
+# UNVERIFIED — these have not been built against a real ESP-IDF tree yet
+# (AGENTS.md §4, last rule).
+
+CONFIG_IDF_TARGET="esp32s3"
+
+# Two HID interfaces: a boot keyboard and a mouse, kept separate so the keyboard
+# needs no report ID and BIOS boot protocol works (see main/usb_hid.c).
+CONFIG_TINYUSB_HID_COUNT=2
+CONFIG_TINYUSB_CDC_ENABLED=n
+CONFIG_TINYUSB_MSC_ENABLED=n
+
+# The console holds one long-lived WebSocket plus three short static requests;
+# the default of 7 open sockets leaves room for a second browser to connect and
+# be told it is not in control.
+CONFIG_LWIP_MAX_SOCKETS=10
+CONFIG_HTTPD_WS_SUPPORT=y
+
+# The console's HTML/JS/CSS live in the binary, which pushes it past the default
+# 1MB app partition.
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=4096

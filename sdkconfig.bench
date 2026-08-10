@@ -1,0 +1,17 @@
+# Bench overlay: ESP32-C3, no USB HID (see main/hid_out.h).
+#
+# The C3 cannot be a USB keyboard — its USB peripheral is a fixed-function
+# serial/JTAG bridge. This image exists to exercise everything else on real
+# hardware: WiFi, mDNS, the HTTP server, WebSocket framing, the decoder, the
+# keymap, and the HID state machine. Applied on top of sdkconfig.defaults.
+
+CONFIG_IDF_TARGET="esp32c3"
+
+CONFIG_AIRHID_HID_BACKEND_LOG=y
+
+# The USB-Serial/JTAG peripheral is the console here, and it is also the only
+# way to talk to the board — there is no separate UART bridge.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# sdkconfig.defaults asks for two TinyUSB HID interfaces; TinyUSB is not built
+# for this target at all, so those symbols simply do not exist here.

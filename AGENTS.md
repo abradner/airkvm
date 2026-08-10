@@ -1,0 +1,452 @@
+# airhid — Agent Onboarding Guide
+
+> Read this file first. It is the source of truth for AI agents working in this codebase.
+> Plans, status, and decision rationale live in GitHub issues on this repo (`abradner/airhid`),
+> not in a repo file. When this file and the tracker disagree
+> on architecture or direction, the tracker wins — update this file to match, never the reverse.
+> This file is operational: how to build, run, and write code here.
+
+## 1. What Is This?
+
+airhid turns a ~$12 ESP32-S3-0.42 OLED "supermini" board into an ad-hoc wireless KVM input
+dongle: plugged into any machine's USB port it enumerates as a real USB HID keyboard + mouse
+(boot protocol, so BIOS/UEFI works), and it serves a browser-based console over WiFi from which
+the operator types and points. Video is deliberately out of scope on-device: the operator's
+HDMI→USB capture dongle is a local UVC webcam, and the console displays it in the same browser
+tab via `getUserMedia` — the video never crosses the network. Status: greenfield; firmware is
+written ahead of hardware arrival, so nothing has run on a real board yet.
+
+Domain nouns: the **target** is the machine the dongle is plugged into (the one being
+controlled); the **host** (or operator) is the machine running the browser; the **console** is
+the web page the dongle serves; a **combo** is a multi-key chord sent as one action (e.g.
+Ctrl-Alt-Del); **release-all** is the safety action that clears every held key and mouse button
+on the target. "KVM" here means the K and M only — see the video note above.
+
+## 2. Purpose & Principles
+
+**Purpose:** Make "I need to press some keys on that machine" a 30-second job — walk up, plug in,
+open a URL — with nothing installed on the target and nothing installed on the host.
+
+Principles: short, numbered, memorizable. Each one must be able to change a real decision — a
+principle that never changes a decision is decoration.
+
+1. **Claims must hold.** A doc, comment, or commit message claiming a property the mechanism
+   doesn't deliver is a bug, not documentation. Interim states say so in-place ("stated, not
+   enforced — landing in E7"); stopgaps record the bar they miss. *(Portable seed — keep, adapt,
+   or replace. It has caught real security bugs, twice, in a sibling repo, by being invoked
+   against the project's own earlier claims.)*
+2. **The target installs nothing and configures nothing.** Every feature must work against a
+   machine seen for the first time, sitting at a BIOS prompt, with no agent, no driver, and no
+   network. This is what separates airhid from every "remote control" tool that already exists;
+   a feature that needs cooperation from the target is out of scope, not a future enhancement.
+3. **Zero-install on the host too.** The console is a web page the dongle serves. Reach for a
+   native helper only when a capability is genuinely impossible in a browser (macOS-reserved
+   chords), and then as an optional adjunct — never as the primary path, or the 30-second job
+   becomes a 10-minute setup.
+4. **The dongle must never be the thing typing.** Held keys, stuck modifiers, and repeat storms
+   on someone's production box are the failure mode that matters. Any loss of confidence in
+   session state — socket close, timeout, page hidden, reconnect — releases all keys and buttons.
+   Prefer a spurious release-all over a plausible held key.
+5. **Physical presence is the security model, and it says so out loud.** Anyone on the LAN who
+   can reach the console can type on the target; the honest mitigation is that plugging the thing
+   in is a deliberate act and unplugging it is a complete revocation. Document that boundary
+   plainly (see `docs/repo-map.md`), and never let a convenience feature quietly widen it —
+   especially not by reaching the internet.
+6. **Latency is a feature, and it is measured, not asserted.** Typing that lags is typing that
+   double-fires and gets abandoned. Changes on the input path state their latency effect, and
+   "feels fine" is not a measurement.
+
+### The tripwire protocol
+
+A conflict with a principle is a stop-and-check, never something to quietly work around:
+
+- If **your own approach** conflicts with a principle, treat that as a strong signal the approach
+  is wrong. Re-derive it before proceeding — the principle has usually seen more failures than
+  this session has.
+- If the **operator's request** conflicts, say so explicitly, naming the principle. Then exactly
+  one of two things is true:
+  - **The principles have evolved.** Update the principle in the same change — and demand the
+    justification: the *why* gets recorded next to the amendment, because an unjustified
+    amendment is indistinguishable from erosion.
+  - **The principles stand.** Then the request should be reconsidered — propose the nearest
+    conforming alternative and let the operator choose with the conflict in view.
+- Never proceed silently with a violation. An unremarked exception teaches every future reader —
+  human or agent — that the principles are decorative (see §10, meta-rule 1).
+
+## 3. Stack at a Glance
+
+| Layer | Technology | Notes |
+|---|---|---|
+| Firmware language | C (C11) | ESP-IDF v5.5, installed by `mise run setup` into `.esp-idf/` |
+| Target hardware | ESP32-S3 (`esp32s3` target) | ESP32-S3-0.42 OLED supermini; native USB OTG is non-negotiable (§4) |
+| USB stack | TinyUSB via `esp_tinyusb` | Composite HID: boot keyboard + relative mouse |
+| Network | `esp_http_server` (WebSocket) + `mdns` | Single origin serves console and socket |
+| Console | Vanilla HTML/CSS/JS, no build step | Embedded in firmware via `EMBED_FILES`; no npm, no bundler, no CDN |
+| Display | SSD1306 72×40 over I2C | **Not built yet.** Planned for status only (IP, mDNS name, link state); no `display.c` exists |
+| Host tooling | Python 3 (stdlib only) | `tools/poke.py` drives a dongle from a terminal; not shipped to users |
+| Testing | CMake/ctest + plain C assertions | Keymap, protocol codec, and HID state are pure and host-tested — `test/host/` |
+| Deployment | `idf.py flash` over USB-C | No OTA yet. See §7 |
+
+## 4. Critical Architectural Rules
+
+These are non-negotiable. Violating them will break things or be rejected in review.
+
+### Native USB device mode is a hardware prerequisite, not a build flag
+
+HID output requires a USB OTG device controller: **ESP32-S3, S2, or P4 only**. Classic ESP32,
+C3, C6, and H2 expose a fixed-function USB-Serial/JTAG peripheral whose descriptors are burned
+into silicon — no amount of firmware makes them enumerate as a keyboard. Do not add a build
+target, a `Kconfig` option, or a README line implying otherwise. (This cost a real evaluation
+round at design time: the C6 variant of this exact board was on the shortlist until the
+peripheral difference surfaced.) The intended path for non-OTG boards is a **CH9329 UART-to-HID
+module** sitting behind the same interface `main/usb_hid.h` defines — planned, not built. No
+such backend exists today and no doc should imply otherwise.
+
+### One HID state owner; the socket layer never touches USB
+
+All USB HID reports originate from a single owner module (`main/hid_state.c`) that holds the
+authoritative keyboard bitmap, modifier byte, and button mask. The WebSocket handler parses
+frames into intent structs and hands them over; it never calls `tud_hid_*` directly. Reports go
+out from one task, serialized through a queue.
+
+Two things depend on this and would each be a real-world bug if it were violated:
+
+- **Release-all must be total** (§2, principle 4). One owner means "release everything" is one
+  function that provably clears every bit, not a best-effort sweep across call sites.
+- **HID reports must not be constructed on the HTTP task.** A blocked network task must never be
+  able to leave a key held. Also, TinyUSB's device stack is not thread-safe across arbitrary
+  callers.
+
+### The keymap is a pure lookup table with no I/O, and it is host-tested
+
+Browser `KeyboardEvent.code` → HID usage code is a table (`main/keymap.c`), not a chain of
+conditionals, and it neither logs, allocates, nor touches hardware. Same for the protocol codec
+(`main/protocol.c`). These two files must compile and run on the host so their tests execute in
+CI without an ESP32 (see §7). Anything requiring `esp_` headers belongs elsewhere. Keymaps are
+layout-independent: the browser reports **physical key positions** (`event.code`), which is
+exactly what HID usage codes mean — never map `event.key`, which is layout- and modifier-shifted
+and will send the wrong key on any non-US layout.
+
+### The console is a single self-contained page, offline-capable
+
+No CDN links, no npm, no build step, no framework. The dongle serves everything the console
+needs, because a machine you walked up to may be on a network with no internet at all — and
+because the console must not phone anywhere (§2, principle 5). It is embedded in the firmware
+image (`EMBED_FILES` in `main/CMakeLists.txt`) and served straight from flash — uncompressed
+today; gzipping is worth doing once the page stops changing shape every session. If a dependency
+seems necessary, that is a proposal for review (§8, no-stated-convention rule), not a default.
+
+### Never claim latency, safety, or hardware behavior that hasn't been observed on real hardware
+
+The firmware is being written before the board exists. Any statement about enumeration,
+BIOS behavior, timing, or OLED pinout is a **hypothesis until it runs**, and must be marked as
+such in-place ("unverified — no hardware yet") in both code comments and docs. Pin assignments
+for this board variant in particular are vendor-documented, not datasheet-guaranteed. This is
+principle 1 (claims must hold) applied to the project's dominant failure mode right now.
+
+## 5. Repository Map
+
+`docs/repo-map.md` is the living boundary map: surfaces, trust boundaries, cross-cutting flows,
+and the risk register. It exists because that knowledge lives *between* files and can't be
+reconstructed by grep — and because cold-started subagents and future sessions get no
+conversation context, only what's written down.
+
+- **Read it before touching anything boundary-sensitive**: auth, tenancy, deletion/visibility,
+  serialization, background delivery, routing, any external surface.
+- **Update it in the same PR** as any change that moves an edge on it. Never leave it describing
+  a stale security boundary — a wrong map is worse than no map, because it is trusted.
+- Cite risk-register IDs (R-00N) from rules, PRs, and code comments, so the register stays
+  load-bearing instead of decorative.
+
+## 6. Development Essentials
+
+Toolchain is pinned in `mise.toml`. From a fresh shell:
+
+```sh
+mise install                    # cmake, ninja, python, ruff, clang-format
+mise run setup                  # one-time: clone ESP-IDF v5.5 into .esp-idf/ and install its
+                                # esp32s3 toolchain (several GB; not mise-managed)
+```
+
+Then, per task:
+
+```sh
+mise run config                 # idf.py menuconfig — WiFi credentials, under "airhid"
+mise run build                  # idf.py build (target pinned in sdkconfig.defaults)
+mise run flash                  # idf.py -p $PORT flash monitor   (see gotchas re: PORT)
+mise run clean                  # idf.py fullclean
+mise run test                   # host-side unit tests — no hardware required
+mise run lint                   # clang-format --dry-run --Werror + ruff check/format --check
+mise run fmt                    # clang-format -i + ruff format
+```
+
+`mise run test` is the gate that matters day to day: the keymap and protocol codec are pure and
+compile on the host (§4), so their tests run in seconds with no board attached. Everything else
+about this project currently cannot be verified without hardware — say so rather than implying
+a passing build means working firmware (§8, verify the output not the instrument).
+
+Console development: the console is plain static files under `web/`. Edit and reload against a
+flashed board, or serve `web/` with `python3 -m http.server` and point it at a board's WebSocket
+via the `?ws=` query parameter for UI-only iteration.
+
+### 6.1 Known Environment Gotchas
+
+Things that cost real time to discover once — don't rediscover them. Add entries as they're found;
+add rather than rewrite.
+
+- **The dongle's single USB-C port is both the HID port and the flashing port.** Once firmware
+  claims USB for HID, the board no longer enumerates as a serial device: to reflash, hold BOOT
+  and tap RESET to enter the ROM bootloader. Set `PORT` explicitly rather than relying on
+  autodetect, because the port only exists in bootloader mode.
+- **The primary dev machine for this repo is a Raspberry Pi (aarch64 Linux); the operator's host
+  is a Mac.** Espressif ships aarch64 Linux toolchains, but any tooling added here must not
+  assume x86_64 — and browser-side behavior must be checked on Safari, not only Chromium
+  (`keyboard.lock()` in particular is Chromium-only, and the console must degrade without it).
+- **Board pinout is vendor-documented, not datasheet-derived.** The 0.42" OLED's I2C pins differ
+  between the C3, C6, and S3 variants of this board family. Confirm against the vendor demo for
+  the *S3* variant specifically; do not carry over the widely-quoted C3 numbers (GPIO5/6).
+
+## 7. CI & Deployment
+
+`.github/workflows/ci.yml` runs on every PR and on pushes to `main`, with no path filters (the
+repo is small; filtering would buy seconds and cost trust):
+
+- **host-tests** — builds and runs the pure-logic tests (keymap, protocol, hid_state). Fast,
+  and the only job that can actually fail for a real logic bug.
+- **firmware-build** — builds the ESP32-S3 image in the official `espressif/idf:release-v5.5`
+  container. Proves it compiles and links; proves nothing about behavior.
+- **lint** — `clang-format` on firmware sources; `ruff check` and `ruff format --check` on
+  `tools/`. The format check is the one most likely to redden an otherwise-clean PR: run
+  `mise run fmt` before pushing.
+
+Deployment is `idf.py flash` over USB by a human holding the board. There is no OTA, no release
+artifact, and no fleet — don't build for those until asked. A green CI run means the code
+compiles and the pure functions behave; it says nothing about USB enumeration, HID delivery, or
+latency, none of which CI can observe (§4, last rule).
+
+Two universal cautions, whatever the pipeline:
+
+- **A skipped job is not a passing job.** A green run where path filtering skipped half the suite
+  means that half never saw the commit. Check what actually ran before trusting the check.
+- **A build is not a behavior.** `firmware-build` going green means the image links, nothing more.
+  Every claim about enumeration, HID delivery, BIOS support, or latency needs a board, and until
+  one exists those claims are marked unverified in-place (§4).
+
+## 8. Working Rules
+
+The portable core. These rules are pre-filled from hard-won convention across this repo's sibling
+projects; adjust only with reason, and record the reason (see §10).
+
+### Planning & approval
+
+- Propose an implementation plan for any moderately or highly complex change, and get it reviewed
+  and approved before making edits. Don't dive into large builds or refactors on your own read of
+  the situation.
+- For anything genuinely ambiguous or not yet decided by the operator, prefer the reversible
+  option and leave a clear marker rather than picking silently. Two-way doors over one-way doors.
+- **Building structure where no convention is stated is a decision, not a default.** When a change
+  introduces more than trivial structure (a new page/screen, a new service layer, a new module
+  shape) and §4 states no convention for that surface, do not silently invent one — and do not
+  treat "match the surrounding code" as cover: over undesigned code that instruction *propagates*
+  the blur. Adopt a pattern, then name it in the PR body as an explicit proposal ("no stated
+  convention for X; this PR uses Y; codify or correct"). The operator's review then decides a
+  standard once, instead of re-litigating shape per PR. (Motivating instance: a sibling repo's
+  first UI-heavy PR mixed layout, scaffolding, and domain components with no container/presenter
+  separation — the agent had nothing to follow, faithfully extended the existing blur, and the
+  standard got stated for the first time as a review comment, the most expensive place to state
+  it.)
+
+### Destructive & outward-facing actions
+
+- Destructive actions (dropping data, deleting files you didn't just create, rewriting published
+  history) and outward-facing actions (publishing, sending, deploying) need explicit approval,
+  every time. Approval for one instance is not approval for the next.
+- Never merge to a shared branch, force-push, or rewrite published history without an explicit,
+  current go-ahead. A green build and an auto-mode session default are not that signal — if the
+  work is ready, say so and stop.
+- If you encounter a violation of a safety rule already committed (a plaintext secret, a
+  destructive migration lying in wait), flag it immediately — finding it is not the same as
+  having caused it, and silence helps nobody.
+
+### Configuration
+
+- Fail fast on boot: never provide fallback defaults when reading *required* configuration.
+  Missing required config must raise at startup rather than silently degrade. Defaults are fine
+  for genuinely optional tuning knobs. (This isn't hypothetical: a sibling repo baked a stand-in
+  value into an image-wide ENV to make a build step pass, which would have silently defeated this
+  rule in production. If a build step needs a stand-in, scope it to that step, never image-wide.)
+
+### Review feedback
+
+- **A finding is a claim, not a verdict.** Whether it comes from a bot, a human, or your own
+  earlier session: trace or reproduce it before acting on it. Ask whether the flagged path is
+  actually reachable. When a finding says code and docs disagree, work out which end is wrong
+  before "fixing" either. Declining findings has to actually happen — a round that accepts every
+  finding is a warning sign, not a good score.
+- Reject suggestions that violate the rules in this file, and say why. Automated reviewers read
+  this file too; that's expected — reviewer-side agents should review fully as normal, and rules
+  here that bind only author-side agents say so explicitly.
+
+### Testing & verification
+
+- **Verify the output, not the instrument.** Green means nothing threw, and nothing more. Before
+  claiming something works, name the artifact it should have produced and go look at it — the
+  rendered page, the written file, the actual rows.
+- **Prove a new test can fail.** For any bug fix: write the regression test, confirm it passes
+  with the fix, revert just the fix, confirm the test fails for the right reason, restore the fix.
+  A test that was never seen to fail hasn't proven anything.
+- Ask what else satisfies your assertion — a count-based check that an empty-state row also
+  matches, a visibility check that passes for a scrolled-away element. When asserting absence,
+  include a positive control so a broken probe can't read as success.
+- Every conditional branch that encodes real logic gets a test that exercises it — especially the
+  rare/edge branches, not just the happy path.
+
+### Layered checks
+
+- Apply the **deletion test** to any validation that exists in more than one place: enforcement
+  exists exactly once; anything layered on top must, if deleted, change only politeness (a
+  friendly error instead of an ugly one), never possibility. If deleting either check would make a
+  new state possible, you have enforcement in two shapes, and they will drift.
+
+### Documentation & discovered work
+
+- Docs describing a boundary or behavior change in the same PR as the change. A doc describing a
+  boundary that no longer exists is worse than none, because it is trusted.
+- Log discovered work (bugs found in passing, deferred improvements) in the external tracker —
+  never a PR body or a code comment. A triage table in a PR body goes stale between rounds and
+  vanishes on merge.
+- When you fix a subtle bug or get burned by a non-obvious behavior, write the general form of the
+  lesson into §9 before moving on — same session, not later.
+- **A review comment that names a missing standard forks.** "We need a convention for X" /
+  "this pattern was never established" is not an instance finding — resolving it means both
+  fixing the instance *and* codifying the standard into §4 (or the doc §4 points to) in the same
+  round; if the standard needs real design time, ticket it in the tracker with the review link.
+  A convention stated only in a review thread doesn't exist for the next session — the thread
+  dies with the PR, and the next agent re-improvises. (This is §9's ratchet, aimed at
+  conventions: incidents accrete into gotchas, review-discovered standards accrete into §4.)
+
+### Tooling
+
+- Use the agent's structured file tools rather than `cat`/`sed`/shell here-docs for inspecting
+  and modifying files during a session. (Scope: this governs session file operations; committed
+  shell scripts do what shell scripts do.)
+
+### Multi-PR batches
+
+- The default flow is one PR at a time: react to feedback immediately, merge when green.
+- Several PRs open together as one body of work is a different regime: use
+  `.claude/skills/batch-review` (fan out, feedback write-only until synthesis, one followup PR).
+  It is opt-in for genuine multi-PR fan-outs, not a replacement for the default.
+
+## 9. Gotchas & Lessons Learned
+
+Numbered, accreting. Add to it rather than rewriting it — the numbering is stable so entries can
+be cited from code comments and PR descriptions.
+
+Entry shape: **what happened → the actual root cause → the general rule → where the regression
+test lives** (if one exists).
+
+*Environment-specific quirks go in §6.1 instead; this section is for lessons that changed how the
+code is written.*
+
+1. **A WebSocket handler must return early on the handshake invocation, or every session's first
+   frame is silently corrupted.** `esp_http_server` calls the `/ws` handler once at handshake time
+   with no frame pending. A handler that immediately tries to read consumes the *next* frame's
+   opcode byte (`0x82`) and parses it as a length byte — `0x82 & 0x7F` = 2 — so the first frame of
+   every session decodes as a masked 2-byte frame of mask material, and the stream desyncs from
+   there. The fingerprint is `len=2` on every first frame, with a real payload byte visible at
+   offset 1. The general rule: **when a callback is invoked for more than one kind of event,
+   handle the discrimination first, before any I/O that assumes which event it is.**
+   Root cause was found by enabling `httpd_ws`/`httpd_parse` DEBUG logging and noticing the
+   *absence* of a `httpd_ws_get_frame_type` line before the first handler call — the missing log
+   line was the evidence, not any present one. Fixed in `main/net.c` (`req->method == HTTP_GET`).
+
+2. **A code review claim about a framework is a hypothesis until hardware rules on it.** The
+   handshake branch in entry 1 was *removed* on a reviewer's well-argued, source-cited finding
+   that `httpd_uri()` returns before invoking the handler, making the branch dead code. The
+   reading was plausible and specific, and it was wrong for this path — restoring the branch is
+   what made the device work. Reviews earn their keep (the same round found five real bugs,
+   including one that truncated every served asset), but AGENTS.md §8's "a finding is a claim, not
+   a verdict" applies with full force to framework-behavior claims: those are cheap to test and
+   expensive to get wrong.
+
+3. **`httpd_ws_recv_frame`'s `max_len` is the frame's length, not the buffer's capacity.** Passing
+   `sizeof(buf)` makes the read pull bytes belonging to the next frame. Symptom overlaps with
+   entry 1, which made both harder to see; they were separate bugs and both had to be fixed.
+
+4. **Bench hardware that cannot do the headline feature still finds the headline bugs.** All three
+   entries above were found on an ESP32-C3, a board that physically cannot be a USB keyboard, via
+   the `log` HID backend (`main/hid_out_log.c`). None were reachable from host tests or a green
+   firmware build. When the real board is late, ask what fraction of the system the wrong board
+   can still exercise — here it was everything except the last inch.
+
+## 10. Maintaining This Document
+
+Meta-rules for editing this file — they exist because each was violated somewhere first:
+
+1. **A rule everyone knows is wrong is worse than no rule** — it teaches agents that the rules are
+   decorative, which devalues the ones that are load-bearing. When reality has moved, revise the
+   rule openly: state what the old rule said, why it was the wrong shape, and what replaces it.
+2. **Ground rules in incidents.** When adding a rule, say what happened. When correcting a wrong
+   rule, record the correction in-place so the old rule doesn't get quietly reintroduced.
+3. **Scope absolutes.** Name the exceptions at authoring time, or agents will either violate the
+   rule or over-apply it.
+4. **Name the audience** when a rule doesn't bind every reader — author-side agents, reviewer
+   bots, and humans all read this same file.
+5. **Prefer structural guarantees to written claims.** If a rule can be made mechanically true (a
+   build-context exclusion, a CI gate, an import stub instead of a second copy), do that and
+   document the mechanism, rather than adding another sentence.
+6. **Expect to compress.** First-draft steering prose runs vague and grandiose; cut it to concrete
+   nouns and commands the same day. When compressing an established doc, treat it like a refactor:
+   diff the imperatives before/after and confirm nothing operative was dropped.
+7. **Porting rules between sibling repos is judgment, not copying.** Verify each candidate rule
+   against this repo's own files, CI, and conventions; adopt, adapt, or reject explicitly — and
+   note rejections in the Adaptation Record below. Watch especially for rules that silently assume
+   another repo's merge strategy, bot roster, or deploy shape.
+
+## 11. Adaptation Record
+
+What was pruned or changed from the keel template when this repo was initialized, and why — kept
+in the doc (not just a commit message) so future readers don't need git archaeology to know what
+was deliberately excluded.
+
+Initialized 2026-08-10 from the keel template.
+
+- **Tracker**: GitHub issues on this repo. The header's tracker pointer names issues rather than
+  an external tool; §8's "log discovered work in the external tracker" means "open an issue."
+- **Visibility**: public. The template-lineage block was deleted per the init procedure — a
+  pointer to a private template is unresolvable for outside contributors and would mis-steer
+  their agents. Lineage is tracked in the private fleet registry (`abradner/fleet`) instead.
+  **Operator TODO:** the fleet-registry row for `airhid` was not added during init (the registry
+  wasn't reachable from that session) — add it, with keel SHA `8f6c55e` as the synced-through
+  point.
+- **License**: kept Apache-2.0, appropriate for a public hardware/firmware project that
+  references other open-source work (esp32-kvm-ip, espkvm) as design precedent.
+- **Merge strategy**: squash-merge. The batch-review skill's `[MERGE-COMMIT]` rule variants were
+  deleted and only the `[SQUASH]` variants kept, per meta-rule 7 — porting merge-strategy rules
+  unexamined has produced subtly wrong instructions in sibling repos.
+- **Caveman mode**: kept, including the per-tool config paths and the AGENTS.md block below.
+- **Repo map**: kept (`docs/repo-map.md`). This project has a genuinely interesting trust
+  boundary — an unauthenticated LAN surface that can type on a machine — which is exactly the
+  kind of thing the map exists to keep honest.
+- **Both skills kept**. `batch-review` is speculative for a solo hardware project but inert until
+  invoked; `independent-commit-review` is expected to earn its keep immediately, since firmware
+  written before hardware arrives gets no feedback from reality.
+
+## Caveman Mode
+
+Respond terse like smart caveman. All technical substance stay. Only fluff die.
+
+Rules:
+- Drop: articles (a/an/the), filler (just/really/basically), pleasantries, hedging
+- Fragments OK. Short synonyms. Technical terms exact. Code unchanged.
+- Pattern: [thing] [action] [reason]. [next step].
+- Not: "Sure! I'd be happy to help you with that."
+- Yes: "Bug in auth middleware. Fix:"
+
+Switch level: /caveman lite|full|ultra|wenyan
+Stop: "stop caveman" or "normal mode"
+
+Auto-Clarity: drop caveman for security warnings, irreversible actions, user confused. Resume after.
+
+Boundaries: code/commits/PRs written normal.
