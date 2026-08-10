@@ -202,19 +202,32 @@ add rather than rewrite.
   is a Mac.** Espressif ships aarch64 Linux toolchains, but any tooling added here must not
   assume x86_64 — and browser-side behavior must be checked on Safari, not only Chromium
   (`keyboard.lock()` in particular is Chromium-only, and the console must degrade without it).
-- **Flashing a board attached to another machine needs no toolchain on that machine.** Expose its
-  serial port over the network and point `PORT` at it — `esptool` speaks `rfc2217://`, so the
-  build stays here and only bytes travel:
+- **Flashing a board attached to another machine needs no toolchain on that machine.** Verified
+  against `pi3-unicorn`: build here, flash and read logs over the network.
 
   ```sh
-  # on the machine holding the board (pyserial only, no ESP-IDF):
-  python3 -m serial.rfc2217_server -p 4000 /dev/ttyACM0
+  # once, on the machine holding the board — pyserial is pure Python, so copy it
+  # rather than installing anything (no apt, no sudo, ~215KB):
+  #   tar -C <site-packages> -czf - serial | ssh host 'mkdir -p ~/.airkvm-tools && tar -xzf - -C ~/.airkvm-tools'
+  #   scp tools/serial_bridge.py host:~/.airkvm-tools/
+  PYTHONPATH=~/.airkvm-tools python3 ~/.airkvm-tools/serial_bridge.py /dev/ttyACM0 4000
   # here:
   PORT=rfc2217://thathost:4000 mise run flash-bench
   ```
 
-  RFC2217 rather than a plain socket because it carries DTR/RTS, which is what drives the board
-  into its bootloader — over a raw socket the flash hangs waiting for a reset that never happens.
+  Three things that each cost a debugging round, all handled in `tools/serial_bridge.py`:
+  - RFC2217, not a raw socket: esptool drives the board into its bootloader with DTR/RTS, which a
+    plain TCP pipe does not carry. Over a raw socket the flash hangs on a reset that never lands.
+  - `python -m serial.rfc2217_server` does not exist — pyserial ships that as an example, not an
+    installed module. `serial.rfc2217.PortManager` is the part you can actually import.
+  - **A board that resets re-enumerates, and the stale descriptor goes quiet rather than
+    erroring.** Every reset (including a successful flash) invalidates the device node, and reads
+    on the old one return no data instead of raising, so a working board is indistinguishable from
+    a dead one. The bridge watches the device inode to notice; do not "fix" this by catching
+    exceptions alone, because there are none.
+- **Do not hand-roll the reset sequence for USB-Serial/JTAG parts.** Toggling DTR/RTS yourself
+  lands the C3 in download mode (`boot:0x4 (DOWNLOAD)`) because DTR is the boot-mode line there.
+  Use `esptool ... --after hard_reset run`, which knows the chip-specific sequence.
 - **The red LED on the C3 bench board is not controllable.** It is a hardwired power indicator;
   `tools/led_scan` walked every free GPIO in both polarities and it never changed. GPIO8 (blue) is
   the only software LED. Settled — see the note in `main/board.h` rather than re-running the hunt.

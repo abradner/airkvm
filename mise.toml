@@ -18,10 +18,14 @@ IDF_TOOLS_PATH = "{{config_root}}/.esp-idf-tools"
 # shell. Setting it globally makes it conflict with the bench build's esp32c3
 # and produces a "not consistent with target in the environment" error that
 # looks like a project bug rather than an env var. Each build carries its own.
-# Serial port for flashing. The dongle only enumerates as serial in bootloader
-# mode (hold BOOT, tap RESET) — see AGENTS.md §6.1. Override per machine:
+# Serial port for flashing. Written as a default-if-unset rather than a plain
+# value: mise's [env] overrides the inherited environment, so a bare assignment
+# silently ignores `PORT=... mise run flash` and flashes the wrong board — or,
+# more confusingly, reports "port is busy" while naming a port you didn't ask
+# for. Overrides work per invocation:
 #   PORT=/dev/tty.usbmodem1101 mise run flash
-PORT = "/dev/ttyACM0"
+#   PORT=rfc2217://otherhost:4000 mise run flash-bench   (see tools/serial_bridge.py)
+PORT = "{{ env.PORT | default(value='/dev/ttyACM0') }}"
 
 [tasks.setup]
 shell = "bash -c"
