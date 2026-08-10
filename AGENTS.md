@@ -430,7 +430,24 @@ code is written.*
    presents as "the page won't load", not as power management. `esp_wifi_set_ps(WIFI_PS_NONE)` in
    `net.c`, justified by principle 6 — this device is mains-powered by definition.
 
-6. **Bench hardware that cannot do the headline feature still finds the headline bugs.** Entries
+6. **`EMBED_FILES` and `EMBED_TXTFILES` are not interchangeable, and both directions have bitten
+   this repo.** TXTFILES appends a NUL terminator; FILES does not. PEM certificates *must* use
+   TXTFILES because `mbedtls_x509_crt_parse` requires the terminator — with FILES the parse fails
+   `-0x2180`, every TLS handshake is refused, and the port still listens, so it presents as a
+   cipher or certificate-content problem rather than a build one. Gzipped assets must use FILES,
+   because a stray trailing byte corrupts them; an earlier bug subtracted one from the length to
+   compensate for a terminator that was never there, truncating every asset. Rule: **binary in
+   `EMBED_FILES`, anything a C string parser will read in `EMBED_TXTFILES`**, and never adjust a
+   length to paper over the difference.
+
+7. **Component `REQUIRES` cannot be made conditional on `CONFIG_` values.** Requirements are
+   resolved in CMake's early-expansion pass, where those values are not reliably visible, so
+   `if(CONFIG_X) list(APPEND ... )` silently fails to add the include path and the build dies on a
+   missing header with the option plainly enabled in `sdkconfig`. Require unconditionally and
+   guard the code with `#if` instead. (Conditional `EMBED_*` lists are fine — those are consumed
+   in the real pass.)
+
+8. **Bench hardware that cannot do the headline feature still finds the headline bugs.** Entries
    1-3 above were found on an ESP32-C3, a board that physically cannot be a USB keyboard, via
    the `log` HID backend (`main/hid_out_log.c`). None were reachable from host tests or a green
    firmware build. When the real board is late, ask what fraction of the system the wrong board

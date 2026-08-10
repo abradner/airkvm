@@ -21,6 +21,9 @@
 #include "esp_check.h"
 #include "esp_event.h"
 #include "esp_http_server.h"
+#if CONFIG_AIRKVM_TLS
+#include "esp_https_server.h"
+#endif
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
@@ -40,6 +43,14 @@ extern const uint8_t app_js_start[] asm("_binary_app_js_gz_start");
 extern const uint8_t app_js_end[] asm("_binary_app_js_gz_end");
 extern const uint8_t style_css_start[] asm("_binary_style_css_gz_start");
 extern const uint8_t style_css_end[] asm("_binary_style_css_gz_end");
+
+#if CONFIG_AIRKVM_TLS
+// PEM material for the TLS server, embedded at build time (main/CMakeLists.txt).
+extern const uint8_t servercert_start[] asm("_binary_device_crt_start");
+extern const uint8_t servercert_end[] asm("_binary_device_crt_end");
+extern const uint8_t serverkey_start[] asm("_binary_device_key_start");
+extern const uint8_t serverkey_end[] asm("_binary_device_key_end");
+#endif
 
 // Exactly one console session drives HID at a time. Two clients interleaving
 // modifiers into one HID state is risk R-003; refusing the second is the
@@ -198,12 +209,42 @@ static void ws_closed(httpd_handle_t hd, int sockfd) {
 }
 
 static esp_err_t start_http(void) {
+  httpd_handle_t server = NULL;
+
+#if CONFIG_AIRKVM_TLS
+  // The TLS config embeds a plain httpd_config_t and yields an ordinary
+  // handle, so URI handlers — including the WebSocket one — are identical
+  // whether or not TLS is on. Only the scheme the browser uses changes.
+  httpd_ssl_config_t tls = HTTPD_SSL_CONFIG_DEFAULT();
+  tls.httpd.close_fn = ws_closed;
+  tls.httpd.lru_purge_enable = true;
+  // Each TLS session costs tens of KB; the default socket count would exhaust
+  // heap before it exhausted sockets.
+  tls.httpd.max_open_sockets = 4;
+  tls.servercert = servercert_start;
+  tls.servercert_len = servercert_end - servercert_start;
+  tls.prvtkey_pem = serverkey_start;
+  tls.prvtkey_len = serverkey_end - serverkey_start;
+
+  const esp_err_t tls_err = httpd_ssl_start(&server, &tls);
+  if (tls_err != ESP_OK) {
+    // Deliberately fatal rather than falling back to plaintext. A silent
+    // downgrade would leave keystrokes readable on the wire (R-007) while the
+    // console still appeared to work, which is the worst of both.
+    ESP_LOGE(TAG, "HTTPS failed to start (%s) — refusing to serve plaintext",
+             esp_err_to_name(tls_err));
+    return tls_err;
+  }
+  ESP_LOGI(TAG, "console served over HTTPS");
+#else
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
   config.close_fn = ws_closed;
   config.lru_purge_enable = true;
-
-  httpd_handle_t server = NULL;
   ESP_RETURN_ON_ERROR(httpd_start(&server, &config), TAG, "httpd_start failed");
+  ESP_LOGW(TAG,
+           "console served over plain HTTP — keystrokes are readable on "
+           "the network (R-007), and browsers will refuse camera access");
+#endif
 
   const httpd_uri_t routes[] = {
       {.uri = "/", .method = HTTP_GET, .handler = index_get},
@@ -240,8 +281,15 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id,
     char ip[16];
     snprintf(ip, sizeof(ip), IPSTR, IP2STR(&event->ip_info.ip));
     status_set_wifi(true, ip, CONFIG_AIRKVM_WIFI_SSID);
+#if CONFIG_AIRKVM_TLS
+    // Advertised by name, not address: the certificate is issued for the mDNS
+    // name, so browsing to the bare IP is a certificate error every time.
+    ESP_LOGI(TAG, "console at https://%s.local/ (ip %s)",
+             CONFIG_AIRKVM_MDNS_HOSTNAME, ip);
+#else
     ESP_LOGI(TAG, "console at http://%s/ (or http://%s.local/)", ip,
              CONFIG_AIRKVM_MDNS_HOSTNAME);
+#endif
   }
 }
 

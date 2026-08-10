@@ -47,6 +47,7 @@ path is a CH9329 UART-to-HID module — not built yet.
 mise install        # toolchain
 mise run setup      # ESP-IDF v5.5 + esp32s3 compilers (one-time, several GB)
 mise run config     # set WiFi SSID/password under "airkvm" — required, no default
+./tools/make_certs.sh   # TLS cert + a local CA (see "HTTPS" below)
 mise run build
 PORT=/dev/tty.usbmodem1101 mise run flash
 ```
@@ -80,10 +81,26 @@ No browser handy? `tools/poke.py` speaks the same protocol from a terminal:
 `mise run test` runs the host-side unit tests for the keymap, protocol codec, and HID state
 machine — no board required, and the only check here that proves behavior rather than compilation.
 
+## HTTPS
+
+The console is served over HTTPS, for two reasons. Without it your keystrokes cross the network in
+plaintext for anyone on the LAN to read, and browsers refuse camera access to non-secure origins —
+so over plain HTTP the capture-device dropdown is simply empty.
+
+`./tools/make_certs.sh` issues the device certificate, creating a local CA the first time (pass
+`--ca-cert`/`--ca-key` to use one you already run). Install that CA once per machine you browse
+from; the script prints the command. Deliberately *not* a self-signed device certificate: Chrome
+now resists those by default and restricts some powerful APIs even after a click-through, so a
+self-signed cert risks paying the whole cost of TLS and still leaving the camera unavailable.
+
+Browse to `https://airkvm.local/` — the certificate is issued for that name, so the bare IP will
+warn every time.
+
 ## Security, stated plainly
 
-**Anyone who can reach the dongle on the network can type on the target.** There is no
-authentication. That is the current design, not an oversight in progress: the security model is
+**Anyone who can reach the dongle on the network can type on the target.** Traffic is encrypted,
+but there is no authentication — TLS protects your keystrokes from onlookers, not the target from
+whoever connects. That is the current design, not an oversight in progress: the security model is
 physical — plugging it in is a deliberate act, unplugging it is complete revocation. Use it on
 networks you trust, and unplug it when you're done. The trust boundaries and what would fix this
 are written up in [`docs/repo-map.md`](docs/repo-map.md).

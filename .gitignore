@@ -47,3 +47,8 @@ __pycache__/
 *.pyc
 .venv/
 .ruff_cache/
+
+# --- TLS material ---
+# Device keys and the local CA private key. The CA key can mint a certificate
+# for any name the trusting machines accept, so it is treated like an ssh key.
+certs/

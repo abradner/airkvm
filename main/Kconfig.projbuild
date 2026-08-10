@@ -25,6 +25,23 @@ config AIRKVM_HID_BACKEND_LOG
 
 endchoice
 
+config AIRKVM_TLS
+    bool "Serve the console over HTTPS/WSS"
+    default y
+    help
+        Serves the console over TLS using the certificate in certs/, generated
+        by tools/make_certs.sh.
+
+        Two reasons, and the second is the one that bites if you turn this off:
+        keystrokes otherwise cross the network in plaintext for anyone on the
+        LAN to read (risk R-007), and browsers refuse camera access to
+        non-secure origins, so the console's capture-device dropdown is empty
+        over plain HTTP.
+
+        Costs roughly 40KB of heap per connection and about a second per
+        handshake on a C3. Turning it off is reasonable for bench work on a
+        board with no certificate provisioned.
+
 config AIRKVM_WIFI_SSID
     string "WiFi SSID"
     default ""
