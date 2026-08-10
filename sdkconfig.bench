@@ -7,7 +7,7 @@
 
 CONFIG_IDF_TARGET="esp32c3"
 
-CONFIG_AIRHID_HID_BACKEND_LOG=y
+CONFIG_AIRKVM_HID_BACKEND_LOG=y
 
 # The USB-Serial/JTAG peripheral is the console here, and it is also the only
 # way to talk to the board — there is no separate UART bridge.

@@ -44,7 +44,7 @@ record its trigger and cost here — a roster that isn't written down gets guess
 init and the squash variants inlined, so the rules below read as unconditional — if this repo
 ever switches strategy, they must be re-derived from the template, not edited in place.
 
-**Deferral convention**: non-blocking findings become GitHub issues on `abradner/airhid`,
+**Deferral convention**: non-blocking findings become GitHub issues on `abradner/airkvm`,
 labelled `deferred` and linked back to the review comment. Never a PR-body table — it goes stale
 between rounds and vanishes on merge.
 

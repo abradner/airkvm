@@ -19,6 +19,7 @@
 #include "hid_out.h"
 #include "hid_state.h"
 #include "keymap.h"
+#include "status.h"
 
 static const char *TAG = "hid_log";
 
@@ -36,7 +37,7 @@ void hid_out_release_all(void) {
   s_release_pending = true;
 }
 
-bool hid_out_submit(const struct airhid_intent *intent) {
+bool hid_out_submit(const struct airkvm_intent *intent) {
   if (s_queue == NULL) {
     return false;
   }
@@ -46,16 +47,16 @@ bool hid_out_submit(const struct airhid_intent *intent) {
 // Renders the keyboard report the USB backend would have sent, so the log shows
 // the bytes a target would actually receive rather than a prettified summary.
 static void log_keyboard_report(const char *why) {
-  uint8_t report[AIRHID_KEYBOARD_REPORT_LEN];
+  uint8_t report[AIRKVM_KEYBOARD_REPORT_LEN];
   hid_state_keyboard_report(&s_state, report);
   ESP_LOGI(TAG, "%-10s kbd [%02x %02x %02x %02x %02x %02x %02x %02x]", why,
            report[0], report[1], report[2], report[3], report[4], report[5],
            report[6], report[7]);
 }
 
-static void apply(const struct airhid_intent *in) {
+static void apply(const struct airkvm_intent *in) {
   switch (in->type) {
-    case AIRHID_FRAME_KEY_DOWN: {
+    case AIRKVM_FRAME_KEY_DOWN: {
       const uint8_t usage = keymap_lookup(in->code);
       if (usage == 0) {
         // Worth shouting about: this is how an unmapped key looks from the bench,
@@ -64,35 +65,38 @@ static void apply(const struct airhid_intent *in) {
         return;
       }
       hid_state_key_down(&s_state, usage);
+      status_note_event(in->code);
       ESP_LOGI(TAG, "down       %s -> usage 0x%02x", in->code, usage);
       log_keyboard_report("state");
       break;
     }
-    case AIRHID_FRAME_KEY_UP: {
+    case AIRKVM_FRAME_KEY_UP: {
       const uint8_t usage = keymap_lookup(in->code);
       if (usage == 0) {
         return;
       }
       hid_state_key_up(&s_state, usage);
+      status_note_event(in->code);
       ESP_LOGI(TAG, "up         %s -> usage 0x%02x", in->code, usage);
       log_keyboard_report("state");
       break;
     }
-    case AIRHID_FRAME_MOUSE_MOVE:
+    case AIRKVM_FRAME_MOUSE_MOVE:
+      status_note_event("MOUSE");
       ESP_LOGI(TAG, "move       dx=%d dy=%d", in->move.dx, in->move.dy);
       break;
-    case AIRHID_FRAME_MOUSE_BUTTON:
+    case AIRKVM_FRAME_MOUSE_BUTTON:
       hid_state_set_buttons(&s_state, in->button_mask);
       ESP_LOGI(TAG, "buttons    0x%02x", in->button_mask);
       break;
-    case AIRHID_FRAME_MOUSE_SCROLL:
+    case AIRKVM_FRAME_MOUSE_SCROLL:
       ESP_LOGI(TAG, "scroll     v=%d h=%d", in->scroll.vertical,
                in->scroll.horizontal);
       break;
-    case AIRHID_FRAME_RELEASE_ALL:
+    case AIRKVM_FRAME_RELEASE_ALL:
       s_release_pending = true;
       break;
-    case AIRHID_FRAME_PING:
+    case AIRKVM_FRAME_PING:
       ESP_LOGD(TAG, "ping");
       break;
   }
@@ -100,7 +104,7 @@ static void apply(const struct airhid_intent *in) {
 
 static void report_task(void *arg) {
   (void)arg;
-  struct airhid_intent intent;
+  struct airkvm_intent intent;
   for (;;) {
     if (s_release_pending) {
       s_release_pending = false;
@@ -116,7 +120,7 @@ static void report_task(void *arg) {
 }
 
 esp_err_t hid_out_start(void) {
-  s_queue = xQueueCreate(64, sizeof(struct airhid_intent));
+  s_queue = xQueueCreate(64, sizeof(struct airkvm_intent));
   if (s_queue == NULL) {
     return ESP_ERR_NO_MEM;
   }

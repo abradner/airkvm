@@ -1,14 +1,14 @@
-# airhid — Agent Onboarding Guide
+# airkvm — Agent Onboarding Guide
 
 > Read this file first. It is the source of truth for AI agents working in this codebase.
-> Plans, status, and decision rationale live in GitHub issues on this repo (`abradner/airhid`),
+> Plans, status, and decision rationale live in GitHub issues on this repo (`abradner/airkvm`),
 > not in a repo file. When this file and the tracker disagree
 > on architecture or direction, the tracker wins — update this file to match, never the reverse.
 > This file is operational: how to build, run, and write code here.
 
 ## 1. What Is This?
 
-airhid turns a ~$12 ESP32-S3-0.42 OLED "supermini" board into an ad-hoc wireless KVM input
+airkvm turns a ~$12 ESP32-S3-0.42 OLED "supermini" board into an ad-hoc wireless KVM input
 dongle: plugged into any machine's USB port it enumerates as a real USB HID keyboard + mouse
 (boot protocol, so BIOS/UEFI works), and it serves a browser-based console over WiFi from which
 the operator types and points. Video is deliberately out of scope on-device: the operator's
@@ -37,7 +37,7 @@ principle that never changes a decision is decoration.
    against the project's own earlier claims.)*
 2. **The target installs nothing and configures nothing.** Every feature must work against a
    machine seen for the first time, sitting at a BIOS prompt, with no agent, no driver, and no
-   network. This is what separates airhid from every "remote control" tool that already exists;
+   network. This is what separates airkvm from every "remote control" tool that already exists;
    a feature that needs cooperation from the target is out of scope, not a future enhancement.
 3. **Zero-install on the host too.** The console is a web page the dongle serves. Reach for a
    native helper only when a capability is genuinely impossible in a browser (macOS-reserved
@@ -171,7 +171,7 @@ mise run setup                  # one-time: clone ESP-IDF v5.5 into .esp-idf/ an
 Then, per task:
 
 ```sh
-mise run config                 # idf.py menuconfig — WiFi credentials, under "airhid"
+mise run config                 # idf.py menuconfig — WiFi credentials, under "airkvm"
 mise run build                  # idf.py build (target pinned in sdkconfig.defaults)
 mise run flash                  # idf.py -p $PORT flash monitor   (see gotchas re: PORT)
 mise run clean                  # idf.py fullclean
@@ -202,6 +202,31 @@ add rather than rewrite.
   is a Mac.** Espressif ships aarch64 Linux toolchains, but any tooling added here must not
   assume x86_64 — and browser-side behavior must be checked on Safari, not only Chromium
   (`keyboard.lock()` in particular is Chromium-only, and the console must degrade without it).
+- **Flashing a board attached to another machine needs no toolchain on that machine.** Expose its
+  serial port over the network and point `PORT` at it — `esptool` speaks `rfc2217://`, so the
+  build stays here and only bytes travel:
+
+  ```sh
+  # on the machine holding the board (pyserial only, no ESP-IDF):
+  python3 -m serial.rfc2217_server -p 4000 /dev/ttyACM0
+  # here:
+  PORT=rfc2217://thathost:4000 mise run flash-bench
+  ```
+
+  RFC2217 rather than a plain socket because it carries DTR/RTS, which is what drives the board
+  into its bootloader — over a raw socket the flash hangs waiting for a reset that never happens.
+- **The red LED on the C3 bench board is not controllable.** It is a hardwired power indicator;
+  `tools/led_scan` walked every free GPIO in both polarities and it never changed. GPIO8 (blue) is
+  the only software LED. Settled — see the note in `main/board.h` rather than re-running the hunt.
+- **Published pinouts for this board family tag GPIO8/9 as I2C.** Those are the chip's default
+  alternate-function labels, not the wiring: GPIO8 is physically the LED, and the OLED is on
+  GPIO5/6. Trust a working config over a pinout diagram.
+- **Renaming the project directory breaks the ESP-IDF toolchain and every build directory.** The
+  Python venv holds absolute shebangs and CMake caches the source path, so a rename needs
+  `rm -rf .esp-idf-tools/python_env build build-bench test/host/build tools/led_scan/build &&
+  mise run setup`. The symptom is a build complaining it was "configured for project /old/path" —
+  and it bites the host tests too, which is easy to miss because they have nothing to do with
+  ESP-IDF.
 - **Board pinout is vendor-documented, not datasheet-derived.** The 0.42" OLED's I2C pins differ
   between the C3, C6, and S3 variants of this board family. Confirm against the vendor demo for
   the *S3* variant specifically; do not carry over the widely-quoted C3 numbers (GPIO5/6).
@@ -417,7 +442,7 @@ Initialized 2026-08-10 from the keel template.
 - **Visibility**: public. The template-lineage block was deleted per the init procedure — a
   pointer to a private template is unresolvable for outside contributors and would mis-steer
   their agents. Lineage is tracked in the private fleet registry (`abradner/fleet`) instead.
-  **Operator TODO:** the fleet-registry row for `airhid` was not added during init (the registry
+  **Operator TODO:** the fleet-registry row for `airkvm` was not added during init (the registry
   wasn't reachable from that session) — add it, with keel SHA `8f6c55e` as the synced-through
   point.
 - **License**: kept Apache-2.0, appropriate for a public hardware/firmware project that

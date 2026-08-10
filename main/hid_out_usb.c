@@ -16,6 +16,7 @@
 #include "hid_out.h"
 #include "hid_state.h"
 #include "keymap.h"
+#include "status.h"
 #include "tinyusb.h"
 
 static const char *TAG = "usb_hid";
@@ -73,11 +74,11 @@ static const tusb_desc_device_t s_device_desc = {
 
 static const char *s_string_desc[] = {
     (const char[]){0x09, 0x04},  // English (US)
-    "airhid",
-    "airhid keyboard+mouse",
+    "airkvm",
+    "airkvm keyboard+mouse",
     "000001",
-    "airhid keyboard",
-    "airhid mouse",
+    "airkvm keyboard",
+    "airkvm mouse",
 };
 
 // --- state ------------------------------------------------------------------
@@ -97,11 +98,13 @@ bool hid_out_is_mounted(void) {
 void tud_mount_cb(void) {
   ESP_LOGI(TAG, "USB host enumerated the device");
   s_mounted = true;
+  status_set_usb_mounted(true);
 }
 
 void tud_umount_cb(void) {
   ESP_LOGI(TAG, "USB host disconnected");
   s_mounted = false;
+  status_set_usb_mounted(false);
   // Unplugged mid-session: drop everything so a replug does not resume a state
   // the console has since forgotten about.
   s_release_pending = true;
@@ -118,7 +121,7 @@ const uint8_t *tud_hid_descriptor_report_cb(uint8_t instance) {
   return instance == HID_ITF_MOUSE ? s_mouse_report_desc : s_kbd_report_desc;
 }
 
-// Required by TinyUSB. airhid never reads from the target: a GET_REPORT reply
+// Required by TinyUSB. airkvm never reads from the target: a GET_REPORT reply
 // of zero length is the honest answer, and inventing report contents here would
 // be data the target did not ask us to make up.
 uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
@@ -174,7 +177,7 @@ static void pump_keyboard(void) {
   if (!s_kbd_dirty || !tud_hid_n_ready(HID_ITF_KEYBOARD)) {
     return;
   }
-  uint8_t report[AIRHID_KEYBOARD_REPORT_LEN];
+  uint8_t report[AIRKVM_KEYBOARD_REPORT_LEN];
   hid_state_keyboard_report(&s_state, report);
   // report_id 0: no report ID in the descriptor, which is what boot protocol
   // requires (see the two-interface note above).
@@ -193,46 +196,49 @@ static void pump_mouse(void) {
   const int8_t dy = take_delta(&s_pending_dy);
   const int8_t sv = take_delta(&s_pending_scroll_v);
   const int8_t sh = take_delta(&s_pending_scroll_h);
-  uint8_t report[AIRHID_MOUSE_REPORT_LEN];
+  uint8_t report[AIRKVM_MOUSE_REPORT_LEN];
   hid_state_mouse_report(&s_state, dx, dy, sv, sh, report);
   if (tud_hid_n_report(HID_ITF_MOUSE, 0, report, sizeof(report))) {
     s_buttons_dirty = false;
   }
 }
 
-static void apply(const struct airhid_intent *in) {
+static void apply(const struct airkvm_intent *in) {
   switch (in->type) {
-    case AIRHID_FRAME_KEY_DOWN:
+    case AIRKVM_FRAME_KEY_DOWN:
       hid_state_key_down(&s_state, keymap_lookup(in->code));
+      status_note_event(in->code);
       s_kbd_dirty = true;
       break;
-    case AIRHID_FRAME_KEY_UP:
+    case AIRKVM_FRAME_KEY_UP:
       hid_state_key_up(&s_state, keymap_lookup(in->code));
+      status_note_event(in->code);
       s_kbd_dirty = true;
       break;
-    case AIRHID_FRAME_MOUSE_MOVE:
+    case AIRKVM_FRAME_MOUSE_MOVE:
+      status_note_event("MOUSE");
       s_pending_dx += in->move.dx;
       s_pending_dy += in->move.dy;
       break;
-    case AIRHID_FRAME_MOUSE_BUTTON:
+    case AIRKVM_FRAME_MOUSE_BUTTON:
       hid_state_set_buttons(&s_state, in->button_mask);
       s_buttons_dirty = true;
       break;
-    case AIRHID_FRAME_MOUSE_SCROLL:
+    case AIRKVM_FRAME_MOUSE_SCROLL:
       s_pending_scroll_v += in->scroll.vertical;
       s_pending_scroll_h += in->scroll.horizontal;
       break;
-    case AIRHID_FRAME_RELEASE_ALL:
+    case AIRKVM_FRAME_RELEASE_ALL:
       s_release_pending = true;
       break;
-    case AIRHID_FRAME_PING:
+    case AIRKVM_FRAME_PING:
       break;
   }
 }
 
 static void report_task(void *arg) {
   (void)arg;
-  struct airhid_intent intent;
+  struct airkvm_intent intent;
   for (;;) {
     if (s_release_pending) {
       s_release_pending = false;
@@ -268,7 +274,7 @@ static void report_task(void *arg) {
 
 // --- lifecycle --------------------------------------------------------------
 
-bool hid_out_submit(const struct airhid_intent *intent) {
+bool hid_out_submit(const struct airkvm_intent *intent) {
   if (s_queue == NULL) {
     return false;
   }
@@ -282,7 +288,7 @@ void hid_out_release_all(void) {
 }
 
 esp_err_t hid_out_start(void) {
-  s_queue = xQueueCreate(64, sizeof(struct airhid_intent));
+  s_queue = xQueueCreate(64, sizeof(struct airkvm_intent));
   if (s_queue == NULL) {
     return ESP_ERR_NO_MEM;
   }

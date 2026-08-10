@@ -40,7 +40,7 @@ echo "ESP-IDF ready. Subsequent tasks source it automatically."
 
 [tasks.config]
 shell = "bash -c"
-description = "Open menuconfig (WiFi credentials live under the 'airhid' menu)"
+description = "Open menuconfig (WiFi credentials live under the 'airkvm' menu)"
 run = '. "$IDF_PATH/export.sh" >/dev/null && idf.py menuconfig'
 
 [tasks.build]

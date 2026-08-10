@@ -1,13 +1,13 @@
-menu "airhid"
+menu "airkvm"
 
-choice AIRHID_HID_BACKEND
+choice AIRKVM_HID_BACKEND
     prompt "HID output backend"
-    default AIRHID_HID_BACKEND_USB if IDF_TARGET_ESP32S3 || IDF_TARGET_ESP32S2
-    default AIRHID_HID_BACKEND_LOG
+    default AIRKVM_HID_BACKEND_USB if IDF_TARGET_ESP32S3 || IDF_TARGET_ESP32S2
+    default AIRKVM_HID_BACKEND_LOG
     help
         How decoded input reaches the target machine.
 
-config AIRHID_HID_BACKEND_USB
+config AIRKVM_HID_BACKEND_USB
     bool "USB HID (TinyUSB)"
     depends on IDF_TARGET_ESP32S3 || IDF_TARGET_ESP32S2
     help
@@ -15,7 +15,7 @@ config AIRHID_HID_BACKEND_USB
         S3 and S2 have — the option is not offered on other targets because no
         firmware can add the hardware.
 
-config AIRHID_HID_BACKEND_LOG
+config AIRKVM_HID_BACKEND_LOG
     bool "Bench: log intents, drive nothing"
     help
         No HID output at all. Decoded input is logged instead, so the WiFi,
@@ -25,7 +25,7 @@ config AIRHID_HID_BACKEND_LOG
 
 endchoice
 
-config AIRHID_WIFI_SSID
+config AIRKVM_WIFI_SSID
     string "WiFi SSID"
     default ""
     help
@@ -33,15 +33,15 @@ config AIRHID_WIFI_SSID
         because a plausible-looking wrong value fails as a radio problem rather
         than as a config problem (AGENTS.md §8).
 
-config AIRHID_WIFI_PASSWORD
+config AIRKVM_WIFI_PASSWORD
     string "WiFi password"
     default ""
     help
         WPA2 passphrase. Empty means an open network.
 
-config AIRHID_MDNS_HOSTNAME
+config AIRKVM_MDNS_HOSTNAME
     string "mDNS hostname"
-    default "airhid"
+    default "airkvm"
     help
         The console is reachable at http://<hostname>.local/. Give each dongle a
         distinct name if you run more than one, or they will fight over it.

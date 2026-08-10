@@ -5,10 +5,18 @@
 #include "esp_log.h"
 #include "hid_out.h"
 #include "net.h"
+#include "status.h"
+#include "ui.h"
 
-static const char *TAG = "airhid";
+static const char *TAG = "airkvm";
 
 void app_main(void) {
+  // Status and front panel first, so the screen can report progress (and
+  // failure) for everything that follows rather than staying dark until the
+  // network happens to come up.
+  status_init();
+  ui_start();
+
   // USB first, and independent of the network. A dongle plugged into a target
   // must enumerate as a keyboard whether or not WiFi ever associates; the
   // reverse order would make a bad network look like broken hardware
@@ -24,5 +32,5 @@ void app_main(void) {
              esp_err_to_name(err));
     return;
   }
-  ESP_LOGI(TAG, "airhid ready");
+  ESP_LOGI(TAG, "airkvm ready");
 }

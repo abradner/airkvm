@@ -11,15 +11,15 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define AIRHID_KEYBOARD_REPORT_LEN 8
-#define AIRHID_MOUSE_REPORT_LEN 5
+#define AIRKVM_KEYBOARD_REPORT_LEN 8
+#define AIRKVM_MOUSE_REPORT_LEN 5
 
 // A HID boot keyboard reports at most six non-modifier keys at once.
-#define AIRHID_ROLLOVER_LIMIT 6
+#define AIRKVM_ROLLOVER_LIMIT 6
 
 struct hid_state {
   uint8_t modifiers;                    // HID modifier byte, bit per modifier
-  uint8_t keys[AIRHID_ROLLOVER_LIMIT];  // non-modifier usages, 0 = empty slot
+  uint8_t keys[AIRKVM_ROLLOVER_LIMIT];  // non-modifier usages, 0 = empty slot
   uint8_t buttons;                      // bit 0 left, 1 right, 2 middle
 };
 
@@ -48,11 +48,11 @@ bool hid_state_is_idle(const struct hid_state *s);
 // Serializes current state into the 8-byte boot keyboard report:
 //   [modifiers][reserved][key0..key5]
 void hid_state_keyboard_report(const struct hid_state *s,
-                               uint8_t out[AIRHID_KEYBOARD_REPORT_LEN]);
+                               uint8_t out[AIRKVM_KEYBOARD_REPORT_LEN]);
 
 // Serializes a 5-byte mouse report: [buttons][dx][dy][vertical][horizontal].
 // Movement and scroll are transient — they are arguments here rather than
 // state, because a dropped move frame should simply not move, never repeat.
 void hid_state_mouse_report(const struct hid_state *s, int8_t dx, int8_t dy,
                             int8_t scroll_v, int8_t scroll_h,
-                            uint8_t out[AIRHID_MOUSE_REPORT_LEN]);
+                            uint8_t out[AIRKVM_MOUSE_REPORT_LEN]);

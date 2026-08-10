@@ -14,6 +14,7 @@
 #include "net.h"
 
 #include <stdbool.h>
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -27,6 +28,7 @@
 #include "mdns.h"
 #include "nvs_flash.h"
 #include "protocol.h"
+#include "status.h"
 
 static const char *TAG = "net";
 
@@ -66,6 +68,7 @@ static esp_err_t style_css_get(httpd_req_t *req) {
 static void session_ended(const char *why) {
   ESP_LOGI(TAG, "console session ended (%s) — releasing all", why);
   s_active_fd = -1;
+  status_set_client(false);
   // Any loss of confidence releases everything (AGENTS.md §2, principle 4).
   hid_out_release_all();
 }
@@ -110,7 +113,7 @@ static esp_err_t ws_handler(httpd_req_t *req) {
   }
 
   // Longest valid frame is a key frame: type + length + code.
-  uint8_t buf[2 + AIRHID_MAX_CODE_LEN];
+  uint8_t buf[2 + AIRKVM_MAX_CODE_LEN];
   if (frame.len > sizeof(buf)) {
     // Nothing valid is this big. The payload cannot simply be left unread: those
     // bytes stay in the socket and the next recv parses payload as a frame
@@ -143,13 +146,14 @@ static esp_err_t ws_handler(httpd_req_t *req) {
   // socket that does nothing rather than fighting the first for the keyboard.
   if (s_active_fd < 0) {
     s_active_fd = fd;
+    status_set_client(true);
     ESP_LOGI(TAG, "console session started (fd %d)", fd);
   } else if (fd != s_active_fd) {
     return ESP_OK;  // spectator (R-003)
   }
 
-  struct airhid_intent intent;
-  if (airhid_decode(buf, frame.len, &intent) != AIRHID_DECODE_OK) {
+  struct airkvm_intent intent;
+  if (airkvm_decode(buf, frame.len, &intent) != AIRKVM_DECODE_OK) {
     // A frame we cannot fully parse means a client we do not understand, on a
     // path that ends in keystrokes. Drop it; do not guess.
     ESP_LOGW(TAG, "rejected malformed frame");
@@ -162,8 +166,8 @@ static esp_err_t ws_handler(httpd_req_t *req) {
     // scroll only means the pointer moves less far. Releasing on dropped motion
     // would make a fast mouse flick tear down a held chord — the safety action
     // causing the very failure it exists to prevent.
-    const bool droppable = intent.type == AIRHID_FRAME_MOUSE_MOVE ||
-                           intent.type == AIRHID_FRAME_MOUSE_SCROLL;
+    const bool droppable = intent.type == AIRKVM_FRAME_MOUSE_MOVE ||
+                           intent.type == AIRKVM_FRAME_MOUSE_SCROLL;
     if (droppable) {
       ESP_LOGD(TAG, "HID queue full — dropped motion");
     } else {
@@ -224,12 +228,16 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id,
     // too — a target left with a held key while we retry is the exact failure
     // principle 4 names.
     hid_out_release_all();
+    status_set_wifi(false, NULL, NULL);
     ESP_LOGW(TAG, "WiFi disconnected; retrying");
     esp_wifi_connect();
   } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
     const ip_event_got_ip_t *event = (const ip_event_got_ip_t *)data;
-    ESP_LOGI(TAG, "console at http://" IPSTR "/ (or http://%s.local/)",
-             IP2STR(&event->ip_info.ip), CONFIG_AIRHID_MDNS_HOSTNAME);
+    char ip[16];
+    snprintf(ip, sizeof(ip), IPSTR, IP2STR(&event->ip_info.ip));
+    status_set_wifi(true, ip, CONFIG_AIRKVM_WIFI_SSID);
+    ESP_LOGI(TAG, "console at http://%s/ (or http://%s.local/)", ip,
+             CONFIG_AIRKVM_MDNS_HOSTNAME);
   }
 }
 
@@ -253,15 +261,15 @@ static esp_err_t start_wifi(void) {
   // Checked at runtime rather than with _Static_assert: the firmware must still
   // compile with no SSID configured, because CI builds a fresh checkout that has
   // no sdkconfig and never will have credentials in it.
-  if (CONFIG_AIRHID_WIFI_SSID[0] == '\0') {
+  if (CONFIG_AIRKVM_WIFI_SSID[0] == '\0') {
     ESP_LOGE(TAG, "no WiFi SSID configured — run `mise run config`");
     return ESP_ERR_INVALID_STATE;
   }
 
   wifi_config_t wifi_config = {0};
-  strlcpy((char *)wifi_config.sta.ssid, CONFIG_AIRHID_WIFI_SSID,
+  strlcpy((char *)wifi_config.sta.ssid, CONFIG_AIRKVM_WIFI_SSID,
           sizeof(wifi_config.sta.ssid));
-  strlcpy((char *)wifi_config.sta.password, CONFIG_AIRHID_WIFI_PASSWORD,
+  strlcpy((char *)wifi_config.sta.password, CONFIG_AIRKVM_WIFI_PASSWORD,
           sizeof(wifi_config.sta.password));
 
   ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "set_mode failed");
@@ -273,9 +281,9 @@ static esp_err_t start_wifi(void) {
 
 static esp_err_t start_mdns(void) {
   ESP_RETURN_ON_ERROR(mdns_init(), TAG, "mdns_init failed");
-  ESP_RETURN_ON_ERROR(mdns_hostname_set(CONFIG_AIRHID_MDNS_HOSTNAME), TAG,
+  ESP_RETURN_ON_ERROR(mdns_hostname_set(CONFIG_AIRKVM_MDNS_HOSTNAME), TAG,
                       "mdns hostname failed");
-  ESP_RETURN_ON_ERROR(mdns_instance_name_set("airhid console"), TAG,
+  ESP_RETURN_ON_ERROR(mdns_instance_name_set("airkvm console"), TAG,
                       "mdns instance failed");
   return mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
 }

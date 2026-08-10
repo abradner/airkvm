@@ -1,4 +1,4 @@
-// airhid console.
+// airkvm console.
 //
 // No build step, no framework, no CDN: the dongle serves everything, because a
 // machine you walked up to may be on a network with no internet (AGENTS.md §4).
@@ -77,7 +77,7 @@ function send(bytes) {
 
 function sendKey(type, code) {
   const encoded = new TextEncoder().encode(code);
-  if (encoded.length > 23) return false; // matches AIRHID_MAX_CODE_LEN
+  if (encoded.length > 23) return false; // matches AIRKVM_MAX_CODE_LEN
   return send([type, encoded.length, ...encoded]);
 }
 

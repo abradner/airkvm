@@ -1,4 +1,4 @@
-# airhid
+# airkvm
 
 > 🤖 **AI Agents:** read [`AGENTS.md`](AGENTS.md) instead. This README is for humans.
 
@@ -11,12 +11,12 @@ BIOS/UEFI setup, boot menus, disk-unlock prompts, a hung desktop, a machine with
 
 **Status:** early. Firmware is being written ahead of the hardware arriving, so nothing here has
 run on a real board yet — treat every claim below as intent, not proof. See
-[open issues](https://github.com/abradner/airhid/issues) for what's actually done.
+[open issues](https://github.com/abradner/airkvm/issues) for what's actually done.
 
 ## The shape of it
 
 ```
-your laptop's browser                    airhid dongle              the target machine
+your laptop's browser                    airkvm dongle              the target machine
 ┌──────────────────────────┐  WiFi/WS   ┌─────────────────┐   USB   ┌──────────────┐
 │ keyboard + pointer lock ─┼──────────► │ WebSocket → HID │ ──────► │ sees a plain │
 │                          │            │ reports         │         │ kbd + mouse  │
@@ -33,7 +33,7 @@ stays local and full-framerate instead of being squeezed through a microcontroll
 
 | Part | Notes |
 |---|---|
-| ESP32-S3-0.42 OLED "supermini" | ~$12. The 0.42" OLED will show the dongle's IP so you don't have to hunt for it — not wired up yet; for now the IP is on the serial log. |
+| ESP32-S3-0.42 OLED "supermini" | ~$12. The 0.42" OLED shows the dongle's IP, so you read it off the board instead of hunting for it. |
 | That's it | The board's own USB-C is the HID port and the power source. |
 
 **The S3 part is not optional.** HID output needs a native USB OTG controller, which means
@@ -46,13 +46,26 @@ path is a CH9329 UART-to-HID module — not built yet.
 ```sh
 mise install        # toolchain
 mise run setup      # ESP-IDF v5.5 + esp32s3 compilers (one-time, several GB)
-mise run config     # set WiFi SSID/password under "airhid" — required, no default
+mise run config     # set WiFi SSID/password under "airkvm" — required, no default
 mise run build
 PORT=/dev/tty.usbmodem1101 mise run flash
 ```
 
-The dongle logs its address on boot (`http://<ip>/`, also `http://airhid.local/`). Open that on
-your laptop, click the video pane to capture, and type.
+The dongle shows its address on the OLED (and logs it on boot) — `http://<ip>/`, also
+`http://airkvm.local/`. Open that on your laptop, click the video pane to capture, and type.
+
+## The front panel
+
+The little screen shows what you need when you walk up to the thing: its IP, the network it's on
+with a signal bar, whether a browser currently holds the keyboard, and whether a target is
+actually listening on USB. The LED is dark when nobody is connected, breathes gently while a
+console is bound, and blips on each keystroke — so you can tell "my input isn't arriving" from
+"the target is ignoring me" without opening a log.
+
+Pressing the **BOOT** button toggles a debug row that shows live input as it arrives. That is
+genuinely useful for "is it me or the machine?", and it is also a screen showing your keystrokes,
+so it is off by default and can *only* be turned on by physically pressing the button — there is
+no network path to it. While it is off, keystroke text is never stored at all.
 
 To reflash after the first flash, hold **BOOT** and tap **RESET** first: once the firmware claims
 USB for HID, the board stops being a serial device until you put it back in bootloader mode.
@@ -60,8 +73,8 @@ USB for HID, the board stops being a serial device until you put it back in boot
 No browser handy? `tools/poke.py` speaks the same protocol from a terminal:
 
 ```sh
-./tools/poke.py airhid.local type "hello world"
-./tools/poke.py airhid.local key ControlLeft+AltLeft+Delete
+./tools/poke.py airkvm.local type "hello world"
+./tools/poke.py airkvm.local key ControlLeft+AltLeft+Delete
 ```
 
 `mise run test` runs the host-side unit tests for the keymap, protocol codec, and HID state

@@ -34,6 +34,7 @@ change that found the disagreement.
 | Input socket | `GET /ws` (WebSocket upgrade) | **None** — see R-001 | The actual keystroke path. Every frame here becomes a USB HID report on the target. |
 | USB HID device | USB-C port → target machine | **None, by design** | The target cannot authenticate a keyboard. This is inherent to HID, not a gap we can close. |
 | Serial console | UART/USB-JTAG in bootloader mode | Physical access | Flashing and logs. Only present when firmware hasn't claimed USB (AGENTS.md §6.1). |
+| Status display + button | On-board OLED and BOOT button | Physical access | Shows IP, signal, and link state. The button toggles a debug view of live input — see R-006. |
 | WiFi association | Station mode, credentials in NVS | WPA2 (the network's) | The dongle's only network identity is "a device on this LAN". |
 
 ## Trust boundaries
@@ -74,7 +75,7 @@ and nothing times out on its absence. A client that vanishes without closing its
 therefore holds state until the socket layer notices — the one gap in the release-all guarantee,
 and the reason a ping deadline is the next thing worth building here.
 
-**Boot/provisioning**: NVS credentials → WiFi station → mDNS advertise (`airhid.local`) → HTTP
+**Boot/provisioning**: NVS credentials → WiFi station → mDNS advertise (`airkvm.local`) → HTTP
 server up → IP logged to serial (the OLED status display is planned, not built). USB HID
 initializes independently of, and does not wait
 on, the network: a dongle with no WiFi is still a keyboard that can be driven once the network
@@ -89,3 +90,4 @@ returns, and must never block enumeration on an association that may never happe
 | R-003 | Two concurrent console clients interleaving input into one HID state | `/ws` handler | **Partially mitigated.** One controlling session is tracked (`s_active_fd`); a second client's frames are accepted at the HTTP layer and then ignored (`main/net.c`), so streams never interleave. Not built: telling that second client it is a spectator, and explicit takeover. |
 | R-004 | WiFi credentials stored in plaintext NVS; physical recovery of the dongle exposes them | NVS partition | Accepted for now — a lost dongle is already a lost keyboard-on-the-LAN. Flash encryption is the real answer if this ever leaves a home network. |
 | R-005 | Firmware claims about hardware behavior that has never run on hardware | Everywhere | Marked in-place as unverified (AGENTS.md §4, last rule). Clears when a board arrives and the phase-1 enumeration test passes. |
+| R-006 | The status display can show what is being typed — passwords included — to anyone who can see the device | `main/ui.c`, `main/status.c` | **Gated on physical presence.** Debug rows are off at boot, toggled only by the on-board button, and there is deliberately no network path to enable them. While off, keystroke text is not merely hidden but never stored (`status_note_event` discards it), and toggling off wipes the buffer — so a future logging change cannot leak a value that was captured "just in case". Anyone who can press the button can already unplug the device. |

@@ -7,9 +7,9 @@ static void starts_idle(void) {
   hid_state_reset(&s);
   CHECK(hid_state_is_idle(&s));
 
-  uint8_t report[AIRHID_KEYBOARD_REPORT_LEN];
+  uint8_t report[AIRKVM_KEYBOARD_REPORT_LEN];
   hid_state_keyboard_report(&s, report);
-  for (int i = 0; i < AIRHID_KEYBOARD_REPORT_LEN; i++) {
+  for (int i = 0; i < AIRKVM_KEYBOARD_REPORT_LEN; i++) {
     CHECK_EQ_INT(report[i], 0);
   }
 }
@@ -21,7 +21,7 @@ static void key_down_and_up(void) {
 
   hid_state_key_down(&s, a);
   CHECK(!hid_state_is_idle(&s));
-  uint8_t report[AIRHID_KEYBOARD_REPORT_LEN];
+  uint8_t report[AIRKVM_KEYBOARD_REPORT_LEN];
   hid_state_keyboard_report(&s, report);
   CHECK_EQ_INT(report[0], 0);  // no modifiers
   CHECK_EQ_INT(report[2], a);
@@ -36,7 +36,7 @@ static void modifiers_go_in_the_modifier_byte(void) {
   hid_state_key_down(&s, keymap_lookup("ControlLeft"));
   hid_state_key_down(&s, keymap_lookup("ShiftLeft"));
 
-  uint8_t report[AIRHID_KEYBOARD_REPORT_LEN];
+  uint8_t report[AIRKVM_KEYBOARD_REPORT_LEN];
   hid_state_keyboard_report(&s, report);
   CHECK_EQ_INT(report[0], 0x03);
   // ...and not in the key array, which is where a modifier ends up if the
@@ -57,7 +57,7 @@ static void repeated_and_spurious_events_are_harmless(void) {
   hid_state_key_down(&s, a);
   hid_state_key_down(&s, a);
   hid_state_key_down(&s, a);
-  uint8_t report[AIRHID_KEYBOARD_REPORT_LEN];
+  uint8_t report[AIRKVM_KEYBOARD_REPORT_LEN];
   hid_state_keyboard_report(&s, report);
   CHECK_EQ_INT(report[2], a);
   CHECK_EQ_INT(report[3], 0);  // occupies exactly one slot
@@ -90,7 +90,7 @@ static void report_is_compacted(void) {
   hid_state_key_down(&s, c);
   hid_state_key_up(&s, b);
 
-  uint8_t report[AIRHID_KEYBOARD_REPORT_LEN];
+  uint8_t report[AIRKVM_KEYBOARD_REPORT_LEN];
   hid_state_keyboard_report(&s, report);
   CHECK_EQ_INT(report[2], a);
   CHECK_EQ_INT(report[3], c);
@@ -105,12 +105,12 @@ static void six_keys_is_a_full_valid_report(void) {
   struct hid_state s;
   hid_state_reset(&s);
   const char *codes[] = {"KeyA", "KeyB", "KeyC", "KeyD", "KeyE", "KeyF"};
-  for (int i = 0; i < AIRHID_ROLLOVER_LIMIT; i++) {
+  for (int i = 0; i < AIRKVM_ROLLOVER_LIMIT; i++) {
     hid_state_key_down(&s, keymap_lookup(codes[i]));
   }
-  uint8_t report[AIRHID_KEYBOARD_REPORT_LEN];
+  uint8_t report[AIRKVM_KEYBOARD_REPORT_LEN];
   hid_state_keyboard_report(&s, report);
-  for (int i = 0; i < AIRHID_ROLLOVER_LIMIT; i++) {
+  for (int i = 0; i < AIRKVM_ROLLOVER_LIMIT; i++) {
     CHECK_EQ_INT(report[2 + i], keymap_lookup(codes[i]));
   }
 
@@ -118,7 +118,7 @@ static void six_keys_is_a_full_valid_report(void) {
   // produce a release the console never sent and never will.
   hid_state_key_down(&s, keymap_lookup("KeyG"));
   hid_state_keyboard_report(&s, report);
-  for (int i = 0; i < AIRHID_ROLLOVER_LIMIT; i++) {
+  for (int i = 0; i < AIRKVM_ROLLOVER_LIMIT; i++) {
     CHECK_EQ_INT(report[2 + i], keymap_lookup(codes[i]));
   }
 
@@ -146,14 +146,14 @@ static void release_all_is_total(void) {
   hid_state_release_all(&s);
   CHECK(hid_state_is_idle(&s));
 
-  uint8_t report[AIRHID_KEYBOARD_REPORT_LEN];
+  uint8_t report[AIRKVM_KEYBOARD_REPORT_LEN];
   hid_state_keyboard_report(&s, report);
-  for (int i = 0; i < AIRHID_KEYBOARD_REPORT_LEN; i++) {
+  for (int i = 0; i < AIRKVM_KEYBOARD_REPORT_LEN; i++) {
     CHECK_EQ_INT(report[i], 0);
   }
-  uint8_t mouse[AIRHID_MOUSE_REPORT_LEN];
+  uint8_t mouse[AIRKVM_MOUSE_REPORT_LEN];
   hid_state_mouse_report(&s, 0, 0, 0, 0, mouse);
-  for (int i = 0; i < AIRHID_MOUSE_REPORT_LEN; i++) {
+  for (int i = 0; i < AIRKVM_MOUSE_REPORT_LEN; i++) {
     CHECK_EQ_INT(mouse[i], 0);
   }
 }
@@ -163,7 +163,7 @@ static void mouse_report_carries_buttons_and_deltas(void) {
   hid_state_reset(&s);
   hid_state_set_buttons(&s, 0x01);
 
-  uint8_t mouse[AIRHID_MOUSE_REPORT_LEN];
+  uint8_t mouse[AIRKVM_MOUSE_REPORT_LEN];
   hid_state_mouse_report(&s, -2, 3, 1, -1, mouse);
   CHECK_EQ_INT(mouse[0], 0x01);
   CHECK_EQ_INT((int8_t)mouse[1], -2);
@@ -183,7 +183,7 @@ static void button_mask_ignores_undefined_bits(void) {
   struct hid_state s;
   hid_state_reset(&s);
   hid_state_set_buttons(&s, 0xFF);
-  uint8_t mouse[AIRHID_MOUSE_REPORT_LEN];
+  uint8_t mouse[AIRKVM_MOUSE_REPORT_LEN];
   hid_state_mouse_report(&s, 0, 0, 0, 0, mouse);
   CHECK_EQ_INT(mouse[0], 0x07);
 }

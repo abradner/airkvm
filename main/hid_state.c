@@ -16,7 +16,7 @@ bool hid_state_is_idle(const struct hid_state *s) {
   if (s->modifiers != 0 || s->buttons != 0) {
     return false;
   }
-  for (int i = 0; i < AIRHID_ROLLOVER_LIMIT; i++) {
+  for (int i = 0; i < AIRKVM_ROLLOVER_LIMIT; i++) {
     if (s->keys[i] != 0) {
       return false;
     }
@@ -33,7 +33,7 @@ void hid_state_key_down(struct hid_state *s, uint8_t usage) {
     return;
   }
   int free_slot = -1;
-  for (int i = 0; i < AIRHID_ROLLOVER_LIMIT; i++) {
+  for (int i = 0; i < AIRKVM_ROLLOVER_LIMIT; i++) {
     if (s->keys[i] == usage) {
       return;  // already held; repeats are the host's job, not ours
     }
@@ -57,7 +57,7 @@ void hid_state_key_up(struct hid_state *s, uint8_t usage) {
     s->modifiers &= (uint8_t)~keymap_modifier_bit(usage);
     return;
   }
-  for (int i = 0; i < AIRHID_ROLLOVER_LIMIT; i++) {
+  for (int i = 0; i < AIRKVM_ROLLOVER_LIMIT; i++) {
     if (s->keys[i] == usage) {
       s->keys[i] = 0;
       return;
@@ -70,7 +70,7 @@ void hid_state_set_buttons(struct hid_state *s, uint8_t mask) {
 }
 
 void hid_state_keyboard_report(const struct hid_state *s,
-                               uint8_t out[AIRHID_KEYBOARD_REPORT_LEN]) {
+                               uint8_t out[AIRKVM_KEYBOARD_REPORT_LEN]) {
   out[0] = s->modifiers;
   out[1] = 0;  // reserved by the HID boot keyboard spec
 
@@ -84,19 +84,19 @@ void hid_state_keyboard_report(const struct hid_state *s,
   // Compacted: freeing a slot in the middle must not leave a gap, because some
   // targets stop reading the array at the first zero.
   int w = 2;
-  for (int i = 0; i < AIRHID_ROLLOVER_LIMIT; i++) {
+  for (int i = 0; i < AIRKVM_ROLLOVER_LIMIT; i++) {
     if (s->keys[i] != 0) {
       out[w++] = s->keys[i];
     }
   }
-  while (w < AIRHID_KEYBOARD_REPORT_LEN) {
+  while (w < AIRKVM_KEYBOARD_REPORT_LEN) {
     out[w++] = 0;
   }
 }
 
 void hid_state_mouse_report(const struct hid_state *s, int8_t dx, int8_t dy,
                             int8_t scroll_v, int8_t scroll_h,
-                            uint8_t out[AIRHID_MOUSE_REPORT_LEN]) {
+                            uint8_t out[AIRKVM_MOUSE_REPORT_LEN]) {
   out[0] = s->buttons;
   out[1] = (uint8_t)dx;
   out[2] = (uint8_t)dy;

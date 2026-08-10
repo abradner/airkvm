@@ -3,7 +3,7 @@
 // Everything above this line — the WebSocket handler, the protocol decoder —
 // deals in decoded intents and never touches a HID transport directly
 // (AGENTS.md §4). Exactly one backend is compiled in, chosen by
-// CONFIG_AIRHID_HID_BACKEND:
+// CONFIG_AIRKVM_HID_BACKEND:
 //
 //   usb    real USB HID via TinyUSB (hid_out_usb.c). Requires an ESP32-S3/S2:
 //          native USB OTG is a hardware prerequisite, not a build flag.
@@ -28,7 +28,7 @@ esp_err_t hid_out_start(void);
 // Queues one decoded intent. Safe to call from the HTTP task; the caller never
 // touches the transport itself. Returns false if the queue is full — see the
 // caller in net.c for why that is not automatically a release-all.
-bool hid_out_submit(const struct airhid_intent *intent);
+bool hid_out_submit(const struct airkvm_intent *intent);
 
 // Clears every held key and button. Called on every terminal session event.
 // Bypasses the queue: the whole point is that it still works when the queue is

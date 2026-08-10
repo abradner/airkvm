@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drive an airhid dongle from the command line, without a browser.
+"""Drive an airkvm dongle from the command line, without a browser.
 
 Speaks the wire format in main/protocol.h directly, which makes it the tool for
 answering "is the firmware wrong or is the console wrong?" — and for typing at a
@@ -8,9 +8,9 @@ target from a machine with no GUI at all.
 Standard library only, including a minimal WebSocket client: adding a dependency
 to a debugging aid would mean a virtualenv between you and a stuck key.
 
-    ./tools/poke.py airhid.local type "hello world"
-    ./tools/poke.py airhid.local key ControlLeft+AltLeft+Delete
-    ./tools/poke.py airhid.local release
+    ./tools/poke.py airkvm.local type "hello world"
+    ./tools/poke.py airkvm.local key ControlLeft+AltLeft+Delete
+    ./tools/poke.py airkvm.local release
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ MOUSE_SCROLL = 0x05
 RELEASE_ALL = 0x06
 PING = 0x07
 
-MAX_CODE_LEN = 23  # must match AIRHID_MAX_CODE_LEN in main/protocol.h
+MAX_CODE_LEN = 23  # must match AIRKVM_MAX_CODE_LEN in main/protocol.h
 
 
 class WebSocket:
