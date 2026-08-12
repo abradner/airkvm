@@ -48,6 +48,26 @@ function setStatus(text, kind) {
   el.status.className = `status ${kind || ""}`;
 }
 
+// The dongle tears the session down, releasing every held key, after roughly
+// three seconds without a frame. Sending one PING per second is what tells it
+// this console is still here during an idle moment — a page with nothing to say
+// is indistinguishable from a laptop that was suspended mid-chord, and the
+// dongle resolves that ambiguity in the safe direction.
+const PING_INTERVAL_MS = 1000;
+let pingTimer = null;
+
+function startPinging() {
+  stopPinging();
+  pingTimer = setInterval(() => send([FRAME.PING]), PING_INTERVAL_MS);
+}
+
+function stopPinging() {
+  if (pingTimer !== null) {
+    clearInterval(pingTimer);
+    pingTimer = null;
+  }
+}
+
 function connect() {
   socket = new WebSocket(wsUrl);
   socket.binaryType = "arraybuffer";
@@ -55,12 +75,14 @@ function connect() {
   socket.onopen = () => {
     reconnectDelay = 500;
     setStatus("connected", "ok");
+    startPinging();
   };
 
   // Every terminal event releases: a stuck modifier on someone's machine is the
   // failure that matters, and a spurious release costs nothing (AGENTS.md §2).
   socket.onclose = () => {
     setStatus("disconnected — reconnecting…", "bad");
+    stopPinging();
     exitCapture();
     socket = null;
     setTimeout(connect, reconnectDelay);
