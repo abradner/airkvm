@@ -20,14 +20,21 @@
 #include <unistd.h>
 
 #include "esp_check.h"
+#include "esp_event.h"
 #include "esp_http_server.h"
 #if CONFIG_AIRKVM_TLS
 #include "esp_https_server.h"
 #endif
 #include "esp_log.h"
+// For WIFI_EVENT / WIFI_EVENT_STA_DISCONNECTED only: this module subscribes to
+// network loss because that is a terminal session event (see wifi_lost).
+#include "esp_wifi.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "hid_out.h"
 #include "mdns.h"
 #include "protocol.h"
+#include "session.h"
 #include "status.h"
 #include "wifi.h"
 
@@ -50,10 +57,9 @@ extern const uint8_t serverkey_start[] asm("_binary_device_key_start");
 extern const uint8_t serverkey_end[] asm("_binary_device_key_end");
 #endif
 
-// Exactly one console session drives HID at a time. Two clients interleaving
-// modifiers into one HID state is risk R-003; refusing the second is the
-// conservative half of that, and it is honest about which client is in control.
-static int s_active_fd = -1;
+// Who is driving. All ownership decisions go through session.c; this file holds
+// the only instance and the only place its transitions have effects.
+static struct session s_session;
 
 static esp_err_t send_static(httpd_req_t *req, const char *type,
                              const uint8_t *start, const uint8_t *end) {
@@ -78,12 +84,69 @@ static esp_err_t style_css_get(httpd_req_t *req) {
   return send_static(req, "text/css", style_css_start, style_css_end);
 }
 
-static void session_ended(const char *why) {
-  ESP_LOGI(TAG, "console session ended (%s) — releasing all", why);
-  s_active_fd = -1;
-  status_set_client(false);
-  // Any loss of confidence releases everything (AGENTS.md §2, principle 4).
+// Session transitions run from two tasks — the HTTP server task (the WebSocket
+// handler and the close callback) and the event loop task (WiFi loss) — so each
+// read-modify-write is serialised. Without it, a claim racing a disconnect can
+// leave ownership set after the release has already run, which is the stale
+// owner this module exists to make impossible.
+//
+// A mutex rather than a portMUX spinlock, deliberately: the front-panel update
+// belongs inside the same critical region as the transition (see below), and
+// status_set_client() takes a mutex of its own — which is illegal inside
+// portENTER_CRITICAL, where the scheduler is suspended. Both callers are task
+// context, never an ISR, so a mutex is the right primitive. Lock order is
+// session then status, and status.c never calls back here, so it cannot invert.
+static SemaphoreHandle_t s_session_lock;
+
+// Logging and hid_out_release_all() stay outside the lock; they are not needed
+// for correctness there and one of them talks to USB.
+void net_end_session(const char *why) {
+  xSemaphoreTake(s_session_lock, portMAX_DELAY);
+  const bool ended = session_end(&s_session);
+  if (ended) {
+    status_set_client(false);
+  }
+  xSemaphoreGive(s_session_lock);
+
+  if (ended) {
+    ESP_LOGI(TAG, "console session ended (%s) — releasing all", why);
+  }
+  // Released unconditionally. Principle 4 prefers a spurious release-all over a
+  // plausible held key, and this is reached on paths (WiFi loss) where a racing
+  // socket close may already have cleared ownership while the target still
+  // holds something.
   hid_out_release_all();
+}
+
+static void end_session_if_owner(int fd, const char *why) {
+  xSemaphoreTake(s_session_lock, portMAX_DELAY);
+  const bool ended = session_end_if_owner(&s_session, fd);
+  if (ended) {
+    status_set_client(false);
+  }
+  xSemaphoreGive(s_session_lock);
+
+  if (ended) {
+    ESP_LOGI(TAG, "console session ended (%s) — releasing all", why);
+    // Only released when this fd actually held the session: a spectator's
+    // socket closing must not tear the keyboard out from under the client that
+    // is driving.
+    hid_out_release_all();
+  }
+}
+
+// The console is gone with the network, so whatever it was holding must go too
+// — a target left with a held key while WiFi retries is the exact failure
+// principle 4 names. This lives here rather than in wifi.c because clearing
+// ownership and releasing keys are the same action, and splitting them across
+// modules is how a stale owner survives a reconnect.
+static void wifi_lost(void *arg, esp_event_base_t base, int32_t id,
+                      void *data) {
+  (void)arg;
+  (void)base;
+  (void)id;
+  (void)data;
+  net_end_session("wifi disconnected");
 }
 
 static esp_err_t ws_handler(httpd_req_t *req) {
@@ -111,9 +174,7 @@ static esp_err_t ws_handler(httpd_req_t *req) {
   // Length probe first, then read into a bounded buffer.
   esp_err_t err = httpd_ws_recv_frame(req, &frame, 0);
   if (err != ESP_OK) {
-    if (fd == s_active_fd) {
-      session_ended("recv failed");
-    }
+    end_session_if_owner(fd, "recv failed");
     return err;
   }
 
@@ -135,9 +196,7 @@ static esp_err_t ws_handler(httpd_req_t *req) {
     // socket down is the one response that cannot desync.
     ESP_LOGW(TAG, "oversized frame (%d bytes) — closing socket",
              (int)frame.len);
-    if (fd == s_active_fd) {
-      session_ended("oversized frame");
-    }
+    end_session_if_owner(fd, "oversized frame");
     return ESP_FAIL;
   }
   frame.payload = buf;
@@ -148,21 +207,30 @@ static esp_err_t ws_handler(httpd_req_t *req) {
   // garbage while later frames looked fine.
   err = httpd_ws_recv_frame(req, &frame, frame.len);
   if (err != ESP_OK) {
-    if (fd == s_active_fd) {
-      session_ended("payload read failed");
-    }
+    end_session_if_owner(fd, "payload read failed");
     return err;
   }
 
   // Claim the session on the first frame that actually arrives. A second client
   // is accepted at the HTTP layer and then ignored here, so it sees a connected
   // socket that does nothing rather than fighting the first for the keyboard.
-  if (s_active_fd < 0) {
-    s_active_fd = fd;
+  xSemaphoreTake(s_session_lock, portMAX_DELAY);
+  const bool was_unowned = !session_has_owner(&s_session);
+  const bool mine = session_claim(&s_session, fd);
+  // Published inside the lock, with the transition that justifies it. Setting
+  // it afterwards let a concurrent WiFi-loss teardown write "no client" first
+  // and this write land second, leaving the panel reporting a session that had
+  // already been torn down — and nothing corrects it until the next event.
+  if (mine && was_unowned) {
     status_set_client(true);
-    ESP_LOGI(TAG, "console session started (fd %d)", fd);
-  } else if (fd != s_active_fd) {
+  }
+  xSemaphoreGive(s_session_lock);
+
+  if (!mine) {
     return ESP_OK;  // spectator (R-003)
+  }
+  if (was_unowned) {
+    ESP_LOGI(TAG, "console session started (fd %d)", fd);
   }
 
   struct airkvm_intent intent;
@@ -195,9 +263,7 @@ static esp_err_t ws_handler(httpd_req_t *req) {
 // including the ones the handler never sees, like a laptop closing its lid.
 static void ws_closed(httpd_handle_t hd, int sockfd) {
   (void)hd;
-  if (sockfd == s_active_fd) {
-    session_ended("socket closed");
-  }
+  end_session_if_owner(sockfd, "socket closed");
   // Setting close_fn *replaces* the server's own close(), it does not add to
   // it. Without this every finished request — including each static asset —
   // leaks its socket, and the console becomes unreachable after a handful of
@@ -270,7 +336,17 @@ static esp_err_t start_mdns(void) {
 }
 
 esp_err_t net_start(void) {
+  s_session_lock = xSemaphoreCreateMutex();
+  ESP_RETURN_ON_FALSE(s_session_lock != NULL, ESP_ERR_NO_MEM, TAG,
+                      "session lock alloc failed");
+  session_reset(&s_session);
   ESP_RETURN_ON_ERROR(wifi_start(), TAG, "wifi failed");
+  // Registered after wifi_start() so the default event loop exists. Losing the
+  // network is a terminal session event like any other.
+  ESP_RETURN_ON_ERROR(
+      esp_event_handler_instance_register(
+          WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, wifi_lost, NULL, NULL),
+      TAG, "disconnect handler failed");
   ESP_RETURN_ON_ERROR(start_mdns(), TAG, "mdns failed");
   ESP_RETURN_ON_ERROR(start_http(), TAG, "http failed");
   return ESP_OK;

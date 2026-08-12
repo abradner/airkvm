@@ -13,7 +13,6 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
-#include "hid_out.h"
 #include "nvs_flash.h"
 #include "status.h"
 
@@ -26,10 +25,9 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id,
   if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
     esp_wifi_connect();
   } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-    // The console is gone with the network, so whatever it was holding must go
-    // too — a target left with a held key while we retry is the exact failure
-    // principle 4 names.
-    hid_out_release_all();
+    // Releasing held keys on network loss is deliberately *not* done here: it
+    // is inseparable from clearing session ownership, which lives in net.c.
+    // That module registers its own handler for this event.
     status_set_wifi(false, NULL, NULL);
     ESP_LOGW(TAG, "WiFi disconnected; retrying");
     esp_wifi_connect();
