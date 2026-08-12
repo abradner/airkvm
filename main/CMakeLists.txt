@@ -1,6 +1,7 @@
 set(airkvm_srcs
     "airkvm_main.c"
     "net.c"
+    "wifi.c"
     "hid_state.c"
     "status.c"
     "display.c"
