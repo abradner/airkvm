@@ -109,6 +109,25 @@ static SemaphoreHandle_t s_session_lock;
 // Three missed pings rather than one: a single dropped frame on a marginal link
 // is normal (this device has been measured at -85 dBm), and tearing down a live
 // session costs the operator their chord for no reason.
+//
+// What this deadline actually measures is not the client's liveness but the
+// *server task's availability*, and the two are not the same. esp_http_server
+// runs one task that accepts connections, performs TLS handshakes, serves the
+// static assets and dispatches WebSocket frames, serially; this timer runs on
+// the independent esp_timer task and is therefore always punctual. So a PING
+// that arrived on time but is queued behind other work on that one task counts
+// as silence. A TLS handshake was measured at ~4.8s on this hardware at
+// -85 dBm — longer than this entire deadline — and R-001 means any device on
+// the LAN can trigger one, unauthenticated, at any moment.
+//
+// The consequence is a real false-teardown mode: an operator holding a chord
+// can lose it because someone reloaded the console. It is accepted here rather
+// than papered over with a longer deadline, because principle 4 settles exactly
+// this tension in favour of releasing — a spurious release costs a chord, a
+// missed one can leave a key held on someone's production machine. Fixing it
+// properly means detecting a vanished peer somewhere that head-of-line blocking
+// cannot reach (TCP keepalive on the socket, or a dedicated task); tracked as
+// an issue rather than guessed at without hardware.
 #define SESSION_TIMEOUT_MS 3000
 #define SESSION_CHECK_INTERVAL_US (1000 * 1000)
 

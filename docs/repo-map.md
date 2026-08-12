@@ -71,12 +71,20 @@ across a gap the dongle can't verify, and the failure mode is a stuck key on som
 Reconnect starts a fresh session with everything released.
 
 **Keepalive**: the console sends a `PING` frame every second, and the device tears the session
-down — releasing everything — after 3s without any frame from the owner. This closes what was
-the one gap in the release-all guarantee: a client that vanishes *without* closing its TCP
-connection (a suspended laptop, a backgrounded mobile browser) used to hold state until the
-socket layer noticed, which could be indefinitely. Three missed pings rather than one, because a
-single dropped frame on a marginal link is normal and a spurious teardown costs the operator a
-held chord. A spectator's frames deliberately do not refresh the deadline — only the owner's.
+down — releasing everything — after 3s without any frame from the owner. A spectator's frames
+deliberately do not refresh the deadline; only the owner's.
+
+This **bounds** what was previously an unbounded gap, rather than closing it. A client that
+vanishes *without* closing its TCP connection (a suspended laptop, a backgrounded mobile browser)
+used to hold state until the socket layer noticed, which could be indefinitely; it is now at most
+~3s. What it does not do is measure client liveness: `esp_http_server` runs a single task for
+accepts, TLS handshakes, asset serving and WebSocket dispatch, so a PING that arrived on time but
+is queued behind that work is indistinguishable from silence. A TLS handshake measured ~4.8s on
+this hardware at −85 dBm — longer than the deadline — and R-001 means any LAN device can trigger
+one unauthenticated. **So an operator holding a chord can lose it because someone reloaded the
+console.** That trade is deliberate (principle 4 prefers a spurious release to a held key), and
+the real fix — detecting a vanished peer where head-of-line blocking cannot reach it — is issue
+#6, not done.
 
 **Boot/provisioning**: NVS credentials → WiFi station → mDNS advertise (`airkvm.local`) → HTTPS
 server up → address shown on the OLED and logged to serial. USB HID
