@@ -70,10 +70,13 @@ is deliberately no "reconnect and resume": resumption would require trusting a s
 across a gap the dongle can't verify, and the failure mode is a stuck key on someone's machine.
 Reconnect starts a fresh session with everything released.
 
-There is **no keepalive timeout**: a `PING` frame type exists in the protocol but nothing sends it
-and nothing times out on its absence. A client that vanishes without closing its TCP connection
-therefore holds state until the socket layer notices — the one gap in the release-all guarantee,
-and the reason a ping deadline is the next thing worth building here.
+**Keepalive**: the console sends a `PING` frame every second, and the device tears the session
+down — releasing everything — after 3s without any frame from the owner. This closes what was
+the one gap in the release-all guarantee: a client that vanishes *without* closing its TCP
+connection (a suspended laptop, a backgrounded mobile browser) used to hold state until the
+socket layer noticed, which could be indefinitely. Three missed pings rather than one, because a
+single dropped frame on a marginal link is normal and a spurious teardown costs the operator a
+held chord. A spectator's frames deliberately do not refresh the deadline — only the owner's.
 
 **Boot/provisioning**: NVS credentials → WiFi station → mDNS advertise (`airkvm.local`) → HTTPS
 server up → address shown on the OLED and logged to serial. USB HID
@@ -86,7 +89,7 @@ returns, and must never block enumeration on an association that may never happe
 | ID | Risk | Where it lives | Mitigation / status |
 |---|---|---|---|
 | R-001 | Unauthenticated LAN input: anyone routable to the dongle can type on the target | `/ws` handler | **Accepted, documented, unmitigated.** The security model is physical: plugging it in is deliberate, unplugging revokes completely. Do not deploy on untrusted networks. A shared-secret/PIN gate is the obvious first mitigation if this ever runs somewhere less trusted — not built. |
-| R-002 | Stuck keys on the target after a network or firmware fault | `main/hid_state.c` | Single-owner HID state + release-all on every terminal event (AGENTS.md §4, §2 principle 4). Unverified on hardware. |
+| R-002 | Stuck keys on the target after a network or firmware fault | `main/hid_state.c`, `main/session.c` | Single-owner HID state + release-all on every terminal event (AGENTS.md §4, §2 principle 4). Session ownership is its own state machine, so every terminal event funnels through one release path, and a silent client is torn down on a 3s deadline rather than held indefinitely. The state machine is host-tested; the release path itself is unverified on hardware. |
 | R-003 | Two concurrent console clients interleaving input into one HID state | `/ws` handler | **Partially mitigated.** One controlling session is tracked (`s_active_fd`); a second client's frames are accepted at the HTTP layer and then ignored (`main/net.c`), so streams never interleave. Not built: telling that second client it is a spectator, and explicit takeover. |
 | R-004 | WiFi credentials stored in plaintext NVS; physical recovery of the dongle exposes them | NVS partition | Accepted for now — a lost dongle is already a lost keyboard-on-the-LAN. Flash encryption is the real answer if this ever leaves a home network. |
 | R-005 | Firmware claims about hardware behavior that has never run on hardware | Everywhere | Marked in-place as unverified (AGENTS.md §4, last rule). Clears when a board arrives and the phase-1 enumeration test passes. |

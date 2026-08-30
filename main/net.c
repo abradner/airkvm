@@ -26,6 +26,7 @@
 #include "esp_https_server.h"
 #endif
 #include "esp_log.h"
+#include "esp_timer.h"
 // For WIFI_EVENT / WIFI_EVENT_STA_DISCONNECTED only: this module subscribes to
 // network loss because that is a terminal session event (see wifi_lost).
 #include "esp_wifi.h"
@@ -98,6 +99,25 @@ static esp_err_t style_css_get(httpd_req_t *req) {
 // session then status, and status.c never calls back here, so it cannot invert.
 static SemaphoreHandle_t s_session_lock;
 
+// A client that vanishes without closing its TCP connection — a laptop
+// suspended, a phone backgrounding its browser, a network that goes away
+// mid-chord — leaves the socket open as far as this device is concerned, and
+// with it every key it was holding. The console sends a PING every second and
+// the session is torn down after this much silence, which is the only thing
+// covering that gap (docs/repo-map.md, session lifecycle).
+//
+// Three missed pings rather than one: a single dropped frame on a marginal link
+// is normal (this device has been measured at -85 dBm), and tearing down a live
+// session costs the operator their chord for no reason.
+#define SESSION_TIMEOUT_MS 3000
+#define SESSION_CHECK_INTERVAL_US (1000 * 1000)
+
+static esp_timer_handle_t s_keepalive;
+
+static uint32_t now_ms(void) {
+  return (uint32_t)(esp_timer_get_time() / 1000);
+}
+
 // Logging and hid_out_release_all() stay outside the lock; they are not needed
 // for correctness there and one of them talks to USB.
 void net_end_session(const char *why) {
@@ -131,6 +151,32 @@ static void end_session_if_owner(int fd, const char *why) {
     // Only released when this fd actually held the session: a spectator's
     // socket closing must not tear the keyboard out from under the client that
     // is driving.
+    hid_out_release_all();
+  }
+}
+
+// Runs on the esp_timer task — a third task touching session state, hence the
+// same lock.
+//
+// Expiry is tested and acted on in one lock acquisition rather than checking
+// here and calling net_end_session() afterwards. That version would tear down
+// whichever session existed by the time it got there: a frame arriving in the
+// gap refreshes liveness and the teardown still fires, costing a live chord,
+// and if the old owner's socket closed in the gap it destroys the *new*
+// client's session instead.
+static void keepalive_tick(void *arg) {
+  (void)arg;
+  xSemaphoreTake(s_session_lock, portMAX_DELAY);
+  const bool ended =
+      session_end_if_expired(&s_session, now_ms(), SESSION_TIMEOUT_MS);
+  if (ended) {
+    status_set_client(false);
+  }
+  xSemaphoreGive(s_session_lock);
+
+  if (ended) {
+    ESP_LOGW(TAG, "no frame for %dms — assuming the console is gone, releasing",
+             SESSION_TIMEOUT_MS);
     hid_out_release_all();
   }
 }
@@ -216,7 +262,9 @@ static esp_err_t ws_handler(httpd_req_t *req) {
   // socket that does nothing rather than fighting the first for the keyboard.
   xSemaphoreTake(s_session_lock, portMAX_DELAY);
   const bool was_unowned = !session_has_owner(&s_session);
-  const bool mine = session_claim(&s_session, fd);
+  // Re-claiming on every frame is what keeps the session alive; a PING carries
+  // no other meaning and exists solely to reach this line.
+  const bool mine = session_claim(&s_session, fd, now_ms());
   // Published inside the lock, with the transition that justifies it. Setting
   // it afterwards let a concurrent WiFi-loss teardown write "no client" first
   // and this write land second, leaving the panel reporting a session that had
@@ -348,6 +396,27 @@ esp_err_t net_start(void) {
           WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, wifi_lost, NULL, NULL),
       TAG, "disconnect handler failed");
   ESP_RETURN_ON_ERROR(start_mdns(), TAG, "mdns failed");
+
+  // Started before the server, deliberately. If it were started after, a timer
+  // failure would return an error from net_start() with the console already
+  // listening — and app_main treats that error as "the network never came up"
+  // and carries on, leaving a reachable console whose sessions can never expire.
+  // That is precisely the gap this commit closes, reopened by an error path.
+  // Running with no client is free: an unowned session never expires.
+  const esp_timer_create_args_t keepalive = {
+      .callback = keepalive_tick,
+      .name = "session_keepalive",
+  };
+  ESP_RETURN_ON_ERROR(esp_timer_create(&keepalive, &s_keepalive), TAG,
+                      "keepalive timer failed");
+  const esp_err_t timer_err =
+      esp_timer_start_periodic(s_keepalive, SESSION_CHECK_INTERVAL_US);
+  if (timer_err != ESP_OK) {
+    esp_timer_delete(s_keepalive);
+    s_keepalive = NULL;
+    ESP_RETURN_ON_ERROR(timer_err, TAG, "keepalive start failed");
+  }
+
   ESP_RETURN_ON_ERROR(start_http(), TAG, "http failed");
   return ESP_OK;
 }
