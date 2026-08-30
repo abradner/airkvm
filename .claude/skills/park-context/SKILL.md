@@ -72,6 +72,13 @@ The highest-value section — this is what compaction destroys most reliably. Ea
 decided, and what was considered and rejected, with the reason. A decision without its rejected
 alternatives gets re-litigated in the next session.
 
+**Regression bait** belongs here too: choices that read as defects to a cold reader, where the
+obvious "fix" removes a property. Name the decision, the fix someone will reach for, and what it
+destroys. Distinct from a rejected alternative, which gets re-litigated *visibly* — regression
+bait gets reverted *silently*, because the reader never knows a decision was there to question.
+Its durable home is a comment at the code, not here; if there isn't one, that is the actual
+defect — write the comment first and this line second.
+
 ## State
 - **Verified:** claims this session actually observed, each with what was run and when.
   "Tests pass" is not a state; "`<cmd>` exited 0 at 14:20, before the edits to <file>" is.
@@ -132,3 +139,9 @@ Append this repo's own parking outcomes here as they accumulate — add rather t
 - The don't-finish-the-work rule exists because parking is usually triggered by interrupting a
   long turn — the tree may hold a partial edit nobody intended. Completing it under budget
   pressure produces exactly the unreviewed change the next session will trust and not re-check.
+- The regression-bait line was added after a session shipped a keepalive deadline deliberately
+  shorter than a TLS handshake it could not outrun (principle 4 prefers a spurious release to a
+  held key). Every local signal says "obvious bug, raise the timeout", and the justification lives
+  in a principle rather than in the arithmetic. Asking "what did we decide" does not surface that;
+  asking "what would a stranger file as a bug" does. The rule points at the code comment as the
+  real fix precisely because the handoff is deleted and the comment is not.
