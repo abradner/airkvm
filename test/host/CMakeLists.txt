@@ -10,12 +10,13 @@ add_compile_options(-Wall -Wextra -Werror)
 set(AIRKVM_PURE_SOURCES
     ../../main/keymap.c
     ../../main/protocol.c
-    ../../main/hid_state.c)
+    ../../main/hid_state.c
+    ../../main/session.c)
 
 include_directories(../../main)
 enable_testing()
 
-foreach(suite keymap protocol hid_state)
+foreach(suite keymap protocol hid_state session)
   add_executable(test_${suite} test_${suite}.c ${AIRKVM_PURE_SOURCES})
   add_test(NAME ${suite} COMMAND test_${suite})
 endforeach()

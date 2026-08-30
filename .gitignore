@@ -8,6 +8,13 @@ tmp/
 
 # Local agent config (per-machine permissions — never shared)
 .claude/settings.local.json
+# Session handoffs (.claude/skills/park-context) are local, ephemeral state: one
+# session's un-recoverable context, written to be read once by the next session
+# and deleted when the work lands. Committing them would publish a snapshot that
+# is stale on arrival and, worse, would let a broad `git add -A` during a resumed
+# session push someone else's half-finished thinking. resume-context states they
+# are gitignored; this is the line that makes that true.
+.claude/handoffs/
 
 # Env files — commit templates (.env.template*), never real values
 .env

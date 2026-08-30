@@ -28,6 +28,19 @@ jobs:
     container: espressif/idf:release-v5.5
     steps:
       - uses: actions/checkout@v4
+      # CONFIG_AIRKVM_TLS defaults to y, and the certificates it embeds live in
+      # gitignored certs/ because they are key material. A fresh checkout
+      # therefore could not even configure: CMake failed on the missing
+      # EMBED_TXTFILES sources, so this job had been red since TLS landed.
+      #
+      # Generating throwaway material here keeps the job building the
+      # configuration that actually ships. Building with TLS off would turn the
+      # check green while no longer compiling the code that runs on a device.
+      - name: Generate throwaway TLS material
+        shell: bash
+        run: |
+          command -v openssl >/dev/null || (apt-get update && apt-get install -y openssl)
+          ./tools/make_certs.sh
       # This job proves the image compiles and links. It observes nothing about
       # USB enumeration, HID delivery, or latency — see AGENTS.md §7.
       - name: Build
@@ -47,9 +60,15 @@ jobs:
           sudo apt-get update && sudo apt-get install -y clang-format
           find main test -name build -prune -o \( -name '*.c' -o -name '*.h' \) -print \
             | xargs -r clang-format --dry-run --Werror
+      # Version pinned to match the one mise installs. Left unpinned the action
+      # installs the latest ruff, which enforced a wider default rule set than
+      # `mise run lint` did and failed on code that was green locally. The rule
+      # selection itself is in .ruff.toml, so the two agree by construction.
       - uses: astral-sh/ruff-action@v3
         with:
+          version: "0.9"
           args: check tools
       - uses: astral-sh/ruff-action@v3
         with:
+          version: "0.9"
           args: format --check tools
