@@ -185,7 +185,16 @@ static void end_session_if_owner(int fd, const char *why) {
 // client's session instead.
 static void keepalive_tick(void *arg) {
   (void)arg;
-  xSemaphoreTake(s_session_lock, portMAX_DELAY);
+  // Never block here. This runs on the esp_timer task, which every timer in the
+  // firmware shares, so waiting on a contended lock would stall unrelated
+  // timers rather than just this one. The sections under this lock are
+  // microseconds long and contention is not expected — but "not expected" is a
+  // poor reason to let one subsystem's stall become everyone's. Skipping a tick
+  // costs at most one extra second before a vanished client is released, which
+  // the next tick handles.
+  if (xSemaphoreTake(s_session_lock, 0) != pdTRUE) {
+    return;
+  }
   const bool ended =
       session_end_if_expired(&s_session, now_ms(), SESSION_TIMEOUT_MS);
   if (ended) {
@@ -436,6 +445,16 @@ esp_err_t net_start(void) {
     ESP_RETURN_ON_ERROR(timer_err, TAG, "keepalive start failed");
   }
 
-  ESP_RETURN_ON_ERROR(start_http(), TAG, "http failed");
+  const esp_err_t http_err = start_http();
+  if (http_err != ESP_OK) {
+    // The timer is started above so that it can never be missing while the
+    // console is reachable. The cost of that ordering is this cleanup: on a
+    // failure app_main() returns and nothing would ever stop a timer left
+    // running, so a net_start() that reports failure must leave none behind.
+    esp_timer_stop(s_keepalive);
+    esp_timer_delete(s_keepalive);
+    s_keepalive = NULL;
+    ESP_RETURN_ON_ERROR(http_err, TAG, "http failed");
+  }
   return ESP_OK;
 }

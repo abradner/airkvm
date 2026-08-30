@@ -35,10 +35,28 @@ mise run lint && mise run test && mise run build
 only. Neither observes USB, HID delivery, or latency — no batch may claim hardware behavior was
 validated by CI (AGENTS.md §4, last rule).
 
-**Bot roster**: no automated reviewers are configured on this repo yet. Until one is, the
-"bake" phase has no external feedback source and the batch's review record comes from the
-self-review pass (Phase 2) plus `independent-commit-review`. If a reviewer is added later,
-record its trigger and cost here — a roster that isn't written down gets guessed at.
+**Bot roster**: `copilot-pull-request-reviewer[bot]`. Discovered during the session-ownership
+batch (2026-08), where this file still claimed no reviewer existed — it had reviewed all four
+PRs within minutes of opening and nobody looked for ~two weeks. Correcting it here rather than
+leaving the claim standing (AGENTS.md §2 principle 1).
+
+- **Trigger**: automatic on PR open. No re-request needed; no configuration in this repo.
+- **Cost**: free at time of writing.
+- **Observed quality** on that batch: five findings, four accepted (a blocking `xSemaphoreTake`
+  on the shared `esp_timer` task, a timer leaked on an error path, an off-by-one in a wraparound
+  test's own arithmetic, one doc phrasing), one deferred to the tracker. Good at local,
+  mechanical, single-file defects.
+- **Its structural blind spot**: it reviews each PR against *its own base*, so in a stack it
+  cannot see that a later interstitial already fixed what it is objecting to. One finding on the
+  base PR had been resolved by the very next PR. Check the cap before actioning a finding raised
+  low in a stack.
+- **Read it via `gh api`, never the rendered summary.** It files real findings inside a collapsed
+  `<details>Suppressed comments</details>` block, which is precisely the "no new comments"
+  false-green in the Phase 6 table.
+
+The self-review pass (Phase 2) and `independent-commit-review` still carry the aggregate and
+cross-PR work: on that same batch the whole-stack pass found a design-level defect (a deadline
+measuring the wrong thing entirely) that all four per-PR bot reviews missed.
 
 **Merge strategy**: squash-merge. The template's `[MERGE-COMMIT]` rule variants were deleted at
 init and the squash variants inlined, so the rules below read as unconditional — if this repo

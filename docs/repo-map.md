@@ -78,8 +78,9 @@ This **bounds** what was previously an unbounded gap, rather than closing it. A 
 vanishes *without* closing its TCP connection (a suspended laptop, a backgrounded mobile browser)
 used to hold state until the socket layer noticed, which could be indefinitely; it is now at most
 ~3s. What it does not do is measure client liveness: `esp_http_server` runs a single task for
-accepts, TLS handshakes, asset serving and WebSocket dispatch, so a PING that arrived on time but
-is queued behind that work is indistinguishable from silence. A TLS handshake measured ~4.8s on
+accepting connections, performing TLS handshakes, serving assets and dispatching WebSocket
+frames — serially — so a PING that arrived on time but is queued behind that work is
+indistinguishable from silence. A TLS handshake measured ~4.8s on
 this hardware at −85 dBm — longer than the deadline — and R-001 means any LAN device can trigger
 one unauthenticated. **So an operator holding a chord can lose it because someone reloaded the
 console.** That trade is deliberate (principle 4 prefers a spurious release to a held key), and

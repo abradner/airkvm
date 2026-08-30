@@ -155,14 +155,21 @@ static void expiry_survives_the_millisecond_counter_wrapping(void) {
   // A uint32 millisecond counter wraps every ~49.7 days. Claim just before the
   // wrap and evaluate just after: the unsigned difference is still 2000ms, so
   // the session must not be expired at a 3000ms timeout.
-  const uint32_t before_wrap = 0xFFFFFFFFu - 1000u;
+  //
+  // The constant is 999 rather than 1000 so the arithmetic is exact. Wrapping
+  // costs one tick — 0xFFFFFFFF is a value, not the modulus — so subtracting
+  // 1000 makes the elapsed time 2001ms and the boundary case below 3001ms,
+  // which would pass while testing something a millisecond off from what the
+  // comment claims.
+  const uint32_t before_wrap = 0xFFFFFFFFu - 999u;
   CHECK(session_claim(&s, 7, before_wrap));
 
-  const uint32_t after_wrap = 1000u;  // 2000ms later in real time
+  const uint32_t after_wrap = 1000u;  // exactly 2000ms later in real time
   CHECK(!session_expired(&s, after_wrap, 3000));
 
   // And it must still expire on the far side of the wrap rather than becoming
   // immortal, which is what a signed or absolute comparison would do here.
+  // Exactly 3000ms elapsed, so this also pins the >= boundary across the wrap.
   CHECK(session_expired(&s, 2000u, 3000));
 }
 
