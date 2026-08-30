@@ -82,7 +82,7 @@ A conflict with a principle is a stop-and-check, never something to quietly work
 | USB stack | TinyUSB via `esp_tinyusb` | Composite HID: boot keyboard + relative mouse |
 | Network | `esp_http_server` (WebSocket) + `mdns` | Single origin serves console and socket |
 | Console | Vanilla HTML/CSS/JS, no build step | Embedded in firmware via `EMBED_FILES`; no npm, no bundler, no CDN |
-| Display | SSD1306 72×40 over I2C | **Not built yet.** Planned for status only (IP, mDNS name, link state); no `display.c` exists |
+| Display | SSD1306 72×40 over I2C | `main/display.c`; status only (IP, mDNS name, link state). Compiles and is driven by `ui.c`; **never observed on a panel** |
 | Host tooling | Python 3 (stdlib only) | `tools/poke.py` drives a dongle from a terminal; not shipped to users |
 | Testing | CMake/ctest + plain C assertions | Keymap, protocol codec, and HID state are pure and host-tested — `test/host/` |
 | Deployment | `idf.py flash` over USB-C | No OTA yet. See §7 |
@@ -243,6 +243,22 @@ add rather than rewrite.
 - **Board pinout is vendor-documented, not datasheet-derived.** The 0.42" OLED's I2C pins differ
   between the C3, C6, and S3 variants of this board family. Confirm against the vendor demo for
   the *S3* variant specifically; do not carry over the widely-quoted C3 numbers (GPIO5/6).
+- **`gh run list --limit 1` and `gh run watch` will hand you the wrong run.** The newest run on a
+  branch here is usually "Running Copilot Code Review", not CI — so the obvious incantation watches
+  a reviewer bot go green and reports CI as passing. Select on name *and* head SHA:
+
+  ```sh
+  gh run list --branch <b> --json databaseId,name,headSha \
+    -q '[.[]|select(.name=="CI")][0].databaseId'
+  ```
+- **Copilot hides real findings in a collapsed `<details>Suppressed comments</details>` block.** The
+  rendered PR summary reads clean while genuine findings sit inside it. Read the comments through
+  the API — `gh api repos/abradner/airkvm/pulls/N/comments` — not the web summary. Related: Copilot
+  reviews each PR against *its own base*, so in a stack it objects to things a later interstitial
+  already fixed; check the cap of the stack before actioning a finding raised low in it.
+- **`mise run fmt` (clang-format) reflows across comment boundaries and can orphan a doc comment
+  above the wrong function.** It happened in the keepalive PR, and the result compiles and lints
+  clean — nothing catches it but reading. Re-read any region you formatted.
 
 ## 7. CI & Deployment
 
@@ -257,8 +273,9 @@ repo is small; filtering would buy seconds and cost trust):
   `tools/`. The format check is the one most likely to redden an otherwise-clean PR: run
   `mise run fmt` before pushing.
 
-Deployment is `idf.py flash` over USB by a human holding the board. There is no OTA, no release
-artifact, and no fleet — don't build for those until asked. A green CI run means the code
+Deployment is `idf.py flash` over USB by a human holding the board. There is no OTA and no release
+artifact — don't build for those until asked. Fleet mode *has* been asked for and is designed but
+not built: `docs/design/fleet.md` is the spec, and its sequencing items are the roadmap. A green CI run means the code
 compiles and the pure functions behave; it says nothing about USB enumeration, HID delivery, or
 latency, none of which CI can observe (§4, last rule).
 
@@ -365,9 +382,16 @@ projects; adjust only with reason, and record the reason (see §10).
 
 ### Tooling
 
-- Use the agent's structured file tools rather than `cat`/`sed`/shell here-docs for inspecting
-  and modifying files during a session. (Scope: this governs session file operations; committed
-  shell scripts do what shell scripts do.)
+- **Audience: Antigravity only.** Use the agent's structured file tools rather than `cat`/`sed`/shell
+  here-docs for inspecting and modifying files during a session. (Scope: session file operations;
+  committed shell scripts do what shell scripts do.)
+
+  This was written as a universal rule and was the wrong shape. It encodes one harness's ergonomics,
+  not a property of this codebase — and a harness that actively directs the agent to use shell file
+  operations (Claude Code's auto mode does) puts the agent in a standoff between two live
+  instructions, with no way to tell that one of them is a stale import. **If your harness directs
+  otherwise, follow your harness.** Say in-session which instruction you followed and why, so the
+  conflict stays visible rather than being resolved silently in either direction.
 
 ### Multi-PR batches
 
@@ -453,6 +477,18 @@ code is written.*
    firmware build. When the real board is late, ask what fraction of the system the wrong board
    can still exercise — here it was everything except the last inch.
 
+9. **An app-level liveness deadline on `esp_http_server` measures server-task availability, not
+   peer liveness.** One task handles accepts, TLS handshakes, asset serving and WebSocket dispatch,
+   so anything slow on that task — a ~4.8s TLS handshake at low RSSI is the measured case — stalls
+   keepalive processing and can expire a session whose client never went anywhere. The keepalive
+   deadline stays at 3s regardless: principle 4 settles the tension toward releasing, and
+   lengthening it trades a spurious release-all for the held-key failure the principle exists to
+   prevent. TCP keepalive (`httpd_config_t.keep_alive_*`) complements it — ~20s detection, but it
+   cannot false-positive on a busy task — it does not replace it. **Rejected, so nobody re-derives
+   it:** gating expiry on "was the server task busy". An idle server with a genuinely vanished
+   client also processes nothing, so the heuristic cannot distinguish the two cases it exists to
+   separate. Tracked in issue #6; never observed on hardware, reasoned from the single-task design.
+
 ## 10. Maintaining This Document
 
 Meta-rules for editing this file — they exist because each was violated somewhere first:
@@ -487,7 +523,10 @@ Initialized 2026-08-10 from the keel template.
 
 - **Tracker**: GitHub issues on this repo. The header's tracker pointer names issues rather than
   an external tool; §8's "log discovered work in the external tracker" means "open an issue."
-- **Visibility**: public. The template-lineage block was deleted per the init procedure — a
+- **Visibility**: public is the plan; **the repo is private today** (`gh repo view --json isPrivate`
+  → true, checked 2026-08-30). Everything here is written for the public end state — which is why
+  `README.md` links an issues URL that outside readers cannot yet resolve. Flip it before inviting
+  anyone in. The template-lineage block was deleted per the init procedure — a
   pointer to a private template is unresolvable for outside contributors and would mis-steer
   their agents. Lineage is tracked in the private fleet registry (`abradner/fleet`) instead.
   **Operator TODO:** the fleet-registry row for `airkvm` was not added during init (the registry

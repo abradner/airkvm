@@ -116,6 +116,22 @@ an unrecallable external side effect. Everything else waits.
 
 - If main moves under the stack: restart affected branches from fresh main after their parents
   land; never stack new commits on pre-merge history.
+- **Squash-merging a parent puts every child in `CONFLICTING`/`DIRTY`, and that is expected, not a
+  sign anything is wrong.** The squash commit and the child both descend from the original base and
+  edit the same regions, so GitHub sees a conflict where there is no semantic one. The rebase that
+  resolves it, per child, parent-most first:
+
+  ```sh
+  git rebase --onto origin/main <parent-sha> <child-branch>
+  git rev-parse <child-branch>^{tree}     # MUST equal the pre-rebase tree
+  git push --force-with-lease
+  ```
+
+  **Verify the tree hash; never assume the rebase was clean.** A rebase that silently resolves a
+  conflict the wrong way still exits 0, and the force-push publishes it. Capture each child's tree
+  before starting so the comparison exists to make.
+- **Retarget child PRs to `main` before deleting a merged parent's branch.** Branch deletion races
+  GitHub's auto-retarget, and losing that race closes the child PR mid-train.
 - A showstopper fix injected low in the stack must be explicitly propagated into each child —
   squash does not preserve the ancestry that would reunify it.
 
