@@ -109,6 +109,25 @@ static SemaphoreHandle_t s_session_lock;
 // Three missed pings rather than one: a single dropped frame on a marginal link
 // is normal (this device has been measured at -85 dBm), and tearing down a live
 // session costs the operator their chord for no reason.
+//
+// What this deadline actually measures is not the client's liveness but the
+// *server task's availability*, and the two are not the same. esp_http_server
+// runs one task that accepts connections, performs TLS handshakes, serves the
+// static assets and dispatches WebSocket frames, serially; this timer runs on
+// the independent esp_timer task and is therefore always punctual. So a PING
+// that arrived on time but is queued behind other work on that one task counts
+// as silence. A TLS handshake was measured at ~4.8s on this hardware at
+// -85 dBm — longer than this entire deadline — and R-001 means any device on
+// the LAN can trigger one, unauthenticated, at any moment.
+//
+// The consequence is a real false-teardown mode: an operator holding a chord
+// can lose it because someone reloaded the console. It is accepted here rather
+// than papered over with a longer deadline, because principle 4 settles exactly
+// this tension in favour of releasing — a spurious release costs a chord, a
+// missed one can leave a key held on someone's production machine. Fixing it
+// properly means detecting a vanished peer somewhere that head-of-line blocking
+// cannot reach (TCP keepalive on the socket, or a dedicated task); tracked as
+// an issue rather than guessed at without hardware.
 #define SESSION_TIMEOUT_MS 3000
 #define SESSION_CHECK_INTERVAL_US (1000 * 1000)
 
@@ -166,7 +185,16 @@ static void end_session_if_owner(int fd, const char *why) {
 // client's session instead.
 static void keepalive_tick(void *arg) {
   (void)arg;
-  xSemaphoreTake(s_session_lock, portMAX_DELAY);
+  // Never block here. This runs on the esp_timer task, which every timer in the
+  // firmware shares, so waiting on a contended lock would stall unrelated
+  // timers rather than just this one. The sections under this lock are
+  // microseconds long and contention is not expected — but "not expected" is a
+  // poor reason to let one subsystem's stall become everyone's. Skipping a tick
+  // costs at most one extra second before a vanished client is released, which
+  // the next tick handles.
+  if (xSemaphoreTake(s_session_lock, 0) != pdTRUE) {
+    return;
+  }
   const bool ended =
       session_end_if_expired(&s_session, now_ms(), SESSION_TIMEOUT_MS);
   if (ended) {
@@ -417,6 +445,16 @@ esp_err_t net_start(void) {
     ESP_RETURN_ON_ERROR(timer_err, TAG, "keepalive start failed");
   }
 
-  ESP_RETURN_ON_ERROR(start_http(), TAG, "http failed");
+  const esp_err_t http_err = start_http();
+  if (http_err != ESP_OK) {
+    // The timer is started above so that it can never be missing while the
+    // console is reachable. The cost of that ordering is this cleanup: on a
+    // failure app_main() returns and nothing would ever stop a timer left
+    // running, so a net_start() that reports failure must leave none behind.
+    esp_timer_stop(s_keepalive);
+    esp_timer_delete(s_keepalive);
+    s_keepalive = NULL;
+    ESP_RETURN_ON_ERROR(http_err, TAG, "http failed");
+  }
   return ESP_OK;
 }

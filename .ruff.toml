@@ -1,0 +1,20 @@
+# Ruff's rule set is pinned here so that `mise run lint` and CI enforce the same
+# thing. They did not: mise pins ruff 0.9, while astral-sh/ruff-action installs
+# the latest ruff when nothing tells it otherwise, and the default selection
+# widened in between. The result was a lint that passed locally and failed in
+# CI on tools/serial_bridge.py, for rules this repo never opted into.
+#
+# The selection below is ruff 0.9's default. Stating it explicitly means a
+# future ruff changing its defaults changes nothing here — the rule set is a
+# decision this repo makes, not one it inherits from whichever version happens
+# to be installed. CI pins the version too (.github/workflows/ci.yml); the two
+# together are what make local and CI agree by construction rather than by luck.
+#
+# S (flake8-bandit) and BLE (flake8-blind-except) are deliberately not enabled.
+# They fire on tools/serial_bridge.py's broad excepts, which are load-bearing:
+# a board that resets re-enumerates and the stale descriptor goes *quiet* rather
+# than raising, so that code cannot be rewritten to catch narrower exceptions —
+# there are none to catch (AGENTS.md §6.1). Enabling the rules would mean
+# annotating every one of those sites to say "yes, deliberately".
+[lint]
+select = ["E4", "E7", "E9", "F"]
