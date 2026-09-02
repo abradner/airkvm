@@ -34,7 +34,7 @@ change that found the disagreement.
 | Input socket | `GET /ws` (WSS upgrade) | **None** — see R-001 | The actual keystroke path. Every frame here becomes a USB HID report on the target. |
 | USB HID device | USB-C port → target machine | **None, by design** | The target cannot authenticate a keyboard. This is inherent to HID, not a gap we can close. |
 | Serial console | UART/USB-JTAG in bootloader mode | Physical access | Flashing and logs. Only present when firmware hasn't claimed USB (AGENTS.md §6.1). |
-| Status display + button | On-board OLED and BOOT button | Physical access | Shows IP, signal, and link state; blanks to an idle animation after 5 minutes of no client input (no LED on this board to show it's alive otherwise). The button dismisses that animation if it's showing, or toggles a debug view of live input if not — see R-006. |
+| Status display + button | On-board OLED and BOOT button | Physical access | Shows IP, signal, and link state; blanks to an idle animation after 5 minutes with no client input and no local button interaction (no LED on this board to show it's alive otherwise). The button dismisses that animation if it's showing, or toggles a debug view of live input if not — see R-006. |
 | WiFi association | Station mode, credentials in NVS | WPA2 (the network's) | The dongle's only network identity is "a device on this LAN". |
 
 ## Trust boundaries

@@ -157,6 +157,15 @@ static void ota_task(void *arg) {
     // caller bringing its own, better-reasoned one. Exiting the task here
     // makes that boundary structural instead of a comment someone has to
     // keep re-reading correctly.
+    //
+    // No code after this is reachable, and none is needed: vTaskDelete(NULL)
+    // deleting the calling task does not return to it on this port. Verified
+    // against the vendored source, not assumed — FreeRTOS-Kernel-SMP/tasks.c
+    // calls taskYIELD_WITHIN_API() on the task deleting itself while still
+    // inside the same critical section that already evicted it from every
+    // list, before the function can return. (Flagged twice by automated
+    // review as needing an explicit `return` — it doesn't; this note is
+    // here so a third pass doesn't re-open the same non-issue.)
     vTaskDelete(NULL);
   }
 
