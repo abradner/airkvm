@@ -46,8 +46,10 @@
 #elif CONFIG_IDF_TARGET_ESP32S3
 
 // ESP32-S3-0.42 OLED supermini — the real dongle. I2C pins confirmed
-// 2026-08-31 on real hardware with tools/i2c_scan: swept all 756 ordered GPIO
-// pairs, exactly one ACKed at 0x3C. This board's SDA/SCL are GPIO48/47, NOT
+// 2026-08-31 on real hardware with tools/i2c_scan: swept every ordered GPIO
+// pair (756 in that run; the tool's exclusion list has since dropped one
+// more strapping pin, so a rerun today sweeps 702 — see the tool's own
+// comments), exactly one ACKed at 0x3C. This board's SDA/SCL are GPIO48/47, NOT
 // the C3's GPIO5/6 — the C3 numbers were carried over here pending hardware
 // and were wrong, exactly the trap AGENTS.md §6.1 warns against.
 // WIDTH/HEIGHT/X_OFFSET/Y_OFFSET confirmed the same day: real firmware

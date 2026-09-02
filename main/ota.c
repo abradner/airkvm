@@ -63,6 +63,18 @@ static void poll_once(void) {
   // enforce. The real fleet OTA path (item 4) is a different mechanism
   // entirely and will need signed images over the mTLS tunnel — this proves
   // the esp_https_ota primitive, not that path.
+  //
+  // esp_https_ota_begin() below refuses an http:// URL with no cert/bundle
+  // configured (ESP_ERR_INVALID_ARG) unless CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP
+  // is also set — deliberately, so an unverified fetch needs an explicit
+  // opt-in rather than silently working. That flag is NOT set anywhere in
+  // this repo's committed config (sdkconfig.defaults, sdkconfig.bench) and
+  // must never be: it belongs only in a local, gitignored sdkconfig
+  // fragment for whoever is running this specific test (`idf.py menuconfig`
+  // → Component config → ESP HTTPS OTA → "Allow HTTP for OTA"). Without it,
+  // every poll fails at esp_https_ota_begin() before touching the network,
+  // logged as "could not reach ... (ESP_ERR_INVALID_ARG)" — which looks like
+  // a network problem and is not one.
   esp_http_client_config_t http_config = {
       .url = CONFIG_AIRKVM_OTA_TEST_URL,
       .timeout_ms = 15000,
@@ -145,6 +157,15 @@ static void ota_task(void *arg) {
     // caller bringing its own, better-reasoned one. Exiting the task here
     // makes that boundary structural instead of a comment someone has to
     // keep re-reading correctly.
+    //
+    // No code after this is reachable, and none is needed: vTaskDelete(NULL)
+    // deleting the calling task does not return to it on this port. Verified
+    // against the vendored source, not assumed — FreeRTOS-Kernel-SMP/tasks.c
+    // calls taskYIELD_WITHIN_API() on the task deleting itself while still
+    // inside the same critical section that already evicted it from every
+    // list, before the function can return. (Flagged twice by automated
+    // review as needing an explicit `return` — it doesn't; this note is
+    // here so a third pass doesn't re-open the same non-issue.)
     vTaskDelete(NULL);
   }
 

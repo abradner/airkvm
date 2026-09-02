@@ -168,7 +168,7 @@ fleet mode ever ships.
 - **Flash size — resolved.** `esptool flash_id` against the real S3 (2026-08-31): 4MB (XMC), plus
   2MB of PSRAM the current design doesn't use. `sdkconfig.defaults` now carries this measurement
   (`CONFIG_ESPTOOLPY_FLASHSIZE_4MB`), not the ESP-IDF 2MB default this section used to describe.
-- **OTA fits comfortably; the 2MB contingency below no longer applies.** `sdkconfig.defaults` now
+- **OTA fits comfortably; the previous 2MB sizing contingency here no longer applies.** `sdkconfig.defaults` now
   ships `PARTITION_TABLE_TWO_OTA_LARGE`: 1700K per app slot against a measured image of
   ~1019K (0xfe820 bytes, TLS on, this commit's build), ~40% headroom — real measurement via
   ESP-IDF's own `check_sizes.py` at build time, not an estimate. The question this section used to

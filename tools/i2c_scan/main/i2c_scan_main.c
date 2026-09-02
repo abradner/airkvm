@@ -100,7 +100,14 @@ static bool with_bus(int sda, int scl,
   if (fn) {
     fn(bus, ctx);
   }
-  i2c_del_master_bus(bus);
+  const esp_err_t del_err = i2c_del_master_bus(bus);
+  if (del_err != ESP_OK) {
+    // Called 702 times across the sweep — if teardown starts failing partway
+    // through, better to know than to keep silently accumulating whatever
+    // state a failed delete leaves behind.
+    ESP_LOGW(TAG, "i2c_del_master_bus(SDA=%d SCL=%d) failed (%s)", sda, scl,
+             esp_err_to_name(del_err));
+  }
   return true;
 }
 
@@ -174,7 +181,17 @@ static void blink_panel(i2c_master_bus_handle_t bus, void *raw) {
       break;
     }
     vTaskDelay(pdMS_TO_TICKS(400));
-    i2c_master_transmit(dev, ram_mode, sizeof(ram_mode), 100);
+    // If this write fails, the panel is left stuck on "entire display on"
+    // (all pixels lit, not blinking) rather than returning to a real blink —
+    // checked and logged for the same reason the write above is: a human is
+    // trusting what they see on the glass, and a stuck-on panel from a
+    // silently swallowed failure here would read as "found it, weirdly
+    // steady" instead of the genuine non-match it is.
+    if (i2c_master_transmit(dev, ram_mode, sizeof(ram_mode), 100) != ESP_OK) {
+      ESP_LOGW(TAG, "  write failed on SDA=%d SCL=%d — not the panel", h->sda,
+               h->scl);
+      break;
+    }
     vTaskDelay(pdMS_TO_TICKS(400));
   }
   i2c_master_bus_rm_device(dev);

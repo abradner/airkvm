@@ -37,6 +37,13 @@ static const char *TAG = "display";
 // window happens to be centered in the 128-segment space; a future board
 // without that symmetry would need the same treatment there too.
 #define OLED_TOTAL_PAGES 8
+// PAGES and OLED_PAGE_OFFSET are both page-granularity (÷8) arithmetic; a
+// board whose HEIGHT or Y_OFFSET isn't a whole number of pages would have
+// that division truncate silently rather than fail to build.
+_Static_assert(BOARD_OLED_HEIGHT % 8 == 0,
+               "BOARD_OLED_HEIGHT must be a multiple of 8 (page height)");
+_Static_assert(BOARD_OLED_Y_OFFSET % 8 == 0,
+               "BOARD_OLED_Y_OFFSET must be a multiple of 8 (page height)");
 #define OLED_PAGE_OFFSET                                                 \
   OLED_PAGE_OFFSET_FOR(OLED_TOTAL_PAGES, PAGES, BOARD_OLED_Y_OFFSET / 8, \
                        BOARD_OLED_ROTATE_180)
@@ -135,7 +142,8 @@ static esp_err_t send_cmd(const uint8_t *cmds, size_t n) {
 }
 
 void display_pixel(int x, int y, bool on) {
-  if (x < 0 || x >= BOARD_OLED_WIDTH || y < 0 || y >= BOARD_OLED_HEIGHT) {
+  if (!s_present || x < 0 || x >= BOARD_OLED_WIDTH || y < 0 ||
+      y >= BOARD_OLED_HEIGHT) {
     return;
   }
   uint8_t *cell = &s_fb[(y / 8) * BOARD_OLED_WIDTH + x];
@@ -322,6 +330,11 @@ bool display_present(void) {
   return false;
 }
 void display_clear(void) {}
+void display_pixel(int x, int y, bool on) {
+  (void)x;
+  (void)y;
+  (void)on;
+}
 void display_text(int col, int row, const char *text) {
   (void)col;
   (void)row;

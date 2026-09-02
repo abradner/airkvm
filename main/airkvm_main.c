@@ -25,8 +25,10 @@ void app_main(void) {
   ESP_ERROR_CHECK(hid_out_start());
 
   // Self-contained: waits for WiFi on its own rather than depending on
-  // net_start() below, since confirming this boot healthy (cancelling a
-  // pending rollback) matters even if the console itself fails to start.
+  // net_start() below. A no-op in every real build (dev-only OTA test hook,
+  // gated on AIRKVM_OTA_TEST_URL — see main/ota.c); started unconditionally
+  // here regardless, since when it IS configured, confirming this boot
+  // healthy should not depend on the console also starting successfully.
   ota_start();
 
   const esp_err_t err = net_start();

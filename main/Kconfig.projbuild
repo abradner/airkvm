@@ -67,8 +67,9 @@ config AIRKVM_OTA_TEST_URL
     string "OTA test image URL (throwaway, dev only)"
     default ""
     help
-        If set, fetched once via esp_https_ota() a few seconds after WiFi
-        associates, then the device reboots into whatever it fetched. Proves
+        If set, polled every 60s once WiFi associates: each poll reads only
+        the served image's header and compares it against the running image,
+        downloading and rebooting into it only on a real difference. Proves
         the OTA primitive (fetch, write the inactive slot, switch boot
         partition, roll back on failure) works on real hardware.
 
@@ -80,5 +81,11 @@ config AIRKVM_OTA_TEST_URL
         this URL and flash it" trigger would be a materially different risk
         than anything else this firmware currently exposes. Leave empty for
         every build except a deliberate local OTA test.
+
+        A plain http:// URL here also needs CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP
+        enabled separately (Component config > ESP HTTPS OTA), which this
+        project's own config never sets — set it in a local sdkconfig only,
+        never commit it. Without it every poll fails before touching the
+        network (ESP_ERR_INVALID_ARG), which looks like a network problem.
 
 endmenu

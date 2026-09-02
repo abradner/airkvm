@@ -82,10 +82,10 @@ A conflict with a principle is a stop-and-check, never something to quietly work
 | USB stack | TinyUSB via `esp_tinyusb` | Composite HID: boot keyboard + relative mouse |
 | Network | `esp_http_server` (WebSocket) + `mdns` | Single origin serves console and socket |
 | Console | Vanilla HTML/CSS/JS, no build step | Embedded in firmware via `EMBED_FILES`; no npm, no bundler, no CDN |
-| Display | SSD1306 72×40 over I2C | `main/display.c`; status only (IP, mDNS name, link state). Compiles and is driven by `ui.c`; **never observed on a panel** |
+| Display | SSD1306 72×40 over I2C | `main/display.c`; status only (IP, mDNS name, link state). Renders correctly on the real S3 dongle's panel — pins and 180° rotation confirmed 2026-08-31 |
 | Host tooling | Python 3 (stdlib only) | `tools/poke.py` drives a dongle from a terminal; not shipped to users |
 | Testing | CMake/ctest + plain C assertions | Keymap, protocol codec, and HID state are pure and host-tested — `test/host/` |
-| Deployment | `idf.py flash` over USB-C | No OTA yet. See §7 |
+| Deployment | `idf.py flash` over USB-C | No shipping OTA path yet — `main/ota.c` is a throwaway, URL-gated dev test hook, empty (no-op) in every real build. See §7 |
 
 ## 4. Critical Architectural Rules
 
@@ -273,9 +273,13 @@ repo is small; filtering would buy seconds and cost trust):
   `tools/`. The format check is the one most likely to redden an otherwise-clean PR: run
   `mise run fmt` before pushing.
 
-Deployment is `idf.py flash` over USB by a human holding the board. There is no OTA and no release
-artifact — don't build for those until asked. Fleet mode *has* been asked for and is designed but
-not built: `docs/design/fleet.md` is the spec, and its sequencing items are the roadmap. A green CI run means the code
+Deployment is `idf.py flash` over USB by a human holding the board. There is no shipping OTA path
+and no release artifact — don't build those until asked. What does exist is `main/ota.c`: a
+throwaway, dev-only proof that the underlying `esp_https_ota` mechanism (fetch, write the inactive
+slot, switch boot partition, roll back on failure) works on real hardware, gated on a build-time-
+only URL that's empty in every real build — not the fleet delivery mechanism, no signing, no
+coordinator. Fleet mode *has* been asked for and is designed but not built: `docs/design/fleet.md`
+is the spec, and its sequencing items are the roadmap. A green CI run means the code
 compiles and the pure functions behave; it says nothing about USB enumeration, HID delivery, or
 latency, none of which CI can observe (§4, last rule).
 
