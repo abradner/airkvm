@@ -45,18 +45,27 @@
 
 #elif CONFIG_IDF_TARGET_ESP32S3
 
-// ESP32-S3-0.42 OLED supermini — the real dongle. UNVERIFIED: no board in hand.
-// The 0.42" panel is the same size and controller as the C3 board's, but this
-// family's variants differ in I2C pins, so these must be confirmed against the
-// vendor's own demo for the S3 variant before being trusted (AGENTS.md §6.1).
+// ESP32-S3-0.42 OLED supermini — the real dongle. I2C pins confirmed
+// 2026-08-31 on real hardware with tools/i2c_scan: swept all 756 ordered GPIO
+// pairs, exactly one ACKed at 0x3C. This board's SDA/SCL are GPIO48/47, NOT
+// the C3's GPIO5/6 — the C3 numbers were carried over here pending hardware
+// and were wrong, exactly the trap AGENTS.md §6.1 warns against.
+// WIDTH/HEIGHT/X_OFFSET/Y_OFFSET confirmed the same day: real firmware
+// rendered legible status text (IP, mDNS name, link state) through this
+// window on the actual panel.
 #define BOARD_HAS_DISPLAY 1
-#define BOARD_I2C_SDA 5
-#define BOARD_I2C_SCL 6
+#define BOARD_I2C_SDA 48
+#define BOARD_I2C_SCL 47
 #define BOARD_OLED_ADDR 0x3C
 #define BOARD_OLED_WIDTH 72
 #define BOARD_OLED_HEIGHT 40
 #define BOARD_OLED_X_OFFSET 28
 #define BOARD_OLED_Y_OFFSET 24
+// This panel is mounted 180° from the orientation the status layout assumes
+// (confirmed against the physical unit, not a datasheet). display.c derives
+// the compensated page offset from this flag — do not hand-adjust Y_OFFSET
+// instead, see the comment in display.c for why that goes wrong.
+#define BOARD_OLED_ROTATE_180 1
 
 #define BOARD_HAS_LED 0
 #define BOARD_BUTTON 0

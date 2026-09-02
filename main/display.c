@@ -4,6 +4,7 @@
 
 #include "board.h"
 #include "esp_log.h"
+#include "oled_geometry.h"
 
 #if BOARD_HAS_DISPLAY
 
@@ -12,6 +13,37 @@
 static const char *TAG = "display";
 
 #define PAGES (BOARD_OLED_HEIGHT / 8)
+
+#ifndef BOARD_OLED_ROTATE_180
+#define BOARD_OLED_ROTATE_180 0
+#endif
+
+// The controller addresses 8 pages (64 rows) regardless of panel size — the
+// multiplex ratio below is hardcoded to the controller's full height, not
+// this board's. Rotating 180° reverses which physical COM lines the glass is
+// bonded to, which shifts what page range is visible unless the window is
+// exactly centered in that 8-page space. It generally isn't (a window flush
+// against one end, as here, has zero margin on that side and all the margin
+// on the other), so a correct rotation must recompute the page offset, not
+// just flip the remap bits — see oled_geometry.h. Getting this wrong doesn't
+// fail to build or even fail to init — it renders whatever was last left in
+// the unwritten pages, which looks exactly like noise and is easy to mistake
+// for a wiring problem. That is not hypothetical: it is what happened before
+// this offset was compensated (2026-08-31), and the corrected result — both
+// the pin fix and this rotation — was confirmed rendering correctly on the
+// physical panel afterward, not just reasoned from the pre-rotation window's
+// own confirmed-good geometry. The same centering argument applies to
+// BOARD_OLED_X_OFFSET, left uncompensated here only because this panel's
+// window happens to be centered in the 128-segment space; a future board
+// without that symmetry would need the same treatment there too.
+#define OLED_TOTAL_PAGES 8
+#define OLED_PAGE_OFFSET                                                 \
+  OLED_PAGE_OFFSET_FOR(OLED_TOTAL_PAGES, PAGES, BOARD_OLED_Y_OFFSET / 8, \
+                       BOARD_OLED_ROTATE_180)
+_Static_assert(
+    OLED_PAGE_OFFSET >= 0 && OLED_PAGE_OFFSET + PAGES <= OLED_TOTAL_PAGES,
+    "OLED_PAGE_OFFSET out of range for this board's geometry — "
+    "check BOARD_OLED_Y_OFFSET/HEIGHT against BOARD_OLED_ROTATE_180");
 
 static i2c_master_dev_handle_t s_dev;
 static bool s_present;
@@ -102,7 +134,7 @@ static esp_err_t send_cmd(const uint8_t *cmds, size_t n) {
   return i2c_master_transmit(s_dev, buf, n + 1, 100);
 }
 
-static void set_pixel(int x, int y, bool on) {
+void display_pixel(int x, int y, bool on) {
   if (x < 0 || x >= BOARD_OLED_WIDTH || y < 0 || y >= BOARD_OLED_HEIGHT) {
     return;
   }
@@ -152,8 +184,15 @@ esp_err_t display_init(void) {
       0x40,        // start line 0
       0x8D, 0x14,  // charge pump on
       0x20, 0x00,  // horizontal addressing mode
-      0xA1,        // segment remap
-      0xC8,        // COM scan direction: remapped
+#if BOARD_OLED_ROTATE_180
+      0xA0,  // segment remap: normal (rotated 180° from panel default)
+      0xC0,  // COM scan direction: normal (rotated 180° from panel default)
+#else
+      0xA1,  // segment remap: remapped (panel's natural mounted orientation)
+      0xC8,  // COM scan direction: remapped (panel's natural mounted orientation)
+#endif
+      // Both bits are always flipped together, never just one — that is what
+      // makes this a rotation rather than a mirror.
       0xDA, 0x12,  // COM pins config
       0x81, 0xCF,  // contrast
       0xD9, 0xF1,  // pre-charge
@@ -213,7 +252,7 @@ static void draw_text(int x, int y, const char *text, int scale_y) {
       for (int gy = 0; gy < 5; gy++) {
         if (glyph[gx] & (1u << gy)) {
           for (int rep = 0; rep < scale_y; rep++) {
-            set_pixel(x + gx, y + gy * scale_y + rep, true);
+            display_pixel(x + gx, y + gy * scale_y + rep, true);
           }
         }
       }
@@ -243,7 +282,7 @@ void display_bar(int col, int row, int width, int filled) {
         // Unfilled cells keep an outline so the bar's full length stays
         // visible; an empty gap reads as "no signal data" rather than "weak".
         const bool edge = gy == 0 || gy == 4 || gx == 0 || gx == 2;
-        set_pixel(x0 + i * 4 + gx, y0 + gy, on || edge);
+        display_pixel(x0 + i * 4 + gx, y0 + gy, on || edge);
       }
     }
   }
@@ -258,7 +297,7 @@ void display_flush(void) {
         // The visible panel is a window into the controller's larger address
         // space, so every write is offset. Without these the image lands
         // off-screen and the panel looks dead.
-        (uint8_t)(0xB0 + page + (BOARD_OLED_Y_OFFSET / 8)),
+        (uint8_t)(0xB0 + page + OLED_PAGE_OFFSET),
         (uint8_t)(0x00 | (BOARD_OLED_X_OFFSET & 0x0F)),
         (uint8_t)(0x10 | (BOARD_OLED_X_OFFSET >> 4)),
     };

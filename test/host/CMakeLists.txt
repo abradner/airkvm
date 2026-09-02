@@ -20,3 +20,9 @@ foreach(suite keymap protocol hid_state session)
   add_executable(test_${suite} test_${suite}.c ${AIRKVM_PURE_SOURCES})
   add_test(NAME ${suite} COMMAND test_${suite})
 endforeach()
+
+# oled_geometry.h is header-only macros with no hardware dependency (unlike
+# display.c, which needs driver/i2c_master.h and is excluded above) — no
+# extra sources needed.
+add_executable(test_oled_geometry test_oled_geometry.c)
+add_test(NAME oled_geometry COMMAND test_oled_geometry)
