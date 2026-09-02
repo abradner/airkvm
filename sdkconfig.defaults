@@ -48,11 +48,10 @@ CONFIG_PARTITION_TABLE_TWO_OTA_LARGE=y
 # to prove itself — a bad update that boots but is otherwise broken just keeps
 # running instead of reverting. With it, a new image boots PENDING_VERIFY and
 # the bootloader reverts to the previous slot on the *next* reset unless
-# something calls esp_ota_mark_app_valid_cancel_rollback() first. Nothing in
-# the tree calls esp_ota_set_boot_partition() yet at this commit — the next
-# commit adds main/ota.c, a throwaway test hook that also does the rollback
-# confirmation, gated on WiFi association — a real fleet build should confirm
-# more than that before calling a boot healthy.
+# something calls esp_ota_mark_app_valid_cancel_rollback() first after
+# confirming the boot healthy. (main/ota.c does this today, gated on WiFi
+# association — a real fleet build should confirm more than that before
+# calling a boot healthy.)
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=4096

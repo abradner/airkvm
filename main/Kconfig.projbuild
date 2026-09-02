@@ -67,8 +67,9 @@ config AIRKVM_OTA_TEST_URL
     string "OTA test image URL (throwaway, dev only)"
     default ""
     help
-        If set, fetched once via esp_https_ota() a few seconds after WiFi
-        associates, then the device reboots into whatever it fetched. Proves
+        If set, polled every 60s once WiFi associates: each poll reads only
+        the served image's header and compares it against the running image,
+        downloading and rebooting into it only on a real difference. Proves
         the OTA primitive (fetch, write the inactive slot, switch boot
         partition, roll back on failure) works on real hardware.
 

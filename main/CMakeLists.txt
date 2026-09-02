@@ -20,9 +20,8 @@ set(airkvm_srcs
 # TLS is off costs nothing.
 #
 # esp_https_ota and app_update are required unconditionally for the same
-# reason, even though ota.c's actual fetch is a no-op when
-# AIRKVM_OTA_TEST_URL is unset — ota.c always calls esp_ota_* to confirm the
-# boot, regardless of that value.
+# reason, even though the whole of ota.c — fetch and rollback-confirm both —
+# is a no-op when AIRKVM_OTA_TEST_URL is unset (every real build).
 set(airkvm_requires
     esp_http_server esp_https_server esp_wifi nvs_flash mdns driver esp_timer
     esp_https_ota app_update)

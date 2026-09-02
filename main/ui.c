@@ -32,9 +32,11 @@ static const char *TAG = "ui";
 // always registers.
 #define DEBOUNCE_MS 40
 
-// There is no LED on this board (BOARD_HAS_LED 0) to give a passive "still
-// alive" signal, so the screensaver's motion stands in for one after the
-// operator has walked away.
+// The S3 dongle has no LED (BOARD_HAS_LED 0 in board.h) to give a passive
+// "still alive" signal, so the screensaver's motion stands in for one after
+// the operator has walked away. (The C3 bench board does have one — this
+// still runs there too, harmlessly, since it costs nothing on a board that
+// already has its own indicator.)
 #define SCREENSAVER_IDLE_MS (5 * 60 * 1000)
 #define SCREENSAVER_SIZE 3
 
@@ -173,11 +175,16 @@ static void poll_button(bool screensaver_active) {
   // Act on release, not press: it makes an accidental brush less likely to
   // toggle a mode that puts keystrokes on a screen.
   if (!pressed) {
+    // Any physical interaction with the button counts as recent activity,
+    // not just a dismiss — otherwise an operator standing right there who
+    // just toggled debug mode (screensaver wasn't active at press) could see
+    // it kick in moments later because this press never refreshed the idle
+    // clock.
+    s_local_wake_us = now;
     if (screensaver_active_at_press) {
       // Dismiss only. Toggling debug mode here too would mean walking up to
       // wake the screen silently turns on keystroke display (R-006) as a side
       // effect of a press that was never meant as a debug toggle.
-      s_local_wake_us = now;
       ESP_LOGI(TAG, "screensaver dismissed (button)");
     } else {
       const bool on = status_toggle_debug();
