@@ -82,7 +82,7 @@ A conflict with a principle is a stop-and-check, never something to quietly work
 | USB stack | TinyUSB via `esp_tinyusb` | Composite HID: boot keyboard + relative mouse |
 | Network | `esp_http_server` (WebSocket) + `mdns` | Single origin serves console and socket |
 | Console | Vanilla HTML/CSS/JS, no build step | Embedded in firmware via `EMBED_FILES`; no npm, no bundler, no CDN |
-| Display | SSD1306 72×40 over I2C | `main/display.c`; status only (IP, mDNS name, link state). Compiles and is driven by `ui.c`; **never observed on a panel** |
+| Display | SSD1306 72×40 over I2C | `main/display.c`; status only (IP, mDNS name, link state). Renders correctly on the real S3 dongle's panel — pins and 180° rotation confirmed 2026-08-31 |
 | Host tooling | Python 3 (stdlib only) | `tools/poke.py` drives a dongle from a terminal; not shipped to users |
 | Testing | CMake/ctest + plain C assertions | Keymap, protocol codec, and HID state are pure and host-tested — `test/host/` |
 | Deployment | `idf.py flash` over USB-C | No OTA yet. See §7 |

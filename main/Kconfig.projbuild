@@ -82,4 +82,10 @@ config AIRKVM_OTA_TEST_URL
         than anything else this firmware currently exposes. Leave empty for
         every build except a deliberate local OTA test.
 
+        A plain http:// URL here also needs CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP
+        enabled separately (Component config > ESP HTTPS OTA), which this
+        project's own config never sets — set it in a local sdkconfig only,
+        never commit it. Without it every poll fails before touching the
+        network (ESP_ERR_INVALID_ARG), which looks like a network problem.
+
 endmenu
