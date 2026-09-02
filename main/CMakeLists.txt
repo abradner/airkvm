@@ -9,7 +9,8 @@ set(airkvm_srcs
     "indicator.c"
     "ui.c"
     "keymap.c"
-    "protocol.c")
+    "protocol.c"
+    "ota.c")
 
 # esp_https_server is required unconditionally even though TLS is a Kconfig
 # option: component requirements are resolved during CMake's early-expansion
@@ -17,8 +18,14 @@ set(airkvm_srcs
 # silently fails to add the include path and the build dies on a missing header
 # with the option plainly enabled. The code is #if-guarded, so linking it when
 # TLS is off costs nothing.
+#
+# esp_https_ota and app_update are required unconditionally for the same
+# reason, even though ota.c's actual fetch is a no-op when
+# AIRKVM_OTA_TEST_URL is unset — ota.c always calls esp_ota_* to confirm the
+# boot, regardless of that value.
 set(airkvm_requires
-    esp_http_server esp_https_server esp_wifi nvs_flash mdns driver esp_timer)
+    esp_http_server esp_https_server esp_wifi nvs_flash mdns driver esp_timer
+    esp_https_ota app_update)
 
 # Exactly one HID backend is compiled in (see main/hid_out.h). The USB backend
 # is only offered on targets with native USB OTG, so this never has to guard

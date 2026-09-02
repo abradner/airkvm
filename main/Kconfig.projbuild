@@ -63,4 +63,22 @@ config AIRKVM_MDNS_HOSTNAME
         The console is reachable at http://<hostname>.local/. Give each dongle a
         distinct name if you run more than one, or they will fight over it.
 
+config AIRKVM_OTA_TEST_URL
+    string "OTA test image URL (throwaway, dev only)"
+    default ""
+    help
+        If set, fetched once via esp_https_ota() a few seconds after WiFi
+        associates, then the device reboots into whatever it fetched. Proves
+        the OTA primitive (fetch, write the inactive slot, switch boot
+        partition, roll back on failure) works on real hardware.
+
+        This is NOT the fleet delivery mechanism (docs/design/fleet.md item
+        4): no signing, no coordinator, no mTLS tunnel, and a URL baked into
+        the image at build time rather than supplied by anything at runtime —
+        network or otherwise. That is deliberate: this device's console is
+        unauthenticated by design (R-001), and a network-reachable "fetch
+        this URL and flash it" trigger would be a materially different risk
+        than anything else this firmware currently exposes. Leave empty for
+        every build except a deliberate local OTA test.
+
 endmenu

@@ -5,6 +5,7 @@
 #include "esp_log.h"
 #include "hid_out.h"
 #include "net.h"
+#include "ota.h"
 #include "status.h"
 #include "ui.h"
 
@@ -22,6 +23,11 @@ void app_main(void) {
   // reverse order would make a bad network look like broken hardware
   // (docs/repo-map.md, boot flow).
   ESP_ERROR_CHECK(hid_out_start());
+
+  // Self-contained: waits for WiFi on its own rather than depending on
+  // net_start() below, since confirming this boot healthy (cancelling a
+  // pending rollback) matters even if the console itself fails to start.
+  ota_start();
 
   const esp_err_t err = net_start();
   if (err != ESP_OK) {
