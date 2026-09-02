@@ -165,15 +165,15 @@ fleet mode ever ships.
 
 ## Open questions and unverified claims
 
-- **Flash size is unknown.** `sdkconfig` says `CONFIG_ESPTOOLPY_FLASHSIZE_2MB`, which is the
-  ESP-IDF default rather than a measured fact. Resolve with `esptool flash_id` when the board
-  arrives. Proceeding optimistically on 4MB; the 2MB contingency is recorded below, not designed
-  around.
-- **OTA may not fit at 2MB.** Two app slots on 2MB leave ~988 KB each *(estimate)*; the current
-  TLS bench image is 1,018,224 bytes. Fleet mode drops the TLS *server*, the console assets and
-  mDNS, which may bring it under — but provisioning keeps `esp_http_server` linked, so the saving
-  is smaller than it first appears and the margin is thin either way. Measure; do not assume. At
-  4MB the question is moot.
+- **Flash size — resolved.** `esptool flash_id` against the real S3 (2026-08-31): 4MB (XMC), plus
+  2MB of PSRAM the current design doesn't use. `sdkconfig.defaults` now carries this measurement
+  (`CONFIG_ESPTOOLPY_FLASHSIZE_4MB`), not the ESP-IDF 2MB default this section used to describe.
+- **OTA fits comfortably; the 2MB contingency below no longer applies.** `sdkconfig.defaults` now
+  ships `PARTITION_TABLE_TWO_OTA_LARGE`: 1700K per app slot against a measured image of
+  ~1019K (0xfe820 bytes, TLS on, this commit's build), ~40% headroom — real measurement via
+  ESP-IDF's own `check_sizes.py` at build time, not an estimate. The question this section used to
+  pose (does OTA fit at 2MB, given `esp_http_server` staying linked for provisioning) is moot at
+  4MB, exactly as this section predicted it would be.
 - **The S3 `sdkconfig` predates the TLS work** and has `CONFIG_AIRKVM_TLS` unset, so the 907,600
   byte S3 image understates the real one by roughly the C3's TLS delta *(estimate)*. Regenerate
   before drawing any conclusion from it.
