@@ -31,6 +31,16 @@ bool display_present(void);
 
 void display_clear(void);
 
+// Sets one pixel in the framebuffer. Out-of-bounds coordinates are silently
+// clipped, same as every other draw call — a caller doing bounce-off-the-edge
+// math is expected to occasionally land one pixel past the edge.
+//
+// Like every draw call here, the framebuffer has no lock: today's only
+// caller is ui_task, and that single-task assumption is load-bearing, not
+// incidental — a second task drawing concurrently would race display_flush()
+// with no guard against it.
+void display_pixel(int x, int y, bool on);
+
 // Draws text at a character cell. Text is clipped, never wrapped: wrapping an
 // IP address onto a second line reads as two different numbers.
 void display_text(int col, int row, const char *text);
