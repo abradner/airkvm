@@ -15,3 +15,14 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
 # sdkconfig.defaults asks for two TinyUSB HID interfaces; TinyUSB is not built
 # for this target at all, so those symbols simply do not exist here.
+
+# sdkconfig.defaults' 4MB flash size and dual-OTA partition table were
+# measured against the S3 dongle specifically (esptool flash_id, 2026-08-31)
+# — not this board. Carrying an S3 measurement onto the C3 unverified is
+# exactly the trap AGENTS.md §6.1 warns about, and the C3 doesn't need OTA
+# slots anyway: it never ships, it exists to exercise everything except USB
+# HID on real hardware (see the file header). Pinned back explicitly rather
+# than silently inheriting.
+CONFIG_ESPTOOLPY_FLASHSIZE_2MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="2MB"
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
