@@ -32,6 +32,42 @@ static const char *TAG = "ui";
 // always registers.
 #define DEBOUNCE_MS 40
 
+// There is no LED on this board (BOARD_HAS_LED 0) to give a passive "still
+// alive" signal, so the screensaver's motion stands in for one after the
+// operator has walked away.
+#define SCREENSAVER_IDLE_MS (5 * 60 * 1000)
+#define SCREENSAVER_SIZE 3
+
+// Tracks a button-triggered wake separately from status.c's last_activity_us,
+// which is specifically "an input event arrived from the client" — the thing
+// the on-screen event counter and the "is my input reaching the target"
+// signal both rely on. Folding a physical button press into that field would
+// make a local touch indistinguishable from a client keystroke in both
+// places. The idle clock below reads whichever of the two is more recent.
+static int64_t s_local_wake_us;
+
+static int s_ss_x = 3, s_ss_y = 3, s_ss_dx = 1, s_ss_dy = 1;
+
+static void draw_screensaver(void) {
+  display_clear();
+  s_ss_x += s_ss_dx;
+  s_ss_y += s_ss_dy;
+  if (s_ss_x <= 0 || s_ss_x >= BOARD_OLED_WIDTH - SCREENSAVER_SIZE) {
+    s_ss_dx = -s_ss_dx;
+    s_ss_x += s_ss_dx;
+  }
+  if (s_ss_y <= 0 || s_ss_y >= BOARD_OLED_HEIGHT - SCREENSAVER_SIZE) {
+    s_ss_dy = -s_ss_dy;
+    s_ss_y += s_ss_dy;
+  }
+  for (int dy = 0; dy < SCREENSAVER_SIZE; dy++) {
+    for (int dx = 0; dx < SCREENSAVER_SIZE; dx++) {
+      display_pixel(s_ss_x + dx, s_ss_y + dy, true);
+    }
+  }
+  display_flush();
+}
+
 // Signal bars from RSSI. Thresholds are the conventional WiFi ones; the point
 // is relative ("is this the reason it feels slow"), not absolute accuracy.
 static int rssi_bars(int8_t rssi) {
@@ -100,10 +136,18 @@ static void draw(const struct status_snapshot *s) {
   display_flush();
 }
 
-static void poll_button(void) {
+static void poll_button(bool screensaver_active) {
 #if defined(BOARD_BUTTON)
   static bool was_pressed;
   static int64_t last_change_us;
+  // Latched at the press edge, not re-read at release: a real press spans
+  // several ticks, and status.last_activity_us can change mid-hold if a
+  // client HID event lands while the button is down (e.g. the screensaver
+  // was active when pressed but a keystroke arrives before release). Without
+  // latching, that race picks which of the two actions below fires — turning
+  // "just wake the panel" into a debug-mode toggle by accident, exactly the
+  // outcome this dismiss/toggle split exists to prevent.
+  static bool screensaver_active_at_press;
 
   const int level = gpio_get_level(BOARD_BUTTON);
 #if BOARD_BUTTON_ACTIVE_LOW
@@ -122,11 +166,23 @@ static void poll_button(void) {
   last_change_us = now;
   was_pressed = pressed;
 
+  if (pressed) {
+    screensaver_active_at_press = screensaver_active;
+  }
+
   // Act on release, not press: it makes an accidental brush less likely to
   // toggle a mode that puts keystrokes on a screen.
   if (!pressed) {
-    const bool on = status_toggle_debug();
-    ESP_LOGW(TAG, "debug display %s (physical button)", on ? "ON" : "OFF");
+    if (screensaver_active_at_press) {
+      // Dismiss only. Toggling debug mode here too would mean walking up to
+      // wake the screen silently turns on keystroke display (R-006) as a side
+      // effect of a press that was never meant as a debug toggle.
+      s_local_wake_us = now;
+      ESP_LOGI(TAG, "screensaver dismissed (button)");
+    } else {
+      const bool on = status_toggle_debug();
+      ESP_LOGW(TAG, "debug display %s (physical button)", on ? "ON" : "OFF");
+    }
   }
 #endif
 }
@@ -137,7 +193,14 @@ static void ui_task(void *arg) {
   struct status_snapshot snapshot;
 
   for (;;) {
-    poll_button();
+    status_get(&snapshot);
+    const int64_t last_activity_us = snapshot.last_activity_us > s_local_wake_us
+                                         ? snapshot.last_activity_us
+                                         : s_local_wake_us;
+    const int64_t idle_ms = (esp_timer_get_time() - last_activity_us) / 1000;
+    const bool screensaver_active = idle_ms >= SCREENSAVER_IDLE_MS;
+
+    poll_button(screensaver_active);
     indicator_tick();
 
     if (tick % HEALTH_EVERY_TICKS == 0) {
@@ -157,8 +220,11 @@ static void ui_task(void *arg) {
     }
 
     if (tick % DISPLAY_EVERY_TICKS == 0 && display_present()) {
-      status_get(&snapshot);
-      draw(&snapshot);
+      if (screensaver_active) {
+        draw_screensaver();
+      } else {
+        draw(&snapshot);
+      }
     }
 
     tick++;
