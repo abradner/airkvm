@@ -186,6 +186,26 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
 //             stops at a keyboard intent whenever a report is still pending,
 //             which costs one endpoint interval per state change and loses
 //             nothing.
+// How long the report task waits when it has nothing to do: two FreeRTOS ticks
+// at CONFIG_FREERTOS_HZ=1000, which sdkconfig.defaults pins for this reason.
+//
+// The tick rate is load-bearing here, not incidental. At ESP-IDF's default
+// 100Hz the smallest possible wait is one 10ms tick, which aliases against the
+// endpoints' 10ms bInterval — a task waking every 10ms catches the endpoint's
+// ready window only every other time, and typing throughput halves. Measured:
+// a 60-character string at 10ms/char delivered 26 of 60 at 100Hz and 60 of 60
+// at 1kHz. Waking every 2ms gives five chances per endpoint interval.
+#define REPORT_TICK_MS 2
+
+// The guard that would have caught the bug fixed in the report task's wait: a
+// pdMS_TO_TICKS() value that rounds down to zero turns vTaskDelay into a bare
+// yield, and a always-ready task then spins a core flat out. Structural, so it
+// cannot silently come back if CONFIG_FREERTOS_HZ or this constant changes
+// (AGENTS.md §10, meta-rule 5: prefer a mechanism to a sentence).
+_Static_assert(pdMS_TO_TICKS(REPORT_TICK_MS) > 0,
+               "REPORT_TICK_MS rounds to zero ticks at this CONFIG_FREERTOS_HZ "
+               "— the report task would spin instead of sleeping");
+
 static bool s_kbd_dirty;
 static int32_t s_pending_dx, s_pending_dy;
 static int32_t s_pending_scroll_v, s_pending_scroll_h;
@@ -289,7 +309,7 @@ static void report_task(void *arg) {
     // When blocked, flush here rather than waiting for the pump below: if the
     // endpoint is ready the report goes out immediately and the drain
     // continues, so a burst of typing empties at endpoint pace within one
-    // pass instead of one intent per 2ms tick.
+    // pass instead of one intent per wakeup.
     //
     // KNOWN LIMITATION (issue #27). If the keyboard endpoint stays unready
     // while the mouse endpoint does not, this break leaves the keyboard
@@ -320,10 +340,33 @@ static void report_task(void *arg) {
     pump_keyboard();
     pump_mouse();
 
-    // Short sleep rather than blocking on the queue: there may be nothing new
-    // to receive and still something pending to send, either because the
-    // endpoint was busy last time round or because a delta exceeded one report.
-    vTaskDelay(pdMS_TO_TICKS(2));
+    // Wait for there to be something to do. This used to be
+    // `vTaskDelay(pdMS_TO_TICKS(2))`, which never slept at all: pdMS_TO_TICKS
+    // is integer arithmetic, so at CONFIG_FREERTOS_HZ=100 it evaluates to
+    // (2 * 100) / 1000 == 0, and vTaskDelay(0) is documented by the kernel as
+    // "just forces a reschedule" — the task is never added to the delayed
+    // list. This task is priority 5 and always ready, so it was rescheduled
+    // immediately and pegged one core at 160MHz permanently, preventing the
+    // idle task from ever gating that core's clock. It had done so since the
+    // initial commit. See the static assert on REPORT_TICK_MS above.
+    //
+    // Two cases, because they want different waits:
+    if (s_kbd_dirty || s_buttons_dirty || s_pending_dx || s_pending_dy ||
+        s_pending_scroll_v || s_pending_scroll_h) {
+      // Output still owed — the endpoint was busy, or a delta exceeded one
+      // report. Nothing new needs to arrive for there to be work, so sleep a
+      // tick and try to pump again.
+      vTaskDelay(pdMS_TO_TICKS(REPORT_TICK_MS));
+    } else {
+      // Nothing owed: block until an intent arrives. A blocking peek wakes
+      // the instant one does, so idling costs no added latency on the first
+      // keystroke — better than a fixed delay, which would add up to a tick.
+      // The timeout still gives a periodic wakeup, which release-all needs:
+      // hid_out_release_all() sets a flag from another task without queueing
+      // anything, so nothing would wake us otherwise.
+      struct airkvm_intent waited;
+      (void)xQueuePeek(s_queue, &waited, pdMS_TO_TICKS(REPORT_TICK_MS));
+    }
   }
 }
 

@@ -68,3 +68,18 @@ CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
 # The console is the only TLS peer and it speaks TLS 1.2/1.3; dropping the
 # obsolete suites saves flash and removes downgrade surface.
 CONFIG_MBEDTLS_SSL_PROTO_TLS1_3=y
+
+# 1kHz scheduler ticks, not ESP-IDF's default 100Hz.
+#
+# This device's entire job is low-latency input, and a 10ms scheduling quantum
+# is too coarse for a 10ms USB endpoint interval: the report task and the
+# endpoint alias against each other, so a task that wakes every 10ms catches
+# the endpoint's ready window only every other time and typing throughput
+# halves. Measured on hardware — at 100Hz a 60-character string sent at
+# 10ms/char delivered 26 of 60; at 1kHz it delivers all 60.
+#
+# The cost is ~1000 timer interrupts/second/core instead of 100, on the order
+# of 0.1-0.2% CPU. That is bought back many times over by the report task no
+# longer spinning (see REPORT_TICK_MS in main/hid_out_usb.c), which is what
+# made this granularity necessary to state explicitly rather than inherit.
+CONFIG_FREERTOS_HZ=1000
