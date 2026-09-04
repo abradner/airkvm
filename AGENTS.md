@@ -509,8 +509,9 @@ code is written.*
 5. **ESP-IDF defaults WiFi to `WIFI_PS_MIN_MODEM`, which is wrong for anything interactive.**
    The radio parks between beacons; measured cost here was 30ms best-case round trips becoming
    450ms average and 1130ms worst, with zero packet loss to hint at what was happening. It
-   presents as "the page won't load", not as power management. `esp_wifi_set_ps(WIFI_PS_NONE)` in
-   `net.c`, justified by principle 6 — this device is mains-powered by definition.
+   presents as "the page won't load", not as power management. `esp_wifi_set_ps()` in
+   `wifi.c` (moved there when WiFi bring-up was split out of `net.c`), justified by
+   principle 6 — this device is mains-powered by definition. **Refined since:** the measurement stands, but the conclusion was too broad. Power save is wrong *while someone is typing*, which is not most of this device's life; the radio now follows the operator across three tiers (`wifi_set_activity()`), and full speed is kept exactly when it is earned.
 
 6. **`EMBED_FILES` and `EMBED_TXTFILES` are not interchangeable, and both directions have bitten
    this repo.** TXTFILES appends a NUL terminator; FILES does not. PEM certificates *must* use
@@ -606,6 +607,31 @@ code is written.*
     bench board, whose log backend prints every intent and therefore cannot lose one — gotcha 8
     again, from the other direction. Verified on hardware 2026-09-04: 17 of 17 characters, event
     counter advancing by exactly 34.
+
+12. **`pdMS_TO_TICKS()` silently rounds to zero, and `vTaskDelay(0)` is not a delay — one task
+    had been spinning a core flat out since the initial commit.** `hid_out_usb.c`'s report task
+    ended its loop with `vTaskDelay(pdMS_TO_TICKS(2))`. The macro is integer arithmetic, so at
+    `CONFIG_FREERTOS_HZ=100` that is `(2 * 100) / 1000 == 0`, and the kernel guards on
+    `if( xTicksToDelay > 0 )` with the comment "A delay time of zero just forces a reschedule" —
+    the task is never added to the delayed list. Being priority 5 and always ready, it was
+    rescheduled immediately, forever, pegging one core at 160MHz doing nothing and preventing the
+    idle task from gating that core's clock via `WAITI`. Nothing failed; it just ran hot, and the
+    file's own comments described a 2ms pacing that had never existed. **General rules.**
+    *(a) A duration constant is not a duration until it survives the conversion.* Any
+    `pdMS_TO_TICKS()` value below one tick period is a bug that compiles, and the only honest fix
+    is a mechanism, not care: `_Static_assert(pdMS_TO_TICKS(X) > 0, ...)` next to the constant,
+    which was confirmed to fail for the right reason before being trusted (meta-rule 5).
+    *(b) Removing waste can expose what the waste was accidentally buying.* Fixing the spin
+    dropped typing throughput by half — measured, 26 of 60 characters against 60 of 60 — because
+    at 100Hz the smallest possible wait is 10ms, which aliases against the USB endpoint's 10ms
+    `bInterval`: a task waking every 10ms catches the ready window only every other time. The
+    tick rate then had to be raised to 1kHz deliberately (`sdkconfig.defaults`) to buy back
+    granularity the spin had been providing by accident. Ask what a wasteful thing was doing
+    before deleting it, and re-measure the thing it was near.
+    *(c) The instrument for all of this was new.* `tools/hid_listen.py` reads the dongle's own
+    evdev node on the host it is plugged into, so "did it type correctly" became a machine check
+    instead of a question for a human — which is what made a throughput regression visible at all
+    rather than being discovered weeks later as "typing feels slow".
 
 ## 10. Maintaining This Document
 

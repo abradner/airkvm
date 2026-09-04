@@ -348,13 +348,18 @@ el.startVideo.addEventListener("click", async () => {
   }
 });
 
-// getUserMedia needs a secure context, and this page is served over plain HTTP.
-// Browsers treat localhost as secure but not a LAN IP — so this is a real
-// limitation of the no-TLS design, and saying so beats a silently dead button.
+// getUserMedia needs a secure context. The real firmware serves the console
+// over HTTPS/WSS and does not serve plain HTTP at all (R-007), so this guard
+// normally does not fire — but a CONFIG_AIRKVM_TLS=n bench build is plain HTTP
+// on a LAN IP, which browsers do not treat as secure the way they do
+// localhost. Saying so beats a silently dead button.
+//
+// (This comment used to claim the page was always served over plain HTTP,
+// which stopped being true when TLS landed — principle 1.)
 if (!navigator.mediaDevices) {
   el.startVideo.disabled = true;
   el.startVideo.title =
-    "Video needs a secure context; this page is served over plain HTTP.";
+    "Video needs a secure context — this looks like a plain-HTTP bench build.";
 } else {
   listCameras().catch(() => {});
 }

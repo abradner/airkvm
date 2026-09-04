@@ -153,8 +153,12 @@ fleet mode ever ships.
 
 ## Sequencing
 
-1. **`session.c` extraction + keepalive deadline.** Mode-independent, closes a known gap in the
-   release-all guarantee, and is a prerequisite for everything below.
+1. ~~**`session.c` extraction + keepalive deadline.**~~ **Done** — shipped in `84c3f0d`
+   ("Tear down a console session that has gone quiet", #3). `main/session.c`/`session.h` exist,
+   `net.c` drives them, and the 3s deadline is live and documented in `docs/repo-map.md`. Its
+   known limitation is tracked separately as #6. Left in the list rather than deleted so the
+   sequencing argument still reads, since everything below was justified partly by this being
+   the prerequisite.
 2. **`provisioning`.** Serves both modes; unblocks runtime configuration. Must preserve the
    fail-fast rule (AGENTS.md §8): absent configuration enters provisioning visibly, it does not
    silently degrade.
