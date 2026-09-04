@@ -119,15 +119,26 @@ SHIFT_KEYS = (42, 54)
 NAMED = {1: "Esc", 111: "Delete", 59: "F1", 60: "F2", 61: "F3", 62: "F4"}
 
 
-def find_keyboard() -> str:
-    """The dongle's own keyboard node, by USB identity — never by scanning."""
-    matches = sorted(glob.glob("/dev/input/by-id/*airkvm*event-kbd"))
-    if not matches:
-        raise SystemExit(
-            "no airkvm keyboard found under /dev/input/by-id/ — is the dongle "
-            "plugged into this machine and running a USB HID build?"
-        )
-    return matches[0]
+def find_keyboard(wait_s: float = 0.0) -> str:
+    """The dongle's own keyboard node, by USB identity — never by scanning.
+
+    Waits for it to appear, because the node legitimately goes away and comes
+    back: an OTA update reboots the device, which re-enumerates it. Without
+    this a test firing during an update fails as "no keyboard" rather than
+    waiting the couple of seconds the device needs.
+    """
+    deadline = time.time() + wait_s
+    while True:
+        matches = sorted(glob.glob("/dev/input/by-id/*airkvm*event-kbd"))
+        if matches:
+            return matches[0]
+        if time.time() >= deadline:
+            raise SystemExit(
+                "no airkvm keyboard found under /dev/input/by-id/ — is the "
+                "dongle plugged into this machine and running a USB HID "
+                "build? (pass --wait N to allow for an OTA reboot)"
+            )
+        time.sleep(0.25)
 
 
 def listen(path: str, deadline: float, quiet: bool) -> str:
@@ -148,6 +159,12 @@ def listen(path: str, deadline: float, quiet: bool) -> str:
             except BlockingIOError:
                 time.sleep(0.005)
                 continue
+            except OSError:
+                # The device went away mid-listen — an OTA reboot does this.
+                # Report what was captured rather than losing it to a
+                # traceback; the caller's expectation check will fail loudly
+                # enough if the disappearance actually mattered.
+                break
             for off in range(0, len(data) - EVENT_SIZE + 1, EVENT_SIZE):
                 _, _, etype, code, value = struct.unpack_from(EVENT_FORMAT, data, off)
                 if etype != EV_KEY:
@@ -178,6 +195,13 @@ def main() -> int:
     )
     parser.add_argument("--device", help="override the input node")
     parser.add_argument(
+        "--wait",
+        type=float,
+        default=0.0,
+        help="seconds to wait for the device to appear, for use across an OTA "
+        "reboot (default: fail immediately)",
+    )
+    parser.add_argument(
         "--quiet", action="store_true", help="suppress modifier chatter"
     )
     args = parser.parse_args()
@@ -190,7 +214,7 @@ def main() -> int:
         )
         return 2
 
-    path = args.device or find_keyboard()
+    path = args.device or find_keyboard(args.wait)
     if not args.quiet:
         print(f"listening on {path} for {args.seconds}s", file=sys.stderr)
 
