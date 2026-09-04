@@ -49,6 +49,25 @@ PING = 0x07
 
 MAX_CODE_LEN = 23  # must match AIRKVM_MAX_CODE_LEN in main/protocol.h
 
+# The device retires roughly one HID report per 20ms: the interrupt endpoint's
+# bInterval is 10ms (main/hid_out_usb.c) and the report task applies at most one
+# keyboard state change per report, with measurement on hardware landing nearer
+# 20ms than 10. Every wait in this tool is derived from this number, and all of
+# them count *reports*, not frames or characters — those are not the same thing
+# and conflating them is what made an earlier version of this tool truncate
+# input: a shifted character costs four reports rather than two, and one
+# `move 32767 0` frame costs 259, because take_delta() emits at most 127 units
+# per report and carries the remainder.
+REPORT_INTERVAL_S = 0.02
+
+# Floor for any settling wait, so even a single chord gets a window.
+SETTLE_FLOOR_S = 0.3
+
+
+def mouse_reports(*deltas: int) -> int:
+    """How many HID reports the device needs to express these deltas."""
+    return max(1, max((abs(d) + 126) // 127 for d in deltas))
+
 
 class WebSocket:
     """Just enough client to send binary frames to the dongle."""
@@ -62,7 +81,7 @@ class WebSocket:
         ca: Path | None = None,
         insecure: bool = False,
     ) -> None:
-        self.sent = 0
+        self.reports = 0
         raw = socket.create_connection((host, port), timeout=5)
         if tls:
             if insecure:
@@ -105,10 +124,12 @@ class WebSocket:
             buf += chunk
         return buf
 
-    def send_binary(self, payload: bytes) -> None:
-        # Counted so settle() below knows how much the device still has to
-        # work through before this socket may be closed.
-        self.sent += 1
+    def send_binary(self, payload: bytes, reports: int = 1) -> None:
+        # Callers declare what this frame costs the device in HID reports, so
+        # settle() knows how much work is still outstanding. Defaults to 1
+        # because every key frame is exactly one keyboard state change; only
+        # mouse motion expands (see mouse_reports).
+        self.reports += reports
         # Client frames must be masked (RFC 6455 §5.3); the server unmasks.
         mask = os.urandom(4)
         masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
@@ -139,12 +160,12 @@ class WebSocket:
         seventeen-character string lost its last five characters while every
         frame arrived — the device's own event counter read 24 of 34 sent.
 
-        There is no ack to wait on, so this waits by the clock. The interrupt
-        endpoint retires about one report per 20ms and the drain applies at
-        most one keyboard state change per report, so scale by frames sent
-        and floor it so even a single chord gets a settling window.
+        There is no ack to wait on, so this waits by the clock, scaled by the
+        number of HID *reports* the device still owes — not frames, which
+        undercounts badly: one large `move` frame can cost hundreds of
+        reports.
         """
-        time.sleep(max(0.3, 0.02 * self.sent))
+        time.sleep(max(SETTLE_FLOOR_S, REPORT_INTERVAL_S * self.reports))
 
     def close(self) -> None:
         try:
@@ -232,7 +253,14 @@ def cmd_type(ws: WebSocket, text: str, delay: float) -> int:
         ws.send_binary(key_frame(KEY_UP, code))
         if shift:
             ws.send_binary(key_frame(KEY_UP, "ShiftLeft"))
-        time.sleep(delay)
+        # Pace by what this character actually costs the device, which is four
+        # reports when shifted and two when not. A single per-character delay
+        # is wrong for mixed-case text: tuned for two reports it overruns every
+        # shifted character, and the overrun is not benign — a full queue makes
+        # net.c reject the key frame and respond with release-all, wiping the
+        # backlog and silently truncating the string.
+        reports = 4 if shift else 2
+        time.sleep(delay if delay is not None else REPORT_INTERVAL_S * reports)
     return 0
 
 
@@ -246,7 +274,10 @@ def cmd_key(ws: WebSocket, combo: str) -> int:
 
 
 def cmd_move(ws: WebSocket, dx: int, dy: int) -> int:
-    ws.send_binary(bytes([MOUSE_MOVE]) + struct.pack("<hh", dx, dy))
+    ws.send_binary(
+        bytes([MOUSE_MOVE]) + struct.pack("<hh", dx, dy),
+        reports=mouse_reports(dx, dy),
+    )
     return 0
 
 
@@ -287,17 +318,17 @@ def main() -> int:
     p_type.add_argument(
         "--delay",
         type=float,
-        default=0.03,
-        help="seconds between keystrokes (default: 0.03)",
+        default=None,
+        help="fixed seconds between keystrokes; the default paces each "
+        "character by the number of HID reports it costs the device "
+        "(two, or four when shifted), which is what keeps a mixed-case "
+        "string from overrunning the endpoint",
     )
-    # 30ms, not the 8ms this used to default to. A character is two HID
-    # reports (down, then up) and the interrupt endpoint accepts at most one
-    # per bInterval — 10ms in main/hid_out_usb.c — so ~50 chars/s is the
-    # hard ceiling and 8ms/char asked for 125. The firmware queues rather
-    # than reorders, but a sustained overrun fills the 64-deep queue and
-    # hid_out_submit() then drops frames; dropping a key-*up* leaves a key
-    # held on the target, which is the failure AGENTS.md §2 principle 4
-    # exists to prevent. Pace the sender instead.
+    # The pacing rationale lives in REPORT_INTERVAL_S at the top of this file;
+    # the short version is that overrunning the endpoint is not merely slow.
+    # A full queue makes net.c reject the key frame and respond with
+    # release-all, and a dropped key-*up* leaves a key held on the target —
+    # the failure AGENTS.md §2 principle 4 exists to prevent.
 
     p_key = sub.add_parser("key", help="press a chord, e.g. ControlLeft+AltLeft+Delete")
     p_key.add_argument("combo")
@@ -311,6 +342,12 @@ def main() -> int:
 
     args = parser.parse_args()
     port = args.port if args.port is not None else (443 if args.tls else 80)
+    if args.insecure and not args.tls:
+        # Refuse rather than warn about a TLS session that is not happening:
+        # printing "certificate NOT verified" over a plaintext connection
+        # describes a risk that isn't the real one, and hides the one that is.
+        print("--insecure has no meaning without --tls", file=sys.stderr)
+        return 2
     if args.insecure:
         print("--insecure: TLS certificate NOT verified", file=sys.stderr)
 

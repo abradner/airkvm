@@ -38,11 +38,19 @@ void app_main(void) {
   // later. What the blob does when it finds the PLL already owned is not
   // observable; the fix is empirical.
   //
-  // This does not make HID wait on the network. net_start() returns as soon
-  // as association is *started* (wifi.h), so HID is delayed by WiFi's
-  // synchronous init only — and it starts regardless of whether that init
-  // succeeded, because a dongle with no access point must still be a
-  // keyboard (docs/repo-map.md, boot flow).
+  // HID does not wait on the *network* — net_start() returns as soon as
+  // association is *started* (wifi.h), never blocking on an access point that
+  // may never answer — and it starts even when net_start() fails, because a
+  // dongle with no network must still be a keyboard (docs/repo-map.md, boot
+  // flow).
+  //
+  // It does, however, wait on everything net_start() does synchronously, which
+  // is more than WiFi init: mDNS registration, the keepalive timer, and the
+  // HTTP(S) server coming up, the last of which parses an RSA certificate.
+  // Only the WiFi part is required to precede HID for the PHY reason above,
+  // so if that delay ever matters, the fix is to split net_start() and start
+  // HID after wifi_start() rather than to revert this order. Not measured, so
+  // not asserted either way — issue #26.
   const esp_err_t err = net_start();
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "network failed to start (%s) — starting USB HID anyway",
