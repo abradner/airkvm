@@ -62,6 +62,7 @@ class WebSocket:
         ca: Path | None = None,
         insecure: bool = False,
     ) -> None:
+        self.sent = 0
         raw = socket.create_connection((host, port), timeout=5)
         if tls:
             if insecure:
@@ -105,6 +106,9 @@ class WebSocket:
         return buf
 
     def send_binary(self, payload: bytes) -> None:
+        # Counted so settle() below knows how much the device still has to
+        # work through before this socket may be closed.
+        self.sent += 1
         # Client frames must be masked (RFC 6455 §5.3); the server unmasks.
         mask = os.urandom(4)
         masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
@@ -117,6 +121,30 @@ class WebSocket:
         else:
             raise ValueError("frame too large for this tool")
         self.sock.sendall(header + mask + masked)
+
+    def settle(self) -> None:
+        """Wait for the device to work through what we sent, before closing.
+
+        Closing the socket is *destructive to queued input*, and not via the
+        release-all frame this tool sends on the way out — that one is queued
+        and applied in order, so it cannot overtake anything. The close is the
+        problem: the firmware's close_fn ends the session, which calls
+        hid_out_release_all(), which sets the release flag directly rather
+        than queueing it, and the report task then discards the whole queue
+        with xQueueReset. Anything not yet applied is simply gone.
+
+        That is correct behaviour for a real session ending (principle 4:
+        never leave a key held), and it makes the sender responsible for not
+        hanging up mid-sentence. Measured on hardware: without this, a
+        seventeen-character string lost its last five characters while every
+        frame arrived — the device's own event counter read 24 of 34 sent.
+
+        There is no ack to wait on, so this waits by the clock. The interrupt
+        endpoint retires about one report per 20ms and the drain applies at
+        most one keyboard state change per report, so scale by frames sent
+        and floor it so even a single chord gets a settling window.
+        """
+        time.sleep(max(0.3, 0.02 * self.sent))
 
     def close(self) -> None:
         try:
@@ -205,18 +233,6 @@ def cmd_type(ws: WebSocket, text: str, delay: float) -> int:
         if shift:
             ws.send_binary(key_frame(KEY_UP, "ShiftLeft"))
         time.sleep(delay)
-
-    # Let the device drain before returning, because the release-all this
-    # tool always sends on the way out (see main()) is destructive by design:
-    # the firmware handles it with xQueueReset, so anything still queued is
-    # discarded rather than typed. Measured on hardware, that silently ate
-    # the last five characters of a seventeen-character string while the
-    # frames themselves all arrived — the device's own event counter read 24
-    # of the 34 sent. There is no ack to wait on, so this waits by the clock:
-    # the interrupt endpoint retires roughly one report per 20ms and a
-    # character is two reports, so a conservative multiple of that, floored
-    # so short strings still get a settling window.
-    time.sleep(max(0.3, 0.05 * len(text)))
     return 0
 
 
@@ -323,6 +339,14 @@ def main() -> int:
             return 0
         return 2
     finally:
+        # Let the device finish what it was given before tearing the socket
+        # down — closing discards anything still queued (see settle()). This
+        # covers every subcommand, chords included: a Ctrl-Alt-Del is six
+        # frames that now drain one endpoint interval apart.
+        try:
+            ws.settle()
+        except OSError:
+            pass
         # Always release before leaving: a tool that exits mid-chord and leaves
         # Ctrl held on someone's machine is the exact failure this project's
         # principle 4 names.

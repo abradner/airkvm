@@ -589,10 +589,20 @@ code is written.*
     in minutes was the on-screen event counter: 82 applied intents against exactly 34+38+10 sent
     proved the frames all arrived and the loss was downstream, collapsing the search space from
     "anywhere in WiFi, TCP, WebSocket, protocol, HID" to one function. Then a *second* bug hid
-    behind it — `tools/poke.py` sent its safety release-all immediately after the last keystroke,
-    and the firmware handles that with `xQueueReset`, discarding the still-queued tail (counter
-    24 of 34 sent, and it was precisely the last five characters that vanished). The tool now
-    waits for the device to drain first. Neither bug is reachable from host tests or from the C3
+    behind it: the tail of every string vanished (counter 24 of 34 sent, precisely the last five
+    characters). **Closing the socket destroys queued input** — `close_fn` → `net_end_session()`
+    → `hid_out_release_all()`, which sets the release flag *directly* rather than queueing it, so
+    the report task's `xQueueReset` discards whatever has not been applied. Note this is *not*
+    the release-all frame the tool also sends, which is queued and applied in order and therefore
+    cannot overtake anything — an early version of this entry blamed the frame, which is wrong
+    and would have sent the next reader to the wrong file. The distinction matters: because it is
+    the *close*, it hits every sender that hangs up promptly, so it truncated chords too
+    (`ControlLeft+AltLeft+Delete` is six frames now draining an endpoint interval apart) even
+    though chords involve no repeated keys. `poke.py` now settles before closing, scaled by
+    frames sent, in `WebSocket.settle()` where every subcommand gets it rather than in
+    `cmd_type` alone. **General rule: a teardown path that is correct in isolation can still be
+    wrong in composition** — release-on-close is right (principle 4), and the bug was entirely in
+    who is responsible for not hanging up mid-sentence. Neither bug is reachable from host tests or from the C3
     bench board, whose log backend prints every intent and therefore cannot lose one — gotcha 8
     again, from the other direction. Verified on hardware 2026-09-04: 17 of 17 characters, event
     counter advancing by exactly 34.
