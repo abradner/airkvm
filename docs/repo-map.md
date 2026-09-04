@@ -87,11 +87,14 @@ console.** That trade is deliberate (principle 4 prefers a spurious release to a
 the real fix — detecting a vanished peer where head-of-line blocking cannot reach it — is issue
 #6, not done.
 
-**Boot/provisioning**: NVS credentials → WiFi station → mDNS advertise (`airkvm.local`) → HTTPS
-server up → address shown on the OLED and logged to serial. USB HID
-initializes independently of, and does not wait
-on, the network: a dongle with no WiFi is still a keyboard that can be driven once the network
-returns, and must never block enumeration on an association that may never happen.
+**Boot/provisioning**: NVS credentials → WiFi station init → mDNS advertise (`airkvm.local`) →
+HTTPS server up → USB HID → address shown on the OLED and logged to serial. WiFi's *synchronous*
+init runs before USB HID, and that order is load-bearing: the S3's RF PHY and USB PHY share the
+BBPLL, and TinyUSB claiming it first leaves WiFi unable to associate at all (AGENTS.md §9, entry
+10). HID still does not wait on the *network* — `net_start()` returns as soon as association is
+started, and HID starts even if that init fails: a dongle with no WiFi is still a keyboard that
+can be driven once the network returns, and must never block enumeration on an association that
+may never happen.
 
 ## Risk register
 

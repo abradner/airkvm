@@ -259,6 +259,34 @@ add rather than rewrite.
 - **`mise run fmt` (clang-format) reflows across comment boundaries and can orphan a doc comment
   above the wrong function.** It happened in the keepalive PR, and the result compiles and lints
   clean — nothing catches it but reading. Re-read any region you formatted.
+- **A config change can silently not reach the image, in two different ways. Read the generated
+  `sdkconfig` before trusting any build that depends on one.** Both of these cost a flash cycle
+  in one evening, and neither produces a warning — the build goes green around the unchanged
+  value, so it presents as "the feature doesn't work".
+  - *New symbol, stale generated file.* Adding a `CONFIG_` symbol to `Kconfig.projbuild` and
+    running `mise run build` produced an image where the symbol was *absent* from `sdkconfig`
+    entirely — not "is not set" — so every `#if CONFIG_X` took the off branch. A
+    `CMakeLists.txt` edit triggers a reconfigure on its own; a Kconfig-only edit does not. Force
+    it: `mise x -- bash -c '. "$IDF_PATH/export.sh" >/dev/null && idf.py -B build
+    -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.local" reconfigure'`.
+  - *Existing symbol — a defaults file cannot change it, and `reconfigure` will not help.*
+    `SDKCONFIG_DEFAULTS` files only **seed** symbols that `sdkconfig` does not already contain.
+    Putting `CONFIG_AIRKVM_TLS=n` in `sdkconfig.local` and reconfiguring left `sdkconfig` saying
+    `=y`, with no diagnostic of any kind. This is why the first trap is easy to misdiagnose: a
+    *new* symbol appears to prove defaults files work, because for new symbols they do. To flip
+    an existing value, edit `sdkconfig` directly (or `mise run config`), then confirm in
+    `build/config/sdkconfig.h` — the header the compiler actually reads is the only real proof.
+- **`tools/serial_bridge.py` goes stale every time the board changes USB mode — restart it.**
+  Seen ~8 times in one evening: after any flash whose image moved the board between USB HID
+  (TinyUSB) and USB-Serial/JTAG, in either direction, the next esptool connect failed with
+  *connection refused* or *"Remote does not seem to support RFC2217"*, and restarting the bridge
+  fixed it every time. Each mode change re-enumerates the board as a different USB device, so
+  the node the bridge opened is gone — the same silent-stale behaviour the inode watch above
+  exists for; why the watch does not recover this case was not chased. Check
+  `nc -z <host> 4000` before every flash. The good news, same root: when the board is *in*
+  USB-Serial/JTAG mode, esptool's `--before default_reset` enters the bootloader on its own —
+  the manual BOOT+RESET in the first bullet above is only needed from HID mode, where there is
+  no serial control channel to send it through.
 
 ## 7. CI & Deployment
 
@@ -492,6 +520,30 @@ code is written.*
    it:** gating expiry on "was the server task busy". An idle server with a genuinely vanished
    client also processes nothing, so the heuristic cannot distinguish the two cases it exists to
    separate. Tracked in issue #6; never observed on hardware, reasoned from the single-task design.
+
+10. **On the S3, starting TinyUSB before `esp_wifi_start()` leaves WiFi unable to ever post
+    `WIFI_EVENT_STA_START`.** The real USB HID backend's first run on real hardware showed
+    "NO WIFI" forever at idle current: `wifi_start()` returned `ESP_OK` all the way through, the
+    heap was flat, no WiFi event ever fired — and nothing was logged, because claiming USB for
+    HID also removes the only console. Root cause is a shared resource, not a bug in either
+    stack: the RF PHY and the USB PHY share the BBPLL (`soc_caps.h`:
+    `SOC_WIFI_PHY_NEEDS_USB_WORKAROUND`, "SoC has WiFi and USB PHYs interference";
+    `phy_init.c` writes the PLL's USB enable via `phy_bbpll_en_usb()` before handing the PLL to
+    the closed calibration blob). With TinyUSB already clocked off that PLL, RF init silently
+    never completes. Three hardware results triangulated it (2026-09-04): HID-first never
+    associates; WiFi-first-then-HID-immediately associates and both coexist; an established
+    connection survives HID starting 20s later. Fix: `net_start()` before `hid_out_start()` in
+    `airkvm_main.c` — HID waits on WiFi's *synchronous* init only, never on association, and
+    still starts if that init fails. Two general rules. **(a) "Verified on the bench board" is
+    not verification when the bench board runs a no-op backend** — the USB-first order had only
+    ever run on the C3, where `hid_out_start()` is the logger; that is R-005 exactly, and it will
+    recur for every feature whose real backend the C3 cannot host. **(b) When the console is
+    gone, the display is a log channel, and an init-order bisect on hardware beats reasoning
+    about a closed blob** — four one-line OLED probes (heap, the `esp_err_t`, event counters)
+    plus a deferred-start test build found this in one evening; a typed console command for
+    the same purpose never registered and cost three flashes. No host test can cover it: the
+    regression guard is the comment at `app_main()` and this entry, and any reorder of that
+    function is a hardware re-test, not a review-time judgment.
 
 ## 10. Maintaining This Document
 
