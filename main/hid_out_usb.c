@@ -157,10 +157,21 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
 // tud_hid_n_ready() — Ctrl-down delivered, Ctrl-up discarded, modifier held on
 // someone's machine. Instead the task accumulates and emits at endpoint pace.
 //
-// The two report types accumulate differently, and the difference is the bug:
-//   keyboard  a pure function of hid_state, so the newest state supersedes any
-//             older one — coalesce to a dirty flag.
+// The two report types accumulate differently:
 //   mouse     transient deltas, so dropping one loses distance — sum them.
+//   keyboard  a *state*, not an event log — and that is exactly why it cannot
+//             be coalesced the way this comment used to claim. It said "the
+//             newest state supersedes any older one", which is true of the
+//             bitmap and false of the keypress: apply a key-down and its
+//             key-up in the same pass and the bitmap ends where it started,
+//             so the single report that follows says "nothing pressed" and
+//             the keystroke is lost outright. Over TCP a down/up pair almost
+//             always arrives together, so this dropped ~75% of typed
+//             characters on real hardware while the frames themselves all
+//             arrived (AGENTS.md §9, entry 11). The drain below therefore
+//             stops at a keyboard intent whenever a report is still pending,
+//             which costs one endpoint interval per state change and loses
+//             nothing.
 static bool s_kbd_dirty;
 static int32_t s_pending_dx, s_pending_dy;
 static int32_t s_pending_scroll_v, s_pending_scroll_h;
@@ -254,8 +265,19 @@ static void report_task(void *arg) {
     }
 
     // Apply everything already queued before emitting, so a burst collapses
-    // into the fewest reports that still convey it faithfully.
-    while (xQueueReceive(s_queue, &intent, 0) == pdTRUE) {
+    // into the fewest reports that still convey it faithfully — with one
+    // exception that is load-bearing: a keyboard intent is never applied on
+    // top of a keyboard state whose report has not gone out yet. Doing so
+    // silently destroys the keypress (see the note above pump_keyboard).
+    // Peek before receiving, so the intent we decline to apply stays queued
+    // in order for the next pass.
+    while (xQueuePeek(s_queue, &intent, 0) == pdTRUE) {
+      const bool is_keyboard = intent.type == AIRKVM_FRAME_KEY_DOWN ||
+                               intent.type == AIRKVM_FRAME_KEY_UP;
+      if (is_keyboard && s_kbd_dirty) {
+        break;  // emit the pending state first; this intent waits its turn
+      }
+      (void)xQueueReceive(s_queue, &intent, 0);
       apply(&intent);
       if (s_release_pending) {
         break;  // handled at the top of the next iteration, ahead of the queue

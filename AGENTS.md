@@ -545,6 +545,32 @@ code is written.*
     regression guard is the comment at `app_main()` and this entry, and any reorder of that
     function is a hardware re-test, not a review-time judgment.
 
+11. **Coalescing the keyboard to "latest state" destroys the keypress; the first real typing test
+    delivered 3 characters of 17.** `hid_out_usb.c`'s report task drained the whole intent queue
+    and then emitted one report, justified by a comment claiming the keyboard "is a pure function
+    of hid_state, so the newest state supersedes any older one". That is true of the *bitmap* and
+    false of the *keystroke*: a key-down and its key-up applied in the same pass leave the bitmap
+    exactly as it started, so the one report that follows says "nothing pressed" and the character
+    is lost outright. Over TCP a down/up pair almost always arrives together, so a character
+    survived only when task timing happened to split the pair across two 2ms passes — giving a
+    ~20% delivery rate that barely moved when the sender slowed 6×, which is what ruled out
+    "too fast" as the cause. Fix: the drain stops at a keyboard intent whenever a report is still
+    pending (peek, don't receive, so it stays queued in order), costing one endpoint interval per
+    state change and losing nothing. **Two general rules.** *(a) A state-machine optimisation is
+    only safe if the states it skips carry no information.* Ask what the intermediate state
+    *meant*, not just whether the final state is correct — here the intermediate state was the
+    entire payload. *(b) Instrument the boundary, not the endpoints.* What made this diagnosable
+    in minutes was the on-screen event counter: 82 applied intents against exactly 34+38+10 sent
+    proved the frames all arrived and the loss was downstream, collapsing the search space from
+    "anywhere in WiFi, TCP, WebSocket, protocol, HID" to one function. Then a *second* bug hid
+    behind it — `tools/poke.py` sent its safety release-all immediately after the last keystroke,
+    and the firmware handles that with `xQueueReset`, discarding the still-queued tail (counter
+    24 of 34 sent, and it was precisely the last five characters that vanished). The tool now
+    waits for the device to drain first. Neither bug is reachable from host tests or from the C3
+    bench board, whose log backend prints every intent and therefore cannot lose one — gotcha 8
+    again, from the other direction. Verified on hardware 2026-09-04: 17 of 17 characters, event
+    counter advancing by exactly 34.
+
 ## 10. Maintaining This Document
 
 Meta-rules for editing this file — they exist because each was violated somewhere first:

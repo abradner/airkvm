@@ -11,6 +11,13 @@ to a debugging aid would mean a virtualenv between you and a stuck key.
     ./tools/poke.py airkvm.local type "hello world"
     ./tools/poke.py airkvm.local key ControlLeft+AltLeft+Delete
     ./tools/poke.py airkvm.local release
+
+The real firmware serves over TLS by default (CONFIG_AIRKVM_TLS) — add --tls
+to reach it; --port defaults to 443 in that case. Verified against the
+operator's own CA (certs/ca.crt, from tools/make_certs.sh) unless --insecure
+is given:
+
+    ./tools/poke.py --tls airkvm.local type "hello world"
 """
 
 from __future__ import annotations
@@ -20,9 +27,17 @@ import base64
 import os
 import secrets
 import socket
+import ssl
 import struct
 import sys
 import time
+from pathlib import Path
+
+# The operator-run CA tools/make_certs.sh generates, trusted by default the
+# same way a browser that's imported it would be — this tool exists to answer
+# "is the firmware wrong or the console wrong", and a client that silently
+# skips verification can't tell "wrong cert" apart from "no console at all".
+DEFAULT_CA = Path(__file__).resolve().parent.parent / "certs" / "ca.crt"
 
 KEY_DOWN = 0x01
 KEY_UP = 0x02
@@ -38,8 +53,34 @@ MAX_CODE_LEN = 23  # must match AIRKVM_MAX_CODE_LEN in main/protocol.h
 class WebSocket:
     """Just enough client to send binary frames to the dongle."""
 
-    def __init__(self, host: str, port: int = 80, path: str = "/ws") -> None:
-        self.sock = socket.create_connection((host, port), timeout=5)
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        path: str = "/ws",
+        tls: bool = False,
+        ca: Path | None = None,
+        insecure: bool = False,
+    ) -> None:
+        raw = socket.create_connection((host, port), timeout=5)
+        if tls:
+            if insecure:
+                ctx = ssl._create_unverified_context()
+            else:
+                # Verify against the operator's own CA, not the system trust
+                # store: the cert this device presents is issued by a CA
+                # nothing else on the machine has any reason to trust, and
+                # falling back to "no CA given, so accept anything" would
+                # make --insecure the silent default instead of an opt-in.
+                if ca is None or not ca.is_file():
+                    raise RuntimeError(
+                        f"no CA cert at {ca} — pass --ca <path> or --insecure "
+                        "to skip verification (see tools/make_certs.sh)"
+                    )
+                ctx = ssl.create_default_context(cafile=str(ca))
+            self.sock = ctx.wrap_socket(raw, server_hostname=host)
+        else:
+            self.sock = raw
         key = base64.b64encode(secrets.token_bytes(16)).decode()
         request = (
             f"GET {path} HTTP/1.1\r\n"
@@ -164,6 +205,18 @@ def cmd_type(ws: WebSocket, text: str, delay: float) -> int:
         if shift:
             ws.send_binary(key_frame(KEY_UP, "ShiftLeft"))
         time.sleep(delay)
+
+    # Let the device drain before returning, because the release-all this
+    # tool always sends on the way out (see main()) is destructive by design:
+    # the firmware handles it with xQueueReset, so anything still queued is
+    # discarded rather than typed. Measured on hardware, that silently ate
+    # the last five characters of a seventeen-character string while the
+    # frames themselves all arrived — the device's own event counter read 24
+    # of the 34 sent. There is no ack to wait on, so this waits by the clock:
+    # the interrupt endpoint retires roughly one report per 20ms and a
+    # character is two reports, so a conservative multiple of that, floored
+    # so short strings still get a settling window.
+    time.sleep(max(0.3, 0.05 * len(text)))
     return 0
 
 
@@ -184,7 +237,29 @@ def cmd_move(ws: WebSocket, dx: int, dy: int) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("host", help="dongle hostname or IP")
-    parser.add_argument("--port", type=int, default=80)
+    # None, not a literal default: whether the port was explicitly given
+    # changes which implicit default is right (80 for plain, 443 for --tls),
+    # and argparse has no clean way to ask "did the user pass this" other
+    # than checking for the sentinel after parsing.
+    parser.add_argument("--port", type=int, default=None)
+    parser.add_argument(
+        "--tls",
+        action="store_true",
+        help="use WSS — required for CONFIG_AIRKVM_TLS builds, which is the "
+        "real firmware's default. Implies --port 443 unless --port is given.",
+    )
+    parser.add_argument(
+        "--ca",
+        type=Path,
+        default=DEFAULT_CA,
+        help=f"CA cert to verify the dongle's TLS cert against (default: {DEFAULT_CA})",
+    )
+    parser.add_argument(
+        "--insecure",
+        action="store_true",
+        help="skip TLS certificate verification — for debugging only, never "
+        "the default, and this tool will say so every time it's used",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_type = sub.add_parser("type", help="type a string")
@@ -196,9 +271,17 @@ def main() -> int:
     p_type.add_argument(
         "--delay",
         type=float,
-        default=0.008,
-        help="seconds between keystrokes (default: 0.008)",
+        default=0.03,
+        help="seconds between keystrokes (default: 0.03)",
     )
+    # 30ms, not the 8ms this used to default to. A character is two HID
+    # reports (down, then up) and the interrupt endpoint accepts at most one
+    # per bInterval — 10ms in main/hid_out_usb.c — so ~50 chars/s is the
+    # hard ceiling and 8ms/char asked for 125. The firmware queues rather
+    # than reorders, but a sustained overrun fills the 64-deep queue and
+    # hid_out_submit() then drops frames; dropping a key-*up* leaves a key
+    # held on the target, which is the failure AGENTS.md §2 principle 4
+    # exists to prevent. Pace the sender instead.
 
     p_key = sub.add_parser("key", help="press a chord, e.g. ControlLeft+AltLeft+Delete")
     p_key.add_argument("combo")
@@ -211,13 +294,18 @@ def main() -> int:
     sub.add_parser("ping", help="check the socket answers")
 
     args = parser.parse_args()
+    port = args.port if args.port is not None else (443 if args.tls else 80)
+    if args.insecure:
+        print("--insecure: TLS certificate NOT verified", file=sys.stderr)
 
     try:
-        ws = WebSocket(args.host, args.port)
-    except (OSError, RuntimeError) as err:
+        ws = WebSocket(
+            args.host, port, tls=args.tls, ca=args.ca, insecure=args.insecure
+        )
+    except (OSError, RuntimeError, ssl.SSLError) as err:
         # A traceback here says nothing useful: the answer is almost always
         # "wrong host" or "the dongle isn't up".
-        print(f"can't reach {args.host}:{args.port} — {err}", file=sys.stderr)
+        print(f"can't reach {args.host}:{port} — {err}", file=sys.stderr)
         return 1
 
     try:
