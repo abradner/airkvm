@@ -408,7 +408,16 @@ static esp_err_t start_mdns(void) {
                       "mdns hostname failed");
   ESP_RETURN_ON_ERROR(mdns_instance_name_set("airkvm console"), TAG,
                       "mdns instance failed");
+  // Advertise what is actually being served. A TLS build listens on 443 and
+  // never on 80 — start_http() treats a TLS failure as fatal rather than
+  // falling back to plaintext (R-007) — so a hardcoded _http/80 record was
+  // simply false, pointing service browsers at a port nothing answers on.
+  // Mirrors the same #if in start_http(); issue #4.
+#if CONFIG_AIRKVM_TLS
+  return mdns_service_add(NULL, "_https", "_tcp", 443, NULL, 0);
+#else
   return mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+#endif
 }
 
 esp_err_t net_start(void) {
