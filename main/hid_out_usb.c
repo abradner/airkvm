@@ -1,9 +1,23 @@
-// UNVERIFIED — this file compiles and links for esp32s3, and nothing more.
-// Nothing here has enumerated on a real USB host: descriptor layout, endpoint
-// numbering, boot-protocol acceptance, and the report pacing below are all
-// hypotheses until an S3 arrives (AGENTS.md §4, last rule). The rest of the
-// firmware has been exercised on a C3 bench board, which by definition cannot
-// test this file — do not let the project's general "it works" leak onto it.
+// PARTLY VERIFIED — read the split carefully before trusting anything here.
+//
+// Verified on hardware 2026-09-04 (ESP32-S3-0.42 OLED into a macOS host):
+// the device enumerates, the descriptor layout and endpoint numbering below
+// are accepted, and keyboard reports are delivered and typed correctly —
+// 17 of 17 characters, in order, with the device's own event counter
+// advancing by exactly the number of intents sent. The report pacing in this
+// file was not merely unverified but wrong, and was corrected by that test
+// (AGENTS.md §9, entry 11).
+//
+// Still hypotheses, and not to be treated otherwise (AGENTS.md §4, last
+// rule): **boot-protocol acceptance by a BIOS/UEFI**, which is the claim the
+// whole project rests on and which no OS-booted host can test; behaviour on
+// any host other than macOS; and the mouse path, which has had no hardware
+// exercise at all — only the keyboard has.
+//
+// The C3 bench board cannot test any of this: its backend logs intents
+// instead of sending reports, so it cannot even lose one. Do not let either
+// the project's general "it works" or this file's new partial verification
+// leak onto the lines above that are still guesses.
 
 #include <string.h>
 
@@ -157,10 +171,21 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
 // tud_hid_n_ready() — Ctrl-down delivered, Ctrl-up discarded, modifier held on
 // someone's machine. Instead the task accumulates and emits at endpoint pace.
 //
-// The two report types accumulate differently, and the difference is the bug:
-//   keyboard  a pure function of hid_state, so the newest state supersedes any
-//             older one — coalesce to a dirty flag.
+// The two report types accumulate differently:
 //   mouse     transient deltas, so dropping one loses distance — sum them.
+//   keyboard  a *state*, not an event log — and that is exactly why it cannot
+//             be coalesced the way this comment used to claim. It said "the
+//             newest state supersedes any older one", which is true of the
+//             bitmap and false of the keypress: apply a key-down and its
+//             key-up in the same pass and the bitmap ends where it started,
+//             so the single report that follows says "nothing pressed" and
+//             the keystroke is lost outright. Over TCP a down/up pair almost
+//             always arrives together, so this dropped ~75% of typed
+//             characters on real hardware while the frames themselves all
+//             arrived (AGENTS.md §9, entry 11). The drain below therefore
+//             stops at a keyboard intent whenever a report is still pending,
+//             which costs one endpoint interval per state change and loses
+//             nothing.
 static bool s_kbd_dirty;
 static int32_t s_pending_dx, s_pending_dy;
 static int32_t s_pending_scroll_v, s_pending_scroll_h;
@@ -254,8 +279,38 @@ static void report_task(void *arg) {
     }
 
     // Apply everything already queued before emitting, so a burst collapses
-    // into the fewest reports that still convey it faithfully.
-    while (xQueueReceive(s_queue, &intent, 0) == pdTRUE) {
+    // into the fewest reports that still convey it faithfully — with one
+    // exception that is load-bearing: a keyboard intent is never applied on
+    // top of a keyboard state whose report has not gone out yet. Doing so
+    // silently destroys the keypress (see the note above pump_keyboard).
+    // Peek before receiving, so the intent we decline to apply stays queued
+    // in order for the next pass.
+    //
+    // When blocked, flush here rather than waiting for the pump below: if the
+    // endpoint is ready the report goes out immediately and the drain
+    // continues, so a burst of typing empties at endpoint pace within one
+    // pass instead of one intent per 2ms tick.
+    //
+    // KNOWN LIMITATION (issue #27). If the keyboard endpoint stays unready
+    // while the mouse endpoint does not, this break leaves the keyboard
+    // intent at the head of a queue *shared* with the mouse, so mouse intents
+    // behind it are unreachable and the pointer freezes. Normally the block
+    // lasts at most one endpoint interval, and the paths that would wedge it
+    // for longer — unplug, suspend — already reset the queue via
+    // tud_umount_cb/tud_suspend_cb. The real fix is separate keyboard and
+    // mouse queues, which is a change to the single-queue design AGENTS.md §4
+    // states, so it is proposed there rather than made here at the same time
+    // as a bug fix.
+    while (xQueuePeek(s_queue, &intent, 0) == pdTRUE) {
+      const bool is_keyboard = intent.type == AIRKVM_FRAME_KEY_DOWN ||
+                               intent.type == AIRKVM_FRAME_KEY_UP;
+      if (is_keyboard && s_kbd_dirty) {
+        pump_keyboard();
+        if (s_kbd_dirty) {
+          break;  // endpoint not ready; this intent waits its turn
+        }
+      }
+      (void)xQueueReceive(s_queue, &intent, 0);
       apply(&intent);
       if (s_release_pending) {
         break;  // handled at the top of the next iteration, ahead of the queue
