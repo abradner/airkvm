@@ -225,6 +225,32 @@ add rather than rewrite.
     on the old one return no data instead of raising, so a working board is indistinguishable from
     a dead one. The bridge watches the device inode to notice; do not "fix" this by catching
     exceptions alone, because there are none.
+- **Bootstrap OTA once and stop flashing over the wire.** The BOOT+RESET+bridge dance is only
+  needed to get an *OTA-capable* image on; after that every update goes over WiFi in ~60s with
+  the board untouched. Verified end to end 2026-09-04, in both directions (a changed image
+  applied, then the original restored). Set in a **local, never-committed** `sdkconfig` — both
+  are existing symbols, so edit `sdkconfig` directly and confirm in `build/config/sdkconfig.h`,
+  because a `SDKCONFIG_DEFAULTS` file cannot override either:
+
+  ```sh
+  CONFIG_AIRKVM_OTA_TEST_URL="http://<this-host>:8000/airkvm.bin"
+  CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
+  # then, from the build dir:  python3 -m http.server 8000 --bind 0.0.0.0
+  ```
+
+  Three things that are not obvious:
+  - **Every image you serve must keep the OTA config**, or the update self-reverts.
+    `confirm_boot_if_pending()` lives inside the same empty-URL gate that disables polling, so an
+    image without the URL boots, never calls `esp_ota_mark_app_valid_cancel_rollback()`, and the
+    bootloader rolls back on the next reset. Safe, but baffling if unexpected.
+  - **The HTTP access log is the diagnostic.** Each poll is a `GET /airkvm.bin`; a normal one
+    ends in a connection reset because the firmware reads only the header, compares
+    `app_elf_sha256`, and closes. An *off-cadence* poll (well under the 60s interval) means the
+    device rebooted — that is how you spot an applied update with no console.
+  - **This is a real widening of the trust boundary** (§2 principle 5): an unauthenticated
+    plain-HTTP fetch baked into the image means anyone on the LAN who can answer at that address
+    runs firmware on the dongle. Bench networks only, never committed, and never in anything
+    resembling a real build.
 - **Do not hand-roll the reset sequence for USB-Serial/JTAG parts.** Toggling DTR/RTS yourself
   lands the C3 in download mode (`boot:0x4 (DOWNLOAD)`) because DTR is the boot-mode line there.
   Use `esptool ... --after hard_reset run`, which knows the chip-specific sequence.
