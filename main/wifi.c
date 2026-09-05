@@ -152,11 +152,24 @@ void wifi_set_activity(enum wifi_activity activity) {
 
   const esp_err_t err = esp_wifi_set_ps(ps);
   if (err != ESP_OK) {
-    // Not fatal, and deliberately not retried: failing to enter a power-saving
-    // mode costs current, while failing to leave one costs latency. Neither is
-    // worth tearing down a working session over, and the next tier change gets
-    // another attempt anyway.
-    ESP_LOGW(TAG, "could not set power save mode (%s)", esp_err_to_name(err));
+    // Not fatal: failing to enter a power-saving mode costs current, failing
+    // to leave one costs latency, and neither is worth tearing down a working
+    // session over.
+    //
+    // But do not re-log it every time. ui_task starts before net_start(), and
+    // in the deliberately supported degraded mode where the network never
+    // comes up at all (app_main keeps HID alive without it), esp_wifi_set_ps()
+    // returns ESP_ERR_WIFI_NOT_INIT on every one of this task's 30ms ticks —
+    // 33 log lines a second, forever. Remember the failed tier so the warning
+    // is printed once per distinct failure, while still retrying whenever the
+    // operator's activity actually changes tier.
+    static enum wifi_activity last_failed;
+    static bool have_failed;
+    if (!have_failed || last_failed != activity) {
+      ESP_LOGW(TAG, "could not set power save mode (%s)", esp_err_to_name(err));
+      last_failed = activity;
+      have_failed = true;
+    }
     return;
   }
 

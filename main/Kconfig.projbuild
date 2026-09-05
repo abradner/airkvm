@@ -90,8 +90,15 @@ config AIRKVM_OTA_TEST_URL
 
 config AIRKVM_LOG_TAP
     bool "Serve the firmware log over plain HTTP (diagnostic builds only)"
+    depends on AIRKVM_TLS
     default n
     help
+        Requires AIRKVM_TLS, because it serves on port 80 and a non-TLS
+        console is already there (start_http in main/net.c). Without this
+        dependency the two race for the same port and which one you get is
+        a coin toss — the log tap is a diagnostic, so it must never be the
+        thing that breaks the console it is diagnosing.
+
         Captures ESP_LOG output into a ring buffer and serves it at
         http://<ip>/log on port 80, alongside whatever the console is doing.
 

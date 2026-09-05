@@ -21,14 +21,18 @@ void app_main(void) {
   status_init();
   ui_start();
 
-  // Self-contained: waits for WiFi on its own rather than depending on
-  // net_start() below. A no-op in every real build (dev-only OTA test hook,
-  // gated on AIRKVM_OTA_TEST_URL — see main/ota.c).
   // Diagnostic builds only; an inline no-op stub otherwise (logtap.h). Started
   // before net_start() so a failure *inside* net_start — which is what issue
   // #24 is about — is captured rather than missed.
-  logtap_capture();
+  if (logtap_capture() != ESP_OK) {
+    // Not fatal — but say so, because a diagnostic channel that is silently
+    // missing is worse than one that is obviously absent.
+    ESP_LOGW(TAG, "log capture unavailable");
+  }
 
+  // Self-contained: waits for WiFi on its own rather than depending on
+  // net_start() below. A no-op in every real build (dev-only OTA test hook,
+  // gated on AIRKVM_OTA_TEST_URL — see main/ota.c).
   ota_start();
 
   // Network first, then USB HID — and the order is load-bearing. On the
@@ -66,7 +70,9 @@ void app_main(void) {
 
   // Only now is there a network stack to bind to (esp_netif_init happens
   // inside net_start). No-op unless AIRKVM_LOG_TAP is set.
-  logtap_serve();
+  if (logtap_serve() != ESP_OK) {
+    ESP_LOGW(TAG, "log tap failed to serve");
+  }
 
   if (err == ESP_OK) {
     ESP_LOGI(TAG, "airkvm ready");

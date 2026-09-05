@@ -266,10 +266,18 @@ static void apply(const struct airkvm_intent *in) {
       s_pending_dy += in->move.dy;
       break;
     case AIRKVM_FRAME_MOUSE_BUTTON:
+      // Counts as activity for the same reason keys and motion do: it is the
+      // operator doing something. Without it, clicking without moving leaves
+      // the idle clock running and the radio drops to a saving tier in the
+      // middle of active use (wifi_set_activity, ui.c).
+      status_note_event("CLICK");
       hid_state_set_buttons(&s_state, in->button_mask);
       s_buttons_dirty = true;
       break;
     case AIRKVM_FRAME_MOUSE_SCROLL:
+      // Likewise: reading a long page is scroll-only input, and it should not
+      // look like an absent operator.
+      status_note_event("SCROLL");
       s_pending_scroll_v += in->scroll.vertical;
       s_pending_scroll_h += in->scroll.horizontal;
       break;

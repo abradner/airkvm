@@ -65,9 +65,12 @@ CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
 CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT=y
 CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
 
-# The console is the only TLS peer and it speaks TLS 1.2/1.3; dropping the
-# obsolete suites saves flash and removes downgrade surface.
-CONFIG_MBEDTLS_SSL_PROTO_TLS1_3=y
+# The console is the only TLS peer; dropping the obsolete suites saves flash
+# and removes downgrade surface. TLS 1.3 is deliberately NOT enabled here — see
+# the CONFIG_MBEDTLS_SSL_PROTO_TLS1_3=n stanza below and issue #24. This file
+# used to set it =y at this line, which a later =n silently overrode; two
+# contradicting assignments in one defaults file left a crash-inducing option
+# disabled only by ordering.
 
 # 1kHz scheduler ticks, not ESP-IDF's default 100Hz.
 #

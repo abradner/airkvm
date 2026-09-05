@@ -144,7 +144,11 @@ def find_keyboard(wait_s: float = 0.0) -> str:
 def listen(path: str, deadline: float, quiet: bool) -> str:
     """Collect typed characters until the deadline. Returns what was typed."""
     typed: list[str] = []
-    shift = False
+    # A *set* of held shift keycodes, not a boolean. With a boolean, holding
+    # both shifts and releasing either one clears it, so a following KeyA is
+    # transcribed as "a" while the target really typed "A" — a false pass in
+    # the direction that matters, since this tool exists to be believed.
+    shift_held: set[int] = set()
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
     except PermissionError:
@@ -170,12 +174,21 @@ def listen(path: str, deadline: float, quiet: bool) -> str:
                 if etype != EV_KEY:
                     continue
                 if code in SHIFT_KEYS:
-                    shift = value != KEY_RELEASE
+                    if value == KEY_RELEASE:
+                        shift_held.discard(code)
+                    else:
+                        shift_held.add(code)
                     continue
-                if value != KEY_PRESS:  # ignore releases and autorepeat
+                # Autorepeat (value 2) is a real character on the target: a key
+                # held long enough repeats, and this tool must not report one
+                # "a" when the target received twenty. Repeats therefore count.
+                # That is also the repeat-storm failure principle 4 names, so a
+                # verifier that silently swallowed them would hide exactly the
+                # bug it should catch.
+                if value == KEY_RELEASE:
                     continue
                 if code in KEYCODES:
-                    typed.append(KEYCODES[code][1 if shift else 0])
+                    typed.append(KEYCODES[code][1 if shift_held else 0])
                 elif code in MODIFIERS:
                     if not quiet:
                         print(f"  [{MODIFIERS[code]} down]", file=sys.stderr)
