@@ -1,5 +1,45 @@
 menu "airkvm"
 
+choice AIRKVM_BOARD
+    prompt "Target board"
+    default AIRKVM_BOARD_S3_OLED042 if IDF_TARGET_ESP32S3
+    default AIRKVM_BOARD_C3_EGG if IDF_TARGET_ESP32C3
+    help
+        Which physical board this image is for.
+
+        This is a separate axis from IDF_TARGET on purpose: two different
+        boards can share a chip. main/board.h used to key its pin map off
+        CONFIG_IDF_TARGET_*, which worked only while there was at most one
+        board per chip — a second ESP32-S3 board collides on that arm and
+        silently inherits the first one's pins.
+
+config AIRKVM_BOARD_S3_OLED042
+    bool "ESP32-S3-0.42 OLED supermini (the dongle)"
+    depends on IDF_TARGET_ESP32S3
+    help
+        The shipping dongle. SSD1306 72x40 status panel on I2C, no LED.
+
+config AIRKVM_BOARD_S3_LCD147
+    bool "Waveshare ESP32-S3-LCD-1.47B"
+    depends on IDF_TARGET_ESP32S3
+    help
+        ST7789 172x320 IPS LCD on SPI, 16MB flash, 8MB octal PSRAM, WS2812
+        RGB LED, microSD, QMI8658 IMU. Only the LCD is driven today.
+
+        Needs sdkconfig.lcd147 layered on top of sdkconfig.defaults for its
+        flash size — see mise.toml's build-lcd147 task. Selecting this board
+        alone is not enough.
+
+config AIRKVM_BOARD_C3_EGG
+    bool "ESP32-C3 \"egg\" bench board"
+    depends on IDF_TARGET_ESP32C3
+    help
+        Bench board only. Cannot be a USB keyboard (no OTG device
+        controller), so it pairs with the log HID backend and exercises
+        everything except being a keyboard.
+
+endchoice
+
 choice AIRKVM_HID_BACKEND
     prompt "HID output backend"
     default AIRKVM_HID_BACKEND_USB if IDF_TARGET_ESP32S3 || IDF_TARGET_ESP32S2

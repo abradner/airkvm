@@ -33,13 +33,21 @@ static const char *TAG = "ui";
 // always registers.
 #define DEBOUNCE_MS 40
 
-// The S3 dongle has no LED (BOARD_HAS_LED 0 in board.h) to give a passive
-// "still alive" signal, so the screensaver's motion stands in for one after
-// the operator has walked away. (The C3 bench board does have one — this
-// still runs there too, harmlessly, since it costs nothing on a board that
-// already has its own indicator.)
+// Neither shipping board drives an LED (BOARD_HAS_LED 0 in board.h) to give a
+// passive "still alive" signal, so the screensaver's motion stands in for one
+// after the operator has walked away. The LCD board does have an RGB LED
+// physically, but it is a WS2812 and indicator.c is LEDC-PWM monochrome, so it
+// is left dark rather than half-driven — which keeps this rationale true for
+// that board too, for now. (The C3 bench board does have a working LED — this
+// still runs there, harmlessly, since it costs nothing on a board that already
+// has its own indicator.)
 #define SCREENSAVER_IDLE_MS (5 * 60 * 1000)
+#if BOARD_CELL_H >= 16
+// 3 pixels on the LCD is 0.3mm and reads as a dead pixel, not a sign of life.
+#define SCREENSAVER_SIZE 8
+#else
 #define SCREENSAVER_SIZE 3
+#endif
 
 // How long after the last input the radio stays at full speed. Short, because
 // this is the tier that costs current: the point is to be at full speed while
@@ -62,11 +70,11 @@ static void draw_screensaver(void) {
   display_clear();
   s_ss_x += s_ss_dx;
   s_ss_y += s_ss_dy;
-  if (s_ss_x <= 0 || s_ss_x >= BOARD_OLED_WIDTH - SCREENSAVER_SIZE) {
+  if (s_ss_x <= 0 || s_ss_x >= DISPLAY_WIDTH - SCREENSAVER_SIZE) {
     s_ss_dx = -s_ss_dx;
     s_ss_x += s_ss_dx;
   }
-  if (s_ss_y <= 0 || s_ss_y >= BOARD_OLED_HEIGHT - SCREENSAVER_SIZE) {
+  if (s_ss_y <= 0 || s_ss_y >= DISPLAY_HEIGHT - SCREENSAVER_SIZE) {
     s_ss_dy = -s_ss_dy;
     s_ss_y += s_ss_dy;
   }
@@ -88,22 +96,42 @@ static int rssi_bars(int8_t rssi) {
   return 1;
 }
 
-// Laid out in pixels rather than rows because the address is drawn at double
-// height and everything else is not. 40 pixels, spent deliberately:
+// Laid out in pixels rather than rows because the address is drawn enlarged
+// and everything else is not. Per board, because the two panels are different
+// shapes rather than one scaled: the OLED spends 40 pixels with nothing to
+// spare, the LCD has 172 and can afford air between rows.
 //
+// Every value except the address must be a whole multiple of the cell height:
+// display_text takes a row, so a value that is not a multiple is silently
+// snapped down and lands somewhere this comment does not say.
+#if BOARD_DISPLAY_ST7789
+//   y 0..15    header     identity + who holds the keyboard     (row 0)
+//   y 24..55   ADDRESS    2x, the one thing you read            (32px)
+//   y 64..79   network    SSID + signal bars                    (row 4)
+//   y 96..111  target     USB state and the event counter       (row 6)
+//   y 128..143 debug      only when physically enabled (R-006)  (row 8)
+#define UI_Y_ADDRESS 24
+#define UI_Y_NETWORK 64
+#define UI_Y_TARGET 96
+#define UI_Y_DEBUG 128
+#else
 //   y 0..5    header      identity + who holds the keyboard      (6px)
 //   y 7..16   ADDRESS     double height, the one thing you read  (10px)
 //   y 18..23  network     SSID + signal bars                     (6px)
 //   y 24..29  target      USB state and the event counter        (6px)
 //   y 30..35  debug       only when physically enabled (R-006)   (6px)
-//
-// The lower three are multiples of the 6px cell so they land exactly where
-// this comment says; display_text takes a row, and a value that is not a
-// multiple would be silently snapped down.
 #define UI_Y_ADDRESS 7
 #define UI_Y_NETWORK 18
 #define UI_Y_TARGET 24
 #define UI_Y_DEBUG 30
+#endif
+_Static_assert(UI_Y_NETWORK % DISPLAY_CELL_H == 0 &&
+                   UI_Y_TARGET % DISPLAY_CELL_H == 0 &&
+                   UI_Y_DEBUG % DISPLAY_CELL_H == 0,
+               "UI_Y_* rows must be whole multiples of the cell height, or "
+               "display_text silently snaps them somewhere else");
+_Static_assert(UI_Y_DEBUG + DISPLAY_CELL_H <= DISPLAY_HEIGHT,
+               "layout runs off the bottom of the panel");
 
 static void draw(const struct status_snapshot *s) {
   display_clear();
@@ -111,7 +139,7 @@ static void draw(const struct status_snapshot *s) {
   // Identity, and who holds the keyboard — the thing you check first when the
   // console feels unresponsive, so it sits top-right.
   display_text(0, 0, "AIRKVM");
-  display_text(11, 0, s->client_connected ? "BOUND" : "IDLE");
+  display_text(DISPLAY_COLS - 7, 0, s->client_connected ? "BOUND" : "IDLE");
 
   // The address, at double height: this is what the screen is *for*, and at
   // single height it was technically legible rather than actually readable.
@@ -121,7 +149,8 @@ static void draw(const struct status_snapshot *s) {
 
   if (s->wifi_connected) {
     display_text(0, UI_Y_NETWORK / DISPLAY_CELL_H, s->ssid);
-    display_bar(14, UI_Y_NETWORK / DISPLAY_CELL_H, 4, rssi_bars(s->rssi));
+    display_bar(DISPLAY_COLS - 4, UI_Y_NETWORK / DISPLAY_CELL_H, 4,
+                rssi_bars(s->rssi));
   }
 
   // Whether a target is actually listening, and proof that input is arriving —
@@ -138,6 +167,14 @@ static void draw(const struct status_snapshot *s) {
   // Debug row. Off by default and only reachable by physically pressing the
   // button on the device (R-006) — this shows what is being typed, so it must
   // never be enable-able from the network.
+  //
+  // Rendered at the smallest cell the panel has, never enlarged, and that is a
+  // security parameter rather than a layout one: R-006's argument is that
+  // anyone who can press the button could already unplug the device, which
+  // silently assumed the row is only legible from arm's reach. On the LCD the
+  // smallest renderable glyph is already 2.5x the OLED's linear size, so the
+  // assumption is weaker here and must not be weakened further. Do not "fix"
+  // this to match the other rows.
   if (s->debug) {
     display_text(0, UI_Y_DEBUG / DISPLAY_CELL_H,
                  s->last_event[0] ? s->last_event : "DEBUG ON");

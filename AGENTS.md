@@ -82,7 +82,7 @@ A conflict with a principle is a stop-and-check, never something to quietly work
 | USB stack | TinyUSB via `esp_tinyusb` | Composite HID: boot keyboard + relative mouse |
 | Network | `esp_http_server` (WebSocket) + `mdns` | Single origin serves console and socket |
 | Console | Vanilla HTML/CSS/JS, no build step | Embedded in firmware via `EMBED_FILES`; no npm, no bundler, no CDN |
-| Display | SSD1306 72×40 over I2C | `main/display.c`; status only (IP, mDNS name, link state). Renders correctly on the real S3 dongle's panel — pins and 180° rotation confirmed 2026-08-31 |
+| Display | SSD1306 72×40 over I2C, or ST7789 172×320 over SPI | One backend per board behind `main/display.h` (`display_ssd1306.c` / `display_st7789.c`), sharing the drawing layer in `main/canvas.h`. Status only (IP, mDNS name, link state). The OLED renders correctly on the real S3 dongle — pins and 180° rotation confirmed 2026-08-31. **The ST7789 has never rendered on hardware** (R-005) |
 | Host tooling | Python 3 (stdlib only) | `tools/poke.py` drives a dongle from a terminal; not shipped to users |
 | Testing | CMake/ctest + plain C assertions | Keymap, protocol codec, and HID state are pure and host-tested — `test/host/` |
 | Deployment | `idf.py flash` over USB-C | No shipping OTA path yet — `main/ota.c` is a throwaway, URL-gated dev test hook, empty (no-op) in every real build. See §7 |
@@ -302,6 +302,46 @@ add rather than rewrite.
     *new* symbol appears to prove defaults files work, because for new symbols they do. To flip
     an existing value, edit `sdkconfig` directly (or `mise run config`), then confirm in
     `build/config/sdkconfig.h` — the header the compiler actually reads is the only real proof.
+- **A git worktree does not get its own ESP-IDF, and must not clone one.** `mise.toml` derives
+  `IDF_PATH` from `{{config_root}}`, which in a worktree is the worktree — so `export.sh` fails
+  with "No such file or directory" and `mise run setup` would happily clone a second ~4GB
+  toolchain. Symlink the main checkout's instead, once per worktree:
+
+  ```sh
+  ln -sfn ~/code/airkvm/.esp-idf .esp-idf && ln -sfn ~/code/airkvm/.esp-idf-tools .esp-idf-tools
+  ```
+
+  Both are gitignored. The build then prints a harmless `IDF_PATH is changed from ...` warning as
+  it resolves the symlink. Worktrees also need `mise trust` and their own `sdkconfig.local`
+  (credentials are per-machine and gitignored, so a fresh worktree has none).
+- **An S3 that boots to `waiting for download` has one of two unrelated causes, and the
+  strapping register tells you which in one command.** Do not guess, and do not assume it is the
+  flash — a verified write plus `boot:0x0 (DOWNLOAD(USB/UART0))` is the ROM reading GPIO0 at
+  reset, before any of your code exists.
+
+  ```sh
+  esptool --port $PORT --before no_reset --after no_reset read_mem 0x60004038  # GPIO_STRAP_REG
+  esptool --port $PORT --before no_reset --after no_reset read_mem 0x6000812C  # RTC_CNTL_OPTION1
+  ```
+
+  Bit 3 of `GPIO_STRAP_REG` set means "not download mode". **Clear means GPIO0 is physically
+  low** — a held or stuck BOOT button, which no amount of software fixes. Bit 0 of
+  `RTC_CNTL_OPTION1_REG` is `FORCE_DOWNLOAD_BOOT`, a retention bit esptool sets that survives
+  reset; `esptool --after hard_reset` clears it, and a power cycle always does. Sanity-check the
+  read path first (`read_mem 0x40000000` must return non-zero ROM code) — an all-zero register
+  read is exactly what a broken read looks like too. Observed 2026-09-06: strap `0x00000000`
+  across repeated reads with the force bit clear, i.e. a stuck BOOT button, diagnosed without
+  touching the board.
+- **Disabling a USB hub port does not power-cycle the device.** `echo 1 >
+  /sys/bus/usb/devices/<hub>:1.0/<hub>-portN/disable` (root) does drop the device off the bus and
+  re-enumerate it on re-enable, and it looks like a power cycle in `dmesg` — but the cheap hubs
+  here have no per-port power switching, so VBUS never drops and the chip keeps its state. It is
+  not a substitute for unplugging, and `uhubctl` cannot help on a hub without PPPS either.
+- **Do not open the serial port with pyserial while setting DTR/RTS.** Same root cause as the
+  hand-rolled-reset entry below, one level up: pyserial asserts DTR on open by default, DTR is
+  the boot-mode line on USB-Serial/JTAG parts, and the board lands in download mode the moment
+  you attach. Construct with `port=None`, set `dtr = rts = False`, assign `.port`, then `.open()`
+  — or just use `idf.py monitor`.
 - **`tools/serial_bridge.py` goes stale every time the board changes USB mode — restart it.**
   Seen ~8 times in one evening: after any flash whose image moved the board between USB HID
   (TinyUSB) and USB-Serial/JTAG, in either direction, the next esptool connect failed with
@@ -658,6 +698,36 @@ code is written.*
     serial, which a HID build does not have; the network log tap (`AIRKVM_LOG_TAP`) could not
     help because its ring buffer is RAM and the reboot clears it. Two channels, each blind to a
     different failure — keep both, and know which one a given failure will survive.
+
+14. **Generalising a hardcoded constant hides three different constants in one number, and only
+    a rendered picture finds them.** Extracting the 0.42" panel's drawing code into a shared
+    `canvas.h` for a second board meant replacing literals with font metrics. The 3x5 font's
+    numbers are 3 (glyph width), 4 (horizontal advance), 5 (glyph height) and 6 (line pitch) —
+    and the original code used them interchangeably in places where they happened to coincide or
+    where the difference did not show. Three separate bugs came out of that, each of which
+    compiled, linked and passed a build:
+    *(a)* `display_bar()` wrote `row * 6` while `display_text()` went through the cell macro, so
+    the two would have disagreed the moment a board changed cell size. Caught by reading, before
+    it ran.
+    *(b)* The 8x16 font's descriptor omitted `line_h` entirely, leaving it 0 — every bar would
+    have been drawn at y=0, on top of the header. Caught by a host test asserting each font's
+    metrics against its board's grid, within seconds of that test existing.
+    *(c)* `canvas_bar()` drew each cell `glyph_w` wide at `advance` pitch. On the 3x5 font that
+    leaves a 1px gap and the bar reads as four boxes; on the 8x16, glyph_w == advance == 8, so
+    every border merged and the signal bar became one solid block. **Nothing caught this but
+    looking at a picture** — it is not a crash, not an overflow, and every assertion about
+    position still held. The fix is `advance - 1`, which is *exactly* `glyph_w` for the 3x5 font
+    and therefore provably changes nothing on the shipping board.
+    **General rules.** *(1) When you replace a literal with a named quantity, enumerate every
+    distinct quantity that literal was standing for, and check the ones that are equal by
+    coincidence — those are where the next board diverges silently.* *(2) For anything whose
+    correctness is visual, build a host renderer before building the hardware.*
+    `tools/preview_ui.py` draws the real font tables at the real layout offsets into a PNG; it
+    found (c) in one look, and it exists because the panel was unavailable, which turned out to
+    be the more useful constraint. *(3) A golden test against the pre-change implementation is
+    what makes an extraction like this safe to do at all* — `test/host/test_canvas.c` compares
+    against a framebuffer captured by compiling the ORIGINAL `display.c` from git, so "the
+    refactor changed no pixel on the working board" is a check rather than a claim.
 
 ## 10. Maintaining This Document
 

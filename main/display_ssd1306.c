@@ -1,8 +1,8 @@
-#include "display.h"
-
 #include <string.h>
 
 #include "board.h"
+#include "canvas.h"
+#include "display.h"
 #include "esp_log.h"
 #include "oled_geometry.h"
 
@@ -54,80 +54,15 @@ _Static_assert(
 
 static i2c_master_dev_handle_t s_dev;
 static bool s_present;
-static uint8_t s_fb[BOARD_OLED_WIDTH * PAGES];
-
-// 3x5 glyphs, one byte per column, bit 0 = top row. Covers space through '_'
-// (ASCII 32..95); lowercase is folded to uppercase at draw time, which costs
-// nothing here and halves the table.
-//
-// Deliberately hand-built rather than generated: at this size the difference
-// between a readable 6 and an unreadable one is a single pixel, and the digits
-// are what this screen exists to show.
-static const uint8_t k_font[][3] = {
-    {0x00, 0x00, 0x00},  // 32 space
-    {0x00, 0x17, 0x00},  // 33 !
-    {0x03, 0x00, 0x03},  // 34 "
-    {0x1F, 0x0A, 0x1F},  // 35 #
-    {0x16, 0x1F, 0x0D},  // 36 $
-    {0x19, 0x04, 0x13},  // 37 %
-    {0x0A, 0x15, 0x1A},  // 38 &
-    {0x00, 0x03, 0x00},  // 39 '
-    {0x00, 0x0E, 0x11},  // 40 (
-    {0x11, 0x0E, 0x00},  // 41 )
-    {0x0A, 0x04, 0x0A},  // 42 *
-    {0x04, 0x0E, 0x04},  // 43 +
-    {0x10, 0x08, 0x00},  // 44 ,
-    {0x04, 0x04, 0x04},  // 45 -
-    {0x00, 0x10, 0x00},  // 46 .
-    {0x10, 0x04, 0x01},  // 47 /
-    {0x1F, 0x11, 0x1F},  // 48 0
-    {0x12, 0x1F, 0x10},  // 49 1
-    {0x1D, 0x15, 0x17},  // 50 2
-    {0x15, 0x15, 0x1F},  // 51 3
-    {0x07, 0x04, 0x1F},  // 52 4
-    {0x17, 0x15, 0x1D},  // 53 5
-    {0x1F, 0x15, 0x1D},  // 54 6
-    {0x01, 0x01, 0x1F},  // 55 7
-    {0x1F, 0x15, 0x1F},  // 56 8
-    {0x17, 0x15, 0x1F},  // 57 9
-    {0x00, 0x0A, 0x00},  // 58 :
-    {0x10, 0x0A, 0x00},  // 59 ;
-    {0x04, 0x0A, 0x11},  // 60 <
-    {0x0A, 0x0A, 0x0A},  // 61 =
-    {0x11, 0x0A, 0x04},  // 62 >
-    {0x01, 0x15, 0x03},  // 63 ?
-    {0x1F, 0x15, 0x17},  // 64 @
-    {0x1F, 0x05, 0x1F},  // 65 A
-    {0x1F, 0x15, 0x1E},  // 66 B
-    {0x1F, 0x11, 0x11},  // 67 C
-    {0x1F, 0x11, 0x0E},  // 68 D
-    {0x1F, 0x15, 0x15},  // 69 E
-    {0x1F, 0x05, 0x05},  // 70 F
-    {0x1F, 0x11, 0x1D},  // 71 G
-    {0x1F, 0x04, 0x1F},  // 72 H
-    {0x11, 0x1F, 0x11},  // 73 I
-    {0x18, 0x10, 0x1F},  // 74 J
-    {0x1F, 0x04, 0x1B},  // 75 K
-    {0x1F, 0x10, 0x10},  // 76 L
-    {0x1F, 0x02, 0x1F},  // 77 M
-    {0x1F, 0x06, 0x1F},  // 78 N
-    {0x1F, 0x11, 0x1F},  // 79 O
-    {0x1F, 0x05, 0x07},  // 80 P
-    {0x0F, 0x11, 0x1F},  // 81 Q
-    {0x1F, 0x05, 0x17},  // 82 R
-    {0x17, 0x15, 0x1D},  // 83 S
-    {0x01, 0x1F, 0x01},  // 84 T
-    {0x1F, 0x10, 0x1F},  // 85 U
-    {0x0F, 0x10, 0x0F},  // 86 V
-    {0x1F, 0x08, 0x1F},  // 87 W
-    {0x1B, 0x04, 0x1B},  // 88 X
-    {0x03, 0x1C, 0x03},  // 89 Y
-    {0x19, 0x15, 0x13},  // 90 Z
-    {0x00, 0x1F, 0x11},  // 91 [
-    {0x01, 0x04, 0x10},  // 92 backslash
-    {0x11, 0x1F, 0x00},  // 93 ]
-    {0x02, 0x01, 0x02},  // 94 ^
-    {0x10, 0x10, 0x10},  // 95 _
+// The canvas packs pixels exactly as this controller wants them (8 rows per
+// byte, stride = width), so s_bits is handed to the panel unmodified — the
+// shared drawing layer costs no conversion here.
+static uint8_t s_bits[BOARD_OLED_WIDTH * PAGES];
+static struct canvas s_canvas = {
+    .bits = s_bits,
+    .w = BOARD_OLED_WIDTH,
+    .h = BOARD_OLED_HEIGHT,
+    .font = NULL,  // set in display_init once canvas_font3x5 is linked in
 };
 
 static esp_err_t send_cmd(const uint8_t *cmds, size_t n) {
@@ -142,17 +77,10 @@ static esp_err_t send_cmd(const uint8_t *cmds, size_t n) {
 }
 
 void display_pixel(int x, int y, bool on) {
-  if (!s_present || x < 0 || x >= BOARD_OLED_WIDTH || y < 0 ||
-      y >= BOARD_OLED_HEIGHT) {
+  if (!s_present) {
     return;
   }
-  uint8_t *cell = &s_fb[(y / 8) * BOARD_OLED_WIDTH + x];
-  const uint8_t bit = 1u << (y % 8);
-  if (on) {
-    *cell |= bit;
-  } else {
-    *cell &= (uint8_t)~bit;
-  }
+  canvas_pixel(&s_canvas, x, y, on);
 }
 
 esp_err_t display_init(void) {
@@ -223,6 +151,7 @@ esp_err_t display_init(void) {
     i += chunk;
   }
 
+  s_canvas.font = &canvas_font3x5;
   s_present = true;
   display_clear();
   display_flush();
@@ -235,65 +164,33 @@ bool display_present(void) {
 }
 
 void display_clear(void) {
-  memset(s_fb, 0, sizeof(s_fb));
-}
-
-// scale_y of 2 draws each glyph row twice, doubling the height without
-// touching the width (see display_text_tall in the header for why).
-static void draw_text(int x, int y, const char *text, int scale_y) {
-  if (!s_present || text == NULL) {
-    return;
-  }
-  for (const char *p = text; *p; p++) {
-    if (x + 3 > BOARD_OLED_WIDTH) {
-      return;  // clip rather than wrap
-    }
-    char c = *p;
-    if (c >= 'a' && c <= 'z') {
-      c = (char)(c - 'a' + 'A');
-    }
-    if (c < 32 || c > 95) {
-      c = '?';
-    }
-    const uint8_t *glyph = k_font[c - 32];
-    for (int gx = 0; gx < 3; gx++) {
-      for (int gy = 0; gy < 5; gy++) {
-        if (glyph[gx] & (1u << gy)) {
-          for (int rep = 0; rep < scale_y; rep++) {
-            display_pixel(x + gx, y + gy * scale_y + rep, true);
-          }
-        }
-      }
-    }
-    x += 4;
-  }
+  canvas_clear(&s_canvas);
 }
 
 void display_text(int col, int row, const char *text) {
-  draw_text(col * DISPLAY_CELL_W, row * DISPLAY_CELL_H, text, 1);
+  if (!s_present) {
+    return;
+  }
+  canvas_text(&s_canvas, col * DISPLAY_CELL_W, row * DISPLAY_CELL_H, text, 1,
+              1);
 }
 
 void display_text_tall(int col, int y_px, const char *text) {
-  draw_text(col * DISPLAY_CELL_W, y_px, text, 2);
+  if (!s_present) {
+    return;
+  }
+  // Stretched vertically only on this panel — see display.h. The column origin
+  // is deliberately *not* scaled with it, so a tall line starts in the same
+  // place a normal one would.
+  canvas_text(&s_canvas, col * DISPLAY_CELL_W, y_px, text, BOARD_TALL_SX,
+              BOARD_TALL_SY);
 }
 
 void display_bar(int col, int row, int width, int filled) {
   if (!s_present) {
     return;
   }
-  const int x0 = col * 4;
-  const int y0 = row * 6;
-  for (int i = 0; i < width; i++) {
-    const bool on = i < filled;
-    for (int gx = 0; gx < 3; gx++) {
-      for (int gy = 0; gy < 5; gy++) {
-        // Unfilled cells keep an outline so the bar's full length stays
-        // visible; an empty gap reads as "no signal data" rather than "weak".
-        const bool edge = gy == 0 || gy == 4 || gx == 0 || gx == 2;
-        display_pixel(x0 + i * 4 + gx, y0 + gy, on || edge);
-      }
-    }
-  }
+  canvas_bar(&s_canvas, col, row, width, filled, 1, 1);
 }
 
 void display_flush(void) {
@@ -314,7 +211,7 @@ void display_flush(void) {
     }
     uint8_t row[1 + BOARD_OLED_WIDTH];
     row[0] = 0x40;  // control byte: data follows
-    memcpy(row + 1, &s_fb[page * BOARD_OLED_WIDTH], BOARD_OLED_WIDTH);
+    memcpy(row + 1, &s_bits[page * BOARD_OLED_WIDTH], BOARD_OLED_WIDTH);
     if (i2c_master_transmit(s_dev, row, sizeof(row), 100) != ESP_OK) {
       return;
     }

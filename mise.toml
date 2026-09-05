@@ -76,6 +76,29 @@ run = """
 idf.py -B build-bench -DSDKCONFIG=sdkconfig.bench.generated -p "$PORT" flash monitor
 """
 
+[tasks.build-lcd147]
+shell = "bash -c"
+description = "Build the Waveshare ESP32-S3-LCD-1.47B image (ST7789, 16MB)"
+# Same shape as build-bench, minus -DIDF_TARGET: both S3 boards are esp32s3, so
+# the Kconfig board symbol is the only thing telling them apart. The separate
+# -DSDKCONFIG is mandatory rather than tidy — a defaults file cannot change a
+# symbol an existing sdkconfig already holds (AGENTS.md §6.1), so sharing the
+# dongle's generated config would silently build this board at 4MB.
+run = """
+. "$IDF_PATH/export.sh" >/dev/null
+idf.py -B build-lcd147 \
+  -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.lcd147;sdkconfig.local" \
+  -DSDKCONFIG=sdkconfig.lcd147.generated build
+"""
+
+[tasks.flash-lcd147]
+shell = "bash -c"
+description = "Flash + monitor the ESP32-S3-LCD-1.47B"
+run = """
+. "$IDF_PATH/export.sh" >/dev/null
+idf.py -B build-lcd147 -DSDKCONFIG=sdkconfig.lcd147.generated -p "$PORT" flash monitor
+"""
+
 [tasks.flash]
 shell = "bash -c"
 description = "Flash and monitor (board must be in bootloader mode — see AGENTS.md §6.1)"
