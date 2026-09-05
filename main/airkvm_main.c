@@ -6,6 +6,7 @@
 
 #include "esp_log.h"
 #include "hid_out.h"
+#include "logtap.h"
 #include "net.h"
 #include "ota.h"
 #include "status.h"
@@ -19,6 +20,15 @@ void app_main(void) {
   // network happens to come up.
   status_init();
   ui_start();
+
+  // Diagnostic builds only; an inline no-op stub otherwise (logtap.h). Started
+  // before net_start() so a failure *inside* net_start — which is what issue
+  // #24 is about — is captured rather than missed.
+  if (logtap_capture() != ESP_OK) {
+    // Not fatal — but say so, because a diagnostic channel that is silently
+    // missing is worse than one that is obviously absent.
+    ESP_LOGW(TAG, "log capture unavailable");
+  }
 
   // Self-contained: waits for WiFi on its own rather than depending on
   // net_start() below. A no-op in every real build (dev-only OTA test hook,
@@ -57,6 +67,12 @@ void app_main(void) {
              esp_err_to_name(err));
   }
   ESP_ERROR_CHECK(hid_out_start());
+
+  // Only now is there a network stack to bind to (esp_netif_init happens
+  // inside net_start). No-op unless AIRKVM_LOG_TAP is set.
+  if (logtap_serve() != ESP_OK) {
+    ESP_LOGW(TAG, "log tap failed to serve");
+  }
 
   if (err == ESP_OK) {
     ESP_LOGI(TAG, "airkvm ready");

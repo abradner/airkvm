@@ -88,4 +88,30 @@ config AIRKVM_OTA_TEST_URL
         never commit it. Without it every poll fails before touching the
         network (ESP_ERR_INVALID_ARG), which looks like a network problem.
 
+config AIRKVM_LOG_TAP
+    bool "Serve the firmware log over plain HTTP (diagnostic builds only)"
+    depends on AIRKVM_TLS
+    default n
+    help
+        Requires AIRKVM_TLS, because it serves on port 80 and a non-TLS
+        console is already there (start_http in main/net.c). Without this
+        dependency the two race for the same port and which one you get is
+        a coin toss — the log tap is a diagnostic, so it must never be the
+        thing that breaks the console it is diagnosing.
+
+        Captures ESP_LOG output into a ring buffer and serves it at
+        http://<ip>/log on port 80, alongside whatever the console is doing.
+
+        Exists because this board can reach a state with no readable log at
+        all: a USB HID build has TinyUSB on the only port, and after a soft
+        reboot the USB PHY does not return to USB-Serial/JTAG without a
+        physical power cycle. When the thing being debugged is why the console
+        will not start (issue #24), the network is the only channel left.
+
+        NEVER enable this in anything resembling a real build. It serves
+        unfiltered firmware logs to any unauthenticated LAN client, which is
+        strictly worse than R-001: R-001 lets someone type at the target, this
+        lets them read what the device is doing. The keystroke debug row
+        (R-006) is gated on physical presence for exactly this reason.
+
 endmenu

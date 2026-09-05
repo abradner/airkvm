@@ -14,6 +14,7 @@
 #include "freertos/task.h"
 #include "indicator.h"
 #include "status.h"
+#include "wifi.h"
 
 static const char *TAG = "ui";
 
@@ -39,6 +40,13 @@ static const char *TAG = "ui";
 // already has its own indicator.)
 #define SCREENSAVER_IDLE_MS (5 * 60 * 1000)
 #define SCREENSAVER_SIZE 3
+
+// How long after the last input the radio stays at full speed. Short, because
+// this is the tier that costs current: the point is to be at full speed while
+// someone is actually typing and to stop paying for it a few seconds later.
+// Anything the operator does resets it, so an active session never drops out
+// of it mid-keystroke.
+#define RADIO_ACTIVE_MS 5000
 
 // Tracks a button-triggered wake separately from status.c's last_activity_us,
 // which is specifically "an input event arrived from the client" — the thing
@@ -209,6 +217,16 @@ static void ui_task(void *arg) {
 
     poll_button(screensaver_active);
     indicator_tick();
+
+    // Let the radio follow the operator. This task already knows how long it
+    // has been since input arrived, which is exactly the signal, so the tier
+    // is decided here — but what it *means* for the radio lives in wifi.c.
+    // The screensaver threshold is reused deliberately rather than given its
+    // own constant: "the screen has given up on you" and "the radio can doze"
+    // are the same judgement, and two constants would drift apart.
+    wifi_set_activity(screensaver_active           ? WIFI_ACTIVITY_IDLE
+                      : idle_ms >= RADIO_ACTIVE_MS ? WIFI_ACTIVITY_WAITING
+                                                   : WIFI_ACTIVITY_ACTIVE);
 
     if (tick % HEALTH_EVERY_TICKS == 0) {
       struct status_snapshot health;
