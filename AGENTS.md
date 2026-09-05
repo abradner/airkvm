@@ -633,6 +633,32 @@ code is written.*
     instead of a question for a human — which is what made a throughput regression visible at all
     rather than being discovered weeks later as "typing feels slow".
 
+13. **ESP-IDF's TLS 1.3 *server* crashes this firmware, and the client cannot avoid it.** The
+    HTTPS console accepted TCP on 443, answered with nothing, and reset — for days. It presented
+    as a certificate or resource problem and was neither: every handshake took a NULL dereference
+    (`LoadProhibited`, `EXCVADDR 0x00000000`) in `ssl_parse_record_header`, reached from
+    `ssl_tls13_process_client_hello` with `ssl->conf` NULL, and rebooted the board. Because the
+    device reboots, the client sees only a reset — no alert, no log, no server. Fix:
+    `CONFIG_MBEDTLS_SSL_PROTO_TLS1_3=n` in `sdkconfig.defaults`. The console is a LAN page for a
+    browser that has imported our CA; 1.2 is sufficient, and dropping 1.3 also saves ~55KB.
+    **Four general rules, each of which cost real time here.**
+    *(a) Forcing the client to an older protocol does not keep the server out of the newer code
+    path.* `openssl -tls1_2` still crashed it, because the server begins in the 1.3 state machine
+    and negotiates down. A client-side restriction is not a server-side one.
+    *(b) Eliminate by construction, not by plausibility.* Certificates were the obvious suspect
+    and stayed suspect through several rounds. What actually killed the hypothesis was compiling
+    the *exact* vendored mbedTLS (3.6.3) natively and running the firmware's own calls with the
+    firmware's own byte lengths — parse OK, key OK, pair matches. A native harness for anything
+    host-portable is worth building early; it is minutes, and it is proof rather than argument.
+    *(c) Your instrument can be the thing lying to you.* `openssl s_client </dev/null` closes
+    stdin immediately, and against a slow ESP32 handshake that produced
+    `MBEDTLS_ERR_SSL_CONN_EOF` — a real error code, caused entirely by the test. Re-run with the
+    connection held open before believing any handshake error.
+    *(d) A crash is invisible when it takes the log with it.* The panic could only be read over
+    serial, which a HID build does not have; the network log tap (`AIRKVM_LOG_TAP`) could not
+    help because its ring buffer is RAM and the reboot clears it. Two channels, each blind to a
+    different failure — keep both, and know which one a given failure will survive.
+
 ## 10. Maintaining This Document
 
 Meta-rules for editing this file — they exist because each was violated somewhere first:

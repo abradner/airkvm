@@ -83,3 +83,18 @@ CONFIG_MBEDTLS_SSL_PROTO_TLS1_3=y
 # longer spinning (see REPORT_TICK_MS in main/hid_out_usb.c), which is what
 # made this granularity necessary to state explicitly rather than inherit.
 CONFIG_FREERTOS_HZ=1000
+
+# TLS 1.2 only. ESP-IDF enables mbedTLS's TLS 1.3 by default, and its *server*
+# path crashes this firmware: every handshake took a NULL dereference
+# (LoadProhibited, EXCVADDR 0x00000000) inside ssl_parse_record_header, reached
+# from ssl_tls13_process_client_hello with ssl->conf NULL, and rebooted the
+# board. The server entered the 1.3 state machine even when the client offered
+# only TLS 1.2, so it was not avoidable from the client side.
+#
+# That was issue #24 — the console was unreachable on real hardware for days
+# and presented as "accepts TCP on 443, answers nothing, resets", which looks
+# like a certificate or resource problem and is neither.
+#
+# We do not need 1.3: the console is a LAN page served to a browser that has
+# imported our CA. Turning it off fixes the crash, and drops ~55KB of image.
+CONFIG_MBEDTLS_SSL_PROTO_TLS1_3=n
