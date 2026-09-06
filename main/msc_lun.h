@@ -49,6 +49,14 @@ void msc_lun_init(struct msc_lun *lun);
 void msc_lun_bind(struct msc_lun *lun, const struct msc_source *src);
 void msc_lun_unbind(struct msc_lun *lun);
 
+// Arbitration between media that can arrive independently (a browser image
+// over the socket, a card in the slot): the first to arrive holds the LUN.
+// Check-and-act in one call, because a caller that checks then binds can
+// lose the race to another task, and the loser would then quietly replace
+// the winner's medium under the target. Returns whether it acted.
+bool msc_lun_try_bind(struct msc_lun *lun, const struct msc_source *src);
+bool msc_lun_unbind_if(struct msc_lun *lun, const struct msc_source *src);
+
 // TEST UNIT READY. False fills `sense` with why. Clears the attention flag
 // when it reports it — the host gets told exactly once.
 bool msc_lun_test_unit_ready(struct msc_lun *lun, struct msc_sense *sense);

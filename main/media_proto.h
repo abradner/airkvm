@@ -71,7 +71,8 @@ enum media_down_type {
 enum media_state {
   MEDIA_STATE_NONE = 0,      // no medium attached
   MEDIA_STATE_ATTACHED = 1,  // this client's medium is the LUN's
-  MEDIA_STATE_BUSY = 2,      // another client holds the medium (R-003's twin)
+  MEDIA_STATE_BUSY = 2,      // another medium holds the LUN: a card in the
+                             // slot, or (with a spectator slot) another client
   // Refused: attaching would leave too little internal heap for the console's
   // next TLS handshake. Media degrades; the input socket must not.
   MEDIA_STATE_NO_MEMORY = 3,
