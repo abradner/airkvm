@@ -205,6 +205,56 @@ static void bar_cells_stay_separated_on_both_fonts(void) {
   CHECK(pixel_at(&c, canvas_font8x16.advance, 0));
 }
 
+// Two planes give four roles, and a canvas with no second plane must collapse
+// every ink to "lit" rather than dropping pixels — that is what keeps one
+// draw() serving a colour panel and a monochrome one.
+static void ink_planes_encode_four_roles(void) {
+  static uint8_t lo[64 * 8], hi[64 * 8];
+  struct canvas c = {.bits = lo,
+                     .bits_hi = hi,
+                     .w = 64,
+                     .h = 64,
+                     .font = &canvas_font3x5,
+                     .ink = CANVAS_INK_PRIMARY};
+  canvas_clear(&c);
+  const uint8_t inks[] = {CANVAS_INK_PRIMARY, CANVAS_INK_SECONDARY,
+                          CANVAS_INK_ACCENT};
+  for (int i = 0; i < 3; i++) {
+    canvas_set_ink(&c, inks[i]);
+    canvas_pixel(&c, i, 0, true);
+  }
+  for (int i = 0; i < 3; i++) {
+    CHECK_EQ_INT(canvas_ink_at(&c, i, 0), inks[i]);
+  }
+  // Clearing a pixel returns it to NONE whatever ink drew it.
+  canvas_set_ink(&c, CANVAS_INK_ACCENT);
+  canvas_pixel(&c, 2, 0, false);
+  CHECK_EQ_INT(canvas_ink_at(&c, 2, 0), CANVAS_INK_NONE);
+}
+
+static void mono_canvas_collapses_every_ink_to_lit(void) {
+  static uint8_t lo[64 * 8];
+  struct canvas c = {.bits = lo,
+                     .bits_hi = NULL,  // single-colour panel
+                     .w = 64,
+                     .h = 64,
+                     .font = &canvas_font3x5,
+                     .ink = CANVAS_INK_PRIMARY};
+  canvas_clear(&c);
+  // SECONDARY is plane-1-only. With no plane 1 a naive implementation would
+  // drop it entirely and the text would silently vanish on the OLED — which is
+  // exactly the bug this test exists to catch.
+  canvas_set_ink(&c, CANVAS_INK_SECONDARY);
+  canvas_text(&c, 0, 0, "A", 1, 1);
+  int ink = 0;
+  for (int y = 0; y < 8; y++) {
+    for (int x = 0; x < 8; x++) {
+      ink += pixel_at(&c, x, y) ? 1 : 0;
+    }
+  }
+  CHECK(ink > 0);
+}
+
 static void cell_grid_matches_each_board(void) {
   // The 0.42" dongle's historical literals, which must survive the move to
   // font-derived metrics: 72/4 == 18 and 40/6 == 6.
@@ -244,6 +294,8 @@ int main(void) {
   RUN(text_clips_and_never_wraps);
   RUN(bar_keeps_an_outline_when_empty);
   RUN(bar_cells_stay_separated_on_both_fonts);
+  RUN(ink_planes_encode_four_roles);
+  RUN(mono_canvas_collapses_every_ink_to_lit);
   RUN(cell_grid_matches_each_board);
   RUN(font_tables_are_internally_consistent);
   return test_summary("canvas");

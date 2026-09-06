@@ -169,6 +169,12 @@ _Static_assert(UI_Y_DEBUG + DISPLAY_CELL_H <= DISPLAY_HEIGHT,
 static void draw(const struct status_snapshot *s) {
   display_clear();
 
+  // Ink is set per element rather than once, because the point of having it is
+  // hierarchy: one thing on this screen is read at a glance and the rest is
+  // reference. On a single-colour panel every one of these is a no-op, so this
+  // stays one draw() for both boards.
+  display_set_ink(DISPLAY_INK_SECONDARY);
+
   // Identity, and who holds the keyboard — the thing you check first when the
   // console feels unresponsive, so it sits top-right.
   display_text(UI_X_COL, UI_Y_HEADER / DISPLAY_CELL_H, "AIRKVM");
@@ -179,8 +185,13 @@ static void draw(const struct status_snapshot *s) {
   // single height it was technically legible rather than actually readable.
   // Stretched vertically only so a 15-character IP still fits on one line
   // (see display_text_tall).
+  // The address is the only PRIMARY thing on the screen. Everything else is
+  // context for it, and dimming the context is what makes it stand out —
+  // cheaper and calmer than making the address itself louder.
+  display_set_ink(DISPLAY_INK_PRIMARY);
   display_text_tall(UI_X_COL, UI_Y_ADDRESS,
                     s->wifi_connected ? s->ip : "NO WIFI");
+  display_set_ink(DISPLAY_INK_SECONDARY);
 
 #ifdef UI_Y_MDNS
   // The name the certificate is issued for, so this also says which name will
@@ -195,8 +206,13 @@ static void draw(const struct status_snapshot *s) {
 
   if (s->wifi_connected) {
     display_text(UI_X_COL, UI_Y_NETWORK / DISPLAY_CELL_H, s->ssid);
+    // The only non-text element, and the only accent on the panel. Note it is
+    // NOT a warning colour: a weak signal shows amber on the LED, which is
+    // visible from across a room. Saying it twice would make neither say it.
+    display_set_ink(DISPLAY_INK_ACCENT);
     display_bar(DISPLAY_COLS - 4, UI_Y_NETWORK / DISPLAY_CELL_H, 4,
                 rssi_bars(s->rssi));
+    display_set_ink(DISPLAY_INK_SECONDARY);
   }
 
   // Whether a target is actually listening, and proof that input is arriving —

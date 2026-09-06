@@ -34,6 +34,21 @@
 #define DISPLAY_COLS (DISPLAY_WIDTH / DISPLAY_CELL_W)
 #define DISPLAY_ROWS (DISPLAY_HEIGHT / DISPLAY_CELL_H)
 
+// Ink for subsequent draws. A no-op on a single-colour panel, which is why
+// callers may set it unconditionally: on the 0.42" OLED every ink renders as
+// "lit", which is the honest rendering of colour on a mono display.
+//
+// Deliberately only three inks plus none. The RGB LED is this product's status
+// channel — red for a fault, amber for degraded — so the panel is free to
+// spend colour on hierarchy rather than alarm, and a screen that alarms in
+// parallel with the light would just be two things saying it worse.
+enum display_ink {
+  DISPLAY_INK_PRIMARY = 1,    // what you read first: the address
+  DISPLAY_INK_SECONDARY = 2,  // present but quieter: labels, SSID, name
+  DISPLAY_INK_ACCENT = 3,     // the signal bar; the only non-text element
+};
+void display_set_ink(enum display_ink ink);
+
 esp_err_t display_init(void);
 
 // True when init succeeded. Every draw call is a no-op otherwise, so a board

@@ -77,11 +77,16 @@ class Canvas:
 
     def __init__(self, w, h, font):
         self.w, self.h, self.font = w, h, font
+        # Stores the ink ROLE per pixel (0..3), matching canvas.h's two planes.
         self.px = [[0] * w for _ in range(h)]
+        self.ink = 1
+
+    def set_ink(self, ink):
+        self.ink = ink
 
     def pixel(self, x, y, on=True):
         if 0 <= x < self.w and 0 <= y < self.h:
-            self.px[y][x] = 1 if on else 0
+            self.px[y][x] = self.ink if on else 0
 
     def text(self, x, y, s, sx=1, sy=1):
         f = self.font
@@ -119,13 +124,18 @@ def draw_status(c, y, tall, mdns, ip, ssid, rssi_bars, events, usb, bound, debug
     cols = c.w // f["advance"]
     cell_h = f["line_h"]
     x0 = y["X_COL"] * f["advance"]
+    c.set_ink(2)
     c.text(x0, y["HEADER"], "AIRKVM")
     c.text((cols - 7) * f["advance"], y["HEADER"], "BOUND" if bound else "IDLE")
+    c.set_ink(1)
     c.text(x0, y["ADDRESS"], ip or "NO WIFI", *tall)
+    c.set_ink(2)
     if y["MDNS"] is not None:
         c.text(x0, y["MDNS"], f"{mdns}.local")
     c.text(x0, y["NETWORK"], ssid)
+    c.set_ink(3)
     c.bar(cols - 4, y["NETWORK"] // cell_h, 4, rssi_bars)
+    c.set_ink(2)
     c.text(x0, y["TARGET"], f"{'USB OK' if usb else 'NO HID'}  {events}")
     if debug:
         c.text(x0, y["DEBUG"], debug)
@@ -173,14 +183,27 @@ def main():
             from PIL import Image
 
             scale = 2 if w > 200 else 6
-            img = Image.new("RGB", (w * scale, h * scale), (0, 0, 0))
+            # Solarized Dark roles, matching main/palette.h. The OLED has no
+            # second plane, so it renders every role as plain lit.
+            mono = font["name"] == "3x5"
+            sol = {
+                0: (0x00, 0x2B, 0x36),
+                1: (0x93, 0xA1, 0xA1),
+                2: (0x58, 0x6E, 0x75),
+                3: (0x2A, 0xA1, 0x98),
+            }
+            bg = (0, 0, 0) if mono else sol[0]
+            img = Image.new("RGB", (w * scale, h * scale), bg)
             px = img.load()
             for yy in range(h):
                 for xx in range(w):
-                    if c.px[yy][xx]:
-                        for dy in range(scale):
-                            for dx in range(scale):
-                                px[xx * scale + dx, yy * scale + dy] = (230, 230, 230)
+                    role = c.px[yy][xx]
+                    if not role:
+                        continue
+                    col = (230, 230, 230) if mono else sol[role]
+                    for dy in range(scale):
+                        for dx in range(scale):
+                            px[xx * scale + dx, yy * scale + dy] = col
             out = f"{args.png}-{name}.png"
             img.save(out)
             print(f"wrote {out}")

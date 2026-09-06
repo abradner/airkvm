@@ -31,6 +31,26 @@
 #define SOL_BASE0 0x83, 0x94, 0x96   // body text
 #define SOL_BASE1 0x93, 0xA1, 0xA1   // emphasised content
 
+// Screen roles, as RGB565. Four, matching canvas.h's ink roles.
+//
+// The scheme is restrained on purpose, and the reason is architectural rather
+// than aesthetic: on this board the RGB LED is the primary status channel, so
+// the panel does not have to alarm. It can spend colour on HIERARCHY instead —
+// which is the thing a status screen actually lacks when everything is the
+// same white.
+//
+//   PRIMARY    base1   the address: the one thing you read at a glance
+//   SECONDARY  base01  labels, SSID, mDNS name — present, deliberately quieter
+//   ACCENT     cyan    the signal bar, the only non-text element
+//
+// No red and no amber here. Those live on the LED, where they are visible from
+// across a room and cannot be missed; duplicating them on the panel would make
+// two things say the same thing and neither say it well.
+#define SOL_SCREEN_BG RGB565(0x00, 0x2B, 0x36)
+#define SOL_SCREEN_PRIMARY RGB565(0x93, 0xA1, 0xA1)
+#define SOL_SCREEN_SECONDARY RGB565(0x58, 0x6E, 0x75)
+#define SOL_SCREEN_ACCENT RGB565(0x2A, 0xA1, 0x98)
+
 // Accents. Only these carry meaning; everything else is text.
 #define SOL_YELLOW 0xB5, 0x89, 0x00
 #define SOL_ORANGE 0xCB, 0x4B, 0x16
