@@ -11,7 +11,9 @@
 // this device can type on the target. That is risk R-001 in docs/repo-map.md,
 // and it is accepted deliberately — the security model is physical. Do not add
 // a feature that widens this surface (an outbound connection, a relay, a second
-// network) without updating that register first.
+// network) without updating that register first. The media socket started
+// from net_start() is such a widening, registered as R-008: the same caller
+// can also present a disk to the target.
 
 #include "net.h"
 
@@ -34,6 +36,9 @@
 #include "freertos/semphr.h"
 #include "hid_out.h"
 #include "mdns.h"
+#if CONFIG_TINYUSB_MSC_ENABLED
+#include "media_ws.h"
+#endif
 #include "protocol.h"
 #include "session.h"
 #include "status.h"
@@ -494,5 +499,15 @@ esp_err_t net_start(void) {
     s_keepalive = NULL;
     ESP_RETURN_ON_ERROR(http_err, TAG, "http failed");
   }
+#if CONFIG_TINYUSB_MSC_ENABLED
+  // The media socket is its own server instance (media_ws.h). Not fatal:
+  // a console without mass-storage media is still a console, and saying so
+  // beats taking the keyboard down with it.
+  const esp_err_t media_err = media_ws_start();
+  if (media_err != ESP_OK) {
+    ESP_LOGE(TAG, "media socket failed to start (%s) — no disk image support",
+             esp_err_to_name(media_err));
+  }
+#endif
   return ESP_OK;
 }

@@ -435,3 +435,183 @@ if (!navigator.mediaDevices) {
 }
 
 connect();
+
+// --- disk image over /ws-media --------------------------------------------
+//
+// The image never leaves this browser. The dongle presents an empty
+// removable disk to the target; attaching a file here tells it the geometry,
+// and from then on it asks for 16 KB chunks (MEDIA_CHUNK_SIZE in
+// main/media_proto.h — this constant ships in the same firmware image as that
+// one, so they cannot drift) as the target reads them. Slices are read
+// lazily, so a multi-gigabyte ISO costs nothing until it is read.
+//
+// Its own socket on its own port, so a chunk in flight never sits in front of
+// a keystroke on the input socket's task (main/media_ws.h).
+
+const MEDIA = {
+  ATTACH: 0x10,
+  DETACH: 0x11,
+  DATA: 0x12,
+  ERROR: 0x13,
+  REQ: 0x90,
+  STATUS: 0x91,
+  CHUNK: 16384,
+  BLOCK: 512,
+  PORT_SECURE: 8443,
+  PORT_INSECURE: 8080,
+  STATE: ["no image attached", "attached", "another client holds the medium"],
+  ERR_OUT_OF_RANGE: 1,
+  ERR_READ_FAILED: 2,
+};
+
+const mediaEl = {
+  file: document.getElementById("media-file"),
+  attach: document.getElementById("media-attach"),
+  eject: document.getElementById("media-eject"),
+  status: document.getElementById("media-status"),
+};
+
+// Host follows the console's host (or the ?ws= override); only the port
+// differs, and the scheme follows the page like the input socket does.
+const mediaHost = (wsOverride || location.host).replace(/:\d+$/, "");
+const mediaUrl = `${wsScheme}://${mediaHost}:${
+  wsScheme === "wss" ? MEDIA.PORT_SECURE : MEDIA.PORT_INSECURE
+}/ws-media`;
+
+let mediaSocket = null;
+let mediaFile = null;
+let mediaServed = 0;
+
+function setMediaStatus(text, kind) {
+  mediaEl.status.textContent = text;
+  mediaEl.status.className = `status ${kind || ""}`;
+}
+
+function mediaSend(bytes) {
+  if (mediaSocket && mediaSocket.readyState === WebSocket.OPEN) {
+    mediaSocket.send(bytes);
+    return true;
+  }
+  return false;
+}
+
+function encodeAttach(file) {
+  const name = new TextEncoder().encode(file.name).slice(0, 31);
+  const buf = new ArrayBuffer(13 + name.length);
+  const v = new DataView(buf);
+  v.setUint8(0, MEDIA.ATTACH);
+  v.setUint16(1, MEDIA.BLOCK, true);
+  // The target sees whole blocks; the tail of the last one is zero-padded on
+  // the way out (see serveChunk).
+  v.setBigUint64(3, BigInt(Math.ceil(file.size / MEDIA.BLOCK)), true);
+  v.setUint8(11, 0x01); // read-only
+  v.setUint8(12, name.length);
+  new Uint8Array(buf, 13).set(name);
+  return buf;
+}
+
+async function serveChunk(reqId, chunk) {
+  if (!mediaFile) return;
+  const start = chunk * MEDIA.CHUNK;
+  if (start >= Math.ceil(mediaFile.size / MEDIA.BLOCK) * MEDIA.BLOCK) {
+    mediaSend(encodeError(reqId, MEDIA.ERR_OUT_OF_RANGE));
+    return;
+  }
+  let bytes;
+  try {
+    // Blob.arrayBuffer: Safari 14+, Chrome 76+, Firefox 69+. Lazy: only this
+    // slice is read.
+    bytes = new Uint8Array(
+      await mediaFile.slice(start, start + MEDIA.CHUNK).arrayBuffer(),
+    );
+  } catch (err) {
+    // The file went away (unplugged drive, revoked handle).
+    mediaSend(encodeError(reqId, MEDIA.ERR_READ_FAILED));
+    setMediaStatus(`read failed: ${err.message}`, "bad");
+    return;
+  }
+  // Always a full chunk: the dongle's cache completes on the last byte, and
+  // bytes past the image are zeros, which is what the padded last block is.
+  const out = new ArrayBuffer(15 + MEDIA.CHUNK);
+  const v = new DataView(out);
+  v.setUint8(0, MEDIA.DATA);
+  v.setUint32(1, reqId, true);
+  v.setUint32(5, chunk, true);
+  v.setUint32(9, 0, true);
+  v.setUint16(13, MEDIA.CHUNK, true);
+  new Uint8Array(out, 15).set(bytes);
+  mediaSend(out);
+  mediaServed += bytes.length;
+}
+
+function encodeError(reqId, code) {
+  const buf = new ArrayBuffer(6);
+  const v = new DataView(buf);
+  v.setUint8(0, MEDIA.ERROR);
+  v.setUint32(1, reqId, true);
+  v.setUint8(5, code);
+  return buf;
+}
+
+function mediaConnect() {
+  mediaSocket = new WebSocket(mediaUrl);
+  mediaSocket.binaryType = "arraybuffer";
+  mediaSocket.onopen = () => {
+    mediaEl.attach.disabled = !mediaFile;
+    if (mediaFile) setMediaStatus("ready to attach");
+  };
+  mediaSocket.onclose = () => {
+    // The dongle drops the medium when this socket closes (its release-all
+    // for storage), so the page must not pretend otherwise.
+    mediaEl.attach.disabled = true;
+    mediaEl.eject.disabled = true;
+    setMediaStatus("media socket closed — reconnecting…", "bad");
+    mediaSocket = null;
+    setTimeout(mediaConnect, 2000);
+  };
+  mediaSocket.onmessage = (e) => {
+    if (!(e.data instanceof ArrayBuffer)) return;
+    const v = new DataView(e.data);
+    const type = v.getUint8(0);
+    if (type === MEDIA.REQ && e.data.byteLength === 9) {
+      serveChunk(v.getUint32(1, true), v.getUint32(5, true));
+    } else if (type === MEDIA.STATUS && e.data.byteLength === 10) {
+      const state = v.getUint8(1);
+      const served = v.getUint32(2, true);
+      const attached = state === 1;
+      mediaEl.eject.disabled = !attached;
+      mediaEl.attach.disabled = attached || !mediaFile;
+      setMediaStatus(
+        attached
+          ? `attached: ${mediaFile ? mediaFile.name : "?"} — ${(served / 1048576).toFixed(1)} MB served`
+          : MEDIA.STATE[state] || `state ${state}`,
+        attached ? "ok" : state === 2 ? "bad" : "",
+      );
+    }
+  };
+}
+
+mediaEl.file.addEventListener("change", () => {
+  mediaFile = mediaEl.file.files[0] || null;
+  mediaServed = 0;
+  mediaEl.attach.disabled =
+    !mediaFile || !mediaSocket || mediaSocket.readyState !== WebSocket.OPEN;
+  setMediaStatus(
+    mediaFile
+      ? `${mediaFile.name}: ${(mediaFile.size / 1048576).toFixed(1)} MB, not attached`
+      : "no image",
+  );
+});
+
+mediaEl.attach.addEventListener("click", () => {
+  if (!mediaFile) return;
+  if (mediaSend(encodeAttach(mediaFile))) setMediaStatus("attaching…");
+});
+
+mediaEl.eject.addEventListener("click", () => {
+  mediaSend(new Uint8Array([MEDIA.DETACH]));
+});
+
+// Only where the page has the elements: the section exists in index.html,
+// but keep the guard so a trimmed page does not throw at load.
+if (mediaEl.file && mediaEl.attach) mediaConnect();

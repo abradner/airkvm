@@ -31,10 +31,11 @@ CONFIG_TINYUSB_MSC_ENABLED=y
 # measuring (principle 6), not before.
 CONFIG_TINYUSB_MSC_BUFSIZE=4096
 
-# The console holds one long-lived WebSocket plus three short static requests;
-# the default of 7 open sockets leaves room for a second browser to connect and
-# be told it is not in control.
-CONFIG_LWIP_MAX_SOCKETS=10
+# The console holds one long-lived WebSocket plus three short static requests,
+# and the media server (main/media_ws.c) is a second httpd instance with two
+# client slots. Each instance also reserves three internal sockets, plus mDNS,
+# which the old value of 10 did not leave room for.
+CONFIG_LWIP_MAX_SOCKETS=16
 CONFIG_HTTPD_WS_SUPPORT=y
 # IDF's default, pinned because main/media_proto.h sizes a media piece to fit
 # one inbound record payload (MEDIA_DATA_MAX). If this changes, that must too.

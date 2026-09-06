@@ -69,6 +69,19 @@
         </section>
 
         <section>
+          <h2>Disk image</h2>
+          <!-- The image stays in this browser: the dongle asks for 16 KB
+               chunks over a second socket as the target reads them, and the
+               target sees a removable disk. Read-only by construction. -->
+          <input id="media-file" type="file" accept=".iso,.img,.bin,.raw" />
+          <div class="row">
+            <button id="media-attach" type="button" disabled>Attach</button>
+            <button id="media-eject" type="button" disabled>Eject</button>
+          </div>
+          <div id="media-status" class="status">no image</div>
+        </section>
+
+        <section>
           <h2>Target</h2>
           <!-- USB remote wakeup, the same thing a physical keyboard does when
                you tap a key on a sleeping machine. Only works if the target

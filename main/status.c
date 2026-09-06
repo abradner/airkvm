@@ -80,6 +80,17 @@ void status_set_usb_suspended(bool suspended) {
   UNLOCK();
 }
 
+void status_set_media(bool attached, const char *name) {
+  LOCK();
+  s_state.media_attached = attached;
+  if (attached && name) {
+    strlcpy(s_state.media_name, name, sizeof(s_state.media_name));
+  } else {
+    s_state.media_name[0] = '\0';
+  }
+  UNLOCK();
+}
+
 void status_note_event(const char *describe) {
   LOCK();
   expire_debug_locked();

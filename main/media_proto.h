@@ -44,10 +44,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// 64 KB: large enough that one round trip to the browser amortises the WiFi
-// RTT over many USB reads, small enough that a handful fit in internal RAM
-// while PSRAM is not yet enabled.
-#define MEDIA_CHUNK_SIZE 65536u
+// 16 KB, which makes a chunk exactly one DATA piece. Larger chunks amortise
+// the WiFi round trip over more USB reads, but every cache slot costs a chunk
+// of RAM, and until PSRAM is enabled the cache lives in internal RAM beside
+// two TLS sessions. The browser's copy of this number (web/app.js) ships in
+// the same image, so the two cannot drift; raise both together with PSRAM.
+#define MEDIA_CHUNK_SIZE 16384u
 // The inbound TLS record payload (CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN, pinned in
 // sdkconfig.defaults so this cannot drift apart from it silently).
 #define MEDIA_DATA_MAX 16384u
@@ -116,6 +118,20 @@ enum media_decode_result {
 
 enum media_decode_result media_decode(const uint8_t *frame, size_t len,
                                       struct media_msg *out);
+
+// A byte range of the image expressed as pieces of chunks. A USB transfer is
+// at most CONFIG_TINYUSB_MSC_BUFSIZE (4 KB) and a chunk is 16 KB, so a range
+// touches at most two chunks; the second entry is unused when it does not.
+// Pure arithmetic, host-tested, because getting an off-by-one here serves the
+// wrong sector.
+struct media_span {
+  uint32_t chunk;
+  uint32_t offset;  // within the chunk
+  uint32_t len;
+};
+// Returns the number of spans filled (1 or 2); 0 if len is 0 or the range
+// cannot be expressed (len > MEDIA_CHUNK_SIZE).
+size_t media_split(uint64_t byte_start, uint32_t len, struct media_span out[2]);
 
 // Encoders for the two downstream frames. Return the number of bytes written,
 // or 0 if `cap` is too small.
