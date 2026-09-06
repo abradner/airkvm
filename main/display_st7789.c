@@ -43,6 +43,22 @@
 
 static const char *TAG = "display";
 
+// Panel bring-up steps are fatal to *this* module, not to the device. A failed
+// reset or init leaves a handle that later draw calls would use anyway, so the
+// only safe response is to leave s_present false and let every draw no-op —
+// which is exactly what the SSD1306 backend does when its panel does not
+// answer, and what display.h promises callers ("a board with no panel, or a
+// mis-wired one, degrades to no display").
+#define PANEL_TRY(call, what)                                              \
+  do {                                                                     \
+    const esp_err_t panel_err_ = (call);                                   \
+    if (panel_err_ != ESP_OK) {                                            \
+      ESP_LOGW(TAG, "%s failed (%s) — continuing without display", (what), \
+               esp_err_to_name(panel_err_));                               \
+      return panel_err_;                                                   \
+    }                                                                      \
+  } while (0)
+
 #define LCD_SPI_HOST SPI2_HOST
 // SPI0/1 are the flash and octal-PSRAM bus on this part; SPI2 is the first one
 // a peripheral may have.
@@ -180,24 +196,24 @@ esp_err_t display_init(void) {
     return err;
   }
 
-  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_lcd_panel_reset(s_panel));
-  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_lcd_panel_init(s_panel));
+  PANEL_TRY(esp_lcd_panel_reset(s_panel), "panel reset");
+  PANEL_TRY(esp_lcd_panel_init(s_panel), "panel init");
   // IPS panels of this family ship inverted relative to the controller's
   // default. Confirmed 2026-09-06: white-on-black renders as white on black,
   // so this is the right way round. If a future panel revision comes out
   // photographic negative, this is the flag.
-  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_lcd_panel_invert_color(s_panel, true));
-  ESP_ERROR_CHECK_WITHOUT_ABORT(
-      esp_lcd_panel_swap_xy(s_panel, BOARD_LCD_SWAP_XY));
-  ESP_ERROR_CHECK_WITHOUT_ABORT(
-      esp_lcd_panel_mirror(s_panel, BOARD_LCD_MIRROR_X, BOARD_LCD_MIRROR_Y));
+  PANEL_TRY(esp_lcd_panel_invert_color(s_panel, true), "invert colour");
+  PANEL_TRY(esp_lcd_panel_swap_xy(s_panel, BOARD_LCD_SWAP_XY), "swap_xy");
+  PANEL_TRY(
+      esp_lcd_panel_mirror(s_panel, BOARD_LCD_MIRROR_X, BOARD_LCD_MIRROR_Y),
+      "mirror");
   // The 172-wide panel sits offset inside a 240-wide controller. Which axis
   // carries the offset depends on swap_xy above, and the driver applies the
   // gap to the caller's coordinates *before* CASET while swap_xy only flips a
   // MADCTL bit — so this is not decidable by reading the driver. Draw a 1px
   // border and look. See board.h.
-  ESP_ERROR_CHECK_WITHOUT_ABORT(
-      esp_lcd_panel_set_gap(s_panel, BOARD_LCD_X_GAP, BOARD_LCD_Y_GAP));
+  PANEL_TRY(esp_lcd_panel_set_gap(s_panel, BOARD_LCD_X_GAP, BOARD_LCD_Y_GAP),
+            "set_gap");
 
   err = backlight_init();
   if (err != ESP_OK) {
@@ -205,11 +221,15 @@ esp_err_t display_init(void) {
     // Not fatal: the panel may still be driven, just unlit.
   }
 
+  PANEL_TRY(esp_lcd_panel_disp_on_off(s_panel, true), "display on");
+
+  // Only now is the panel known good, so only now do draw calls stop being
+  // no-ops. Setting this earlier would let a half-initialised panel accept
+  // draws and fail unpredictably at flush.
   s_canvas.font = &canvas_font8x16;
   s_present = true;
   display_clear();
   display_flush();
-  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_lcd_panel_disp_on_off(s_panel, true));
   ESP_LOGI(TAG, "ST7789 %dx%d ready (%d cols x %d rows)", DISPLAY_WIDTH,
            DISPLAY_HEIGHT, DISPLAY_COLS, DISPLAY_ROWS);
   return ESP_OK;

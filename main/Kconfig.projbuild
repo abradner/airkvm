@@ -2,6 +2,17 @@ menu "airkvm"
 
 choice AIRKVM_BOARD
     prompt "Target board"
+    # Gated to the targets that actually have a board. Without this the choice
+    # still *parses* on other targets — an esp32s2 configure completes cleanly,
+    # verified — but it offers nothing selectable, so no CONFIG_AIRKVM_BOARD_*
+    # is set and the failure surfaces later, at board.h's #error. Hiding an
+    # empty choice is honest: a target with no board should not appear to have
+    # a configurable one.
+    #
+    # Deliberately NOT extended to esp32s2 even though the HID backend below
+    # offers it: no S2 board exists. Adding an option for hardware nobody has
+    # would be the kind of implied support AGENTS.md §4 forbids.
+    depends on IDF_TARGET_ESP32S3 || IDF_TARGET_ESP32C3
     default AIRKVM_BOARD_S3_OLED042 if IDF_TARGET_ESP32S3
     default AIRKVM_BOARD_C3_EGG if IDF_TARGET_ESP32C3
     help

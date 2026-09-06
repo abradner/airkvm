@@ -204,13 +204,23 @@
 
 #else
 
-// No board selected. This is deliberately fatal rather than defaulting to
-// "no display", because AGENTS.md §6.1's first config trap makes the silent
-// version indistinguishable from broken hardware: a Kconfig-only edit does not
-// force a reconfigure, so CONFIG_AIRKVM_BOARD_* can be *absent* from a stale
-// sdkconfig rather than "is not set" — and a headless image that builds green
-// looks exactly like a dead panel. Fail loudly at compile time instead.
+// No board selected. Deliberately fatal rather than defaulting to "no
+// display", which is what this used to do: a headless image that builds green
+// is indistinguishable from a dead panel.
+//
+// Two different causes land here and the message names both, because the
+// remedies are opposite:
+//
+//   1. A supported target (esp32s3/esp32c3) whose CONFIG_AIRKVM_BOARD_* is
+//      missing from a stale generated sdkconfig — §6.1's first config trap. A
+//      Kconfig-only edit does not force a reconfigure, so the symbol can be
+//      *absent* rather than "is not set". The symbol exists; force a
+//      reconfigure and it appears.
+//   2. Any other target, where the AIRKVM_BOARD choice is gated off and there
+//      is genuinely nothing to select. Adding a board is real work, not a
+//      config flag — and an image built for hardware nobody has is worse than
+//      no image.
 #error \
-    "no board selected — set CONFIG_AIRKVM_BOARD_*; see AGENTS.md §6.1 on stale sdkconfig"
+    "no board for this target — on esp32s3/esp32c3 the sdkconfig is stale (AGENTS.md 6.1, force a reconfigure); on any other target no board is defined here"
 
 #endif
