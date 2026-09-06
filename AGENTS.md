@@ -137,7 +137,7 @@ Two mechanics that are not preferences:
 - **main is linked `WHOLE_ARCHIVE`, and the post-link check must stay.** esp_tinyusb's
   `tusb_msc_storage.c` is compiled whenever MSC is enabled and strongly defines every `tud_msc_*`
   callback *and* `tud_mount_cb`/`tud_umount_cb`. `tud_umount_cb` is how an unplug releases held
-  keys. See §9 entry 14, and the acceptance test there: a key held while the cable is pulled.
+  keys. See §9 entry 15, and the acceptance test there: a key held while the cable is pulled.
 
 ### The keymap is a pure lookup table with no I/O, and it is host-tested
 
@@ -756,7 +756,7 @@ code is written.*
     against a framebuffer captured by compiling the ORIGINAL `display.c` from git, so "the
     refactor changed no pixel on the working board" is a check rather than a claim.
 
-14. **Enabling a TinyUSB class in esp_tinyusb can silently replace your device callbacks.**
+15. **Enabling a TinyUSB class in esp_tinyusb can silently replace your device callbacks.**
     `CONFIG_TINYUSB_MSC_ENABLED=y` compiles esp_tinyusb's `tusb_msc_storage.c`, which defines
     every `tud_msc_*` callback and — the part that matters — `tud_mount_cb` and `tud_umount_cb`,
     all as strong symbols. `hid_out_usb.c` defines the last two, and `tud_umount_cb` is how an
@@ -766,8 +766,11 @@ code is written.*
     builds, enumerates, mounts, and the only symptom is a key that stays held after the cable is
     pulled, with nothing in any log. Mechanism, not care (§10 meta-rule 5): `main` is linked
     `WHOLE_ARCHIVE` so no reference survives for that object to satisfy, and
-    `tools/check_msc_symbols.cmake` fails the build if it is in the ELF anyway (the script was
-    seen to fail on a fake `nm` listing before being trusted). **The acceptance test is on
+    `tools/check_msc_symbols.cmake` fails the build if that object entered the link. It reads the
+    linker *map*, not `nm`: with `--gc-sections` an unreferenced function in the offending object
+    is discarded, so an `nm` sentinel is absent in exactly the case that matters — the first
+    version of the script had that hole, and a review caught it. Seen to fail on synthetic maps
+    for both the glue-present and class-dropped cases before being trusted. **The acceptance test is on
     hardware and nothing else reveals it:** hold a key, pull the cable, and the log must say
     "USB host disconnected" with the key released. Not a green build, not a working mount.
     Raised by the LCD147 onboarding session (2026-09-06) while reading the vendor glue; the

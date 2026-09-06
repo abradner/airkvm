@@ -113,7 +113,9 @@ static void io_task(void *arg) {
     UNLOCK();
 
     if (stale_xfer) {
-      ESP_LOGW(TAG, "dropping completion for a transfer the bus reset");
+      ESP_LOGW(
+          TAG,
+          "dropping completion for a transfer that the bus reset cancelled");
       continue;  // no async_io_done: nothing is waiting for it
     }
     if (stale_medium || rc < 0) {
@@ -171,7 +173,9 @@ static int32_t submit(enum msc_op op, uint8_t lun, uint32_t lba,
   // reset the bus and re-issued the command (its completion will be dropped
   // by xfer_id). Fail this one; the host retries.
   if (xQueueSend(s_io_q, &io, 0) != pdTRUE) {
-    ESP_LOGW(TAG, "I/O worker still busy with a transfer the bus reset");
+    ESP_LOGW(
+        TAG,
+        "I/O worker still busy with a transfer that the bus reset cancelled");
     const struct msc_sense s = {MSC_SENSE_KEY_NOT_READY,
                                 MSC_ASC_MEDIUM_NOT_PRESENT, 0};
     apply_sense(lun, &s);
@@ -280,10 +284,22 @@ int32_t tud_msc_scsi_cb(uint8_t lun, uint8_t const scsi_cmd[16], void *buffer,
 
 // --- lifecycle --------------------------------------------------------------
 
+static void start_cleanup(void) {
+  if (s_io_q) {
+    vQueueDelete(s_io_q);
+    s_io_q = NULL;
+  }
+  if (s_lock) {
+    vSemaphoreDelete(s_lock);
+    s_lock = NULL;
+  }
+}
+
 esp_err_t msc_out_start(void) {
   s_lock = xSemaphoreCreateMutex();
   s_io_q = xQueueCreate(1, sizeof(struct msc_io));
   if (s_lock == NULL || s_io_q == NULL) {
+    start_cleanup();
     return ESP_ERR_NO_MEM;
   }
   msc_lun_init(&s_lun);
@@ -292,6 +308,7 @@ esp_err_t msc_out_start(void) {
   // so a blocking source call never shares a core with the endpoint service.
   if (xTaskCreatePinnedToCore(io_task, "msc_io", 4096, NULL, 4, NULL, 0) !=
       pdPASS) {
+    start_cleanup();
     return ESP_ERR_NO_MEM;
   }
   ESP_LOGI(TAG, "USB MSC ready (1 LUN, no medium)");
