@@ -62,6 +62,7 @@ bool wake_policy_is_operator_input(enum airkvm_frame_type type) {
       // definition, captured with a hand on the mouse, and the console emits
       // motion frames from sub-pixel drift. A key, a click or a scroll is a
       // decision; a twitch is not.
+      return false;
     case AIRKVM_FRAME_RELEASE_ALL:
     case AIRKVM_FRAME_PING:
     case AIRKVM_FRAME_WAKE:

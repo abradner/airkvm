@@ -118,6 +118,10 @@ function connect() {
   // Every terminal event releases: a stuck modifier on someone's machine is the
   // failure that matters, and a spurious release costs nothing (AGENTS.md §2).
   socket.onclose = () => {
+    // A wake outcome pending from before the drop must not overwrite this:
+    // the connection state is the one that matters now.
+    clearTimeout(wakeReplyTimer);
+    clearTimeout(wakeStatusTimer);
     setStatus("disconnected — reconnecting…", "bad");
     stopPinging();
     exitCapture();
