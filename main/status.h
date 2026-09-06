@@ -55,6 +55,11 @@ void status_set_media(bool attached, const char *name);
 // Records one input event. `describe` is only stored when debug mode is on.
 void status_note_event(const char *describe);
 
+// Records activity that is not an input event — a media chunk in flight —
+// so the radio tier and the screensaver treat it as someone driving the
+// device, without counting it as a keystroke.
+void status_note_activity(void);
+
 // How long debug mode stays on before turning itself off.
 //
 // R-006's argument for showing keystrokes at all is physical presence: anyone
