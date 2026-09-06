@@ -22,6 +22,11 @@
 enum indicator_state {
   // Something the operator came here to do will not work.
   INDICATOR_FAULT,
+  // The target is enumerated but its USB bus is suspended: keystrokes will go
+  // nowhere until it is woken. Distinct from FAULT because nothing is broken
+  // and there is a specific remedy (the console's Wake button), and distinct
+  // from WARN because it is not degradation — it is a full stop with a fix.
+  INDICATOR_SUSPENDED,
   // Works, but degraded in a way that explains slowness before someone goes
   // looking for a bug.
   INDICATOR_WARN,
@@ -44,6 +49,14 @@ static inline enum indicator_state indicator_state_for(
   // "should I be worried", not "what is happening".
   if (!s->wifi_connected || !s->usb_mounted) {
     return INDICATOR_FAULT;
+  }
+  // Ranked above WARN deliberately: if the target is asleep AND the link is
+  // weak, being asleep is the thing actually stopping you. Note usb_mounted
+  // stays true through a suspend, so this cannot be folded into the check
+  // above — without it the light reports full health while nothing types,
+  // which is the precise failure a status light exists to prevent.
+  if (s->usb_suspended) {
+    return INDICATOR_SUSPENDED;
   }
   // rssi == 0 means "not measured yet", not "catastrophically weak".
   if (s->rssi != 0 && s->rssi <= INDICATOR_WEAK_RSSI_DBM) {

@@ -57,6 +57,23 @@ static void weak_signal_warns_but_only_once_measured(void) {
   CHECK_EQ_INT(indicator_state_for(&s), INDICATOR_IDLE);
 }
 
+// usb_mounted stays true across a suspend, so "mounted" alone is not health.
+static void a_suspended_target_is_its_own_state(void) {
+  struct status_snapshot s = healthy();
+  s.usb_suspended = true;
+  CHECK_EQ_INT(indicator_state_for(&s), INDICATOR_SUSPENDED);
+  // Still suspended even with a console attached — the console being there is
+  // exactly when you most need to know the target will not receive anything.
+  s.client_connected = true;
+  CHECK_EQ_INT(indicator_state_for(&s), INDICATOR_SUSPENDED);
+  // A weak link matters less than a target that is asleep.
+  s.rssi = -85;
+  CHECK_EQ_INT(indicator_state_for(&s), INDICATOR_SUSPENDED);
+  // But a real fault still outranks it.
+  s.usb_mounted = false;
+  CHECK_EQ_INT(indicator_state_for(&s), INDICATOR_FAULT);
+}
+
 static void warn_outranks_bound_but_not_fault(void) {
   struct status_snapshot s = healthy();
   s.client_connected = true;
@@ -72,6 +89,7 @@ int main(void) {
   RUN(either_half_being_down_is_a_fault);
   RUN(a_fault_outranks_being_bound);
   RUN(weak_signal_warns_but_only_once_measured);
+  RUN(a_suspended_target_is_its_own_state);
   RUN(warn_outranks_bound_but_not_fault);
   return test_summary("indicator");
 }

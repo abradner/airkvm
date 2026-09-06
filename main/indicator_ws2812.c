@@ -143,6 +143,14 @@ void indicator_tick(void) {
       ceiling = BRIGHT_FAULT;
       break;
     }
+    case INDICATOR_SUSPENDED: {
+      // Cyan: distinct from every other state, and reads as dormant rather
+      // than alarming — nothing is wrong, the target is just asleep.
+      const uint8_t c[] = {SOL_CYAN};
+      r = c[0], g = c[1], b = c[2];
+      ceiling = BRIGHT_WARN;
+      break;
+    }
     case INDICATOR_WARN: {
       const uint8_t c[] = {SOL_YELLOW};
       r = c[0], g = c[1], b = c[2];

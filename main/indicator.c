@@ -116,6 +116,12 @@ void indicator_tick(void) {
     set_percent(0);
     return;
   }
+  // One channel cannot say "suspended" in a colour, so it says it in a rhythm:
+  // a fast blink, distinguishable from the slow breath of a bound session.
+  if (state == INDICATOR_SUSPENDED) {
+    set_percent(((now / 250000) % 2) ? 60 : 0);
+    return;
+  }
 
   int percent = breathe_percent(now);
 
