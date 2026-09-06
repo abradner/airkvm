@@ -91,6 +91,12 @@ void status_set_media(bool attached, const char *name) {
   UNLOCK();
 }
 
+void status_note_activity(void) {
+  LOCK();
+  s_state.last_activity_us = esp_timer_get_time();
+  UNLOCK();
+}
+
 void status_note_event(const char *describe) {
   LOCK();
   expire_debug_locked();
