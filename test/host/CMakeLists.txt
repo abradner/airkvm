@@ -26,3 +26,15 @@ endforeach()
 # extra sources needed.
 add_executable(test_oled_geometry test_oled_geometry.c)
 add_test(NAME oled_geometry COMMAND test_oled_geometry)
+
+# canvas.h is header-only and free of esp_ headers for the same reason
+# oled_geometry.h is: so the rendering can be checked without a board. The font
+# tables are plain data translation units, and both are linked here so the
+# suite can compare the two boards' metrics against each other.
+add_executable(test_canvas test_canvas.c ../../main/font3x5.c ../../main/font8x16.c)
+add_test(NAME canvas COMMAND test_canvas)
+
+# status.c itself needs FreeRTOS, but status.h's debug-expiry predicate is pure
+# and is the part R-006 depends on being right.
+add_executable(test_status_debug test_status_debug.c)
+add_test(NAME status_debug COMMAND test_status_debug)

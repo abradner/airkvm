@@ -39,6 +39,7 @@ sdkconfig*
 !sdkconfig.defaults
 !sdkconfig.bench
 !sdkconfig.ci
+!sdkconfig.lcd147
 dependencies.lock
 *.bin
 *.elf

@@ -5,7 +5,6 @@ set(airkvm_srcs
     "session.c"
     "hid_state.c"
     "status.c"
-    "display.c"
     "indicator.c"
     "ui.c"
     "keymap.c"
@@ -23,18 +22,38 @@ set(airkvm_srcs
 # esp_https_ota and app_update are required unconditionally for the same
 # reason, even though the whole of ota.c — fetch and rollback-confirm both —
 # is a no-op when AIRKVM_OTA_TEST_URL is unset (every real build).
+#
+# esp_lcd is likewise unconditional even though only one board's display
+# backend uses it. Unlike esp_tinyusb below there is no manifest entry to fall
+# back on — it is an in-tree IDF component, not a managed one — so a
+# conditional REQUIRES here would genuinely fail to link rather than silently
+# appearing to work.
 set(airkvm_requires
     esp_http_server esp_https_server esp_wifi nvs_flash mdns driver esp_timer
-    esp_https_ota app_update)
+    esp_https_ota app_update esp_lcd)
 
 # Exactly one HID backend is compiled in (see main/hid_out.h). The USB backend
 # is only offered on targets with native USB OTG, so this never has to guard
 # against a C3 pulling in TinyUSB.
+#
+# NOTE: the `list(APPEND airkvm_requires ...)` below is dead — see the comment
+# above. TinyUSB reaches the link through main/idf_component.yml, not through
+# here. Left in place rather than removed in this change so the fix is its own
+# reviewable commit; tracked separately.
 if(CONFIG_AIRKVM_HID_BACKEND_USB)
     list(APPEND airkvm_srcs "hid_out_usb.c")
     list(APPEND airkvm_requires esp_tinyusb)
 else()
     list(APPEND airkvm_srcs "hid_out_log.c")
+endif()
+
+# Exactly one display backend, selected by the board. Conditional SRCS (unlike
+# conditional REQUIRES) are consumed in CMake's real pass, where CONFIG_ values
+# are visible, which is why this pattern works and the one above does not.
+if(CONFIG_AIRKVM_BOARD_S3_LCD147)
+    list(APPEND airkvm_srcs "display_st7789.c" "font8x16.c")
+else()
+    list(APPEND airkvm_srcs "display_ssd1306.c" "font3x5.c")
 endif()
 
 # The console is gzipped at build time and served compressed. This is not a

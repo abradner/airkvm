@@ -18,6 +18,21 @@
 
 static const char *TAG = "ui";
 
+// Safe area. The 1.47" LCD's corners are physically rounded and have no pixels
+// there (confirmed on hardware 2026-09-06). That is not a driver offset error
+// — nothing is displaced — so it is fixed by keeping content out of the
+// corners rather than by shifting the image, which would hide a few dead
+// pixels by moving everything else off-centre. One cell in from the left and
+// one row down is enough, and costs nothing at 40 columns. The 72x40 OLED is
+// square-cornered and takes no inset at all.
+#if BOARD_DISPLAY_ST7789
+#define UI_SAFE_INSET 8
+#define UI_X_COL 1
+#else
+#define UI_SAFE_INSET 0
+#define UI_X_COL 0
+#endif
+
 // The LED breathes, so it needs to be updated far more often than the screen
 // needs redrawing. One task, two rates.
 #define TICK_MS 30
@@ -33,13 +48,21 @@ static const char *TAG = "ui";
 // always registers.
 #define DEBOUNCE_MS 40
 
-// The S3 dongle has no LED (BOARD_HAS_LED 0 in board.h) to give a passive
-// "still alive" signal, so the screensaver's motion stands in for one after
-// the operator has walked away. (The C3 bench board does have one — this
-// still runs there too, harmlessly, since it costs nothing on a board that
-// already has its own indicator.)
+// Neither shipping board drives an LED (BOARD_HAS_LED 0 in board.h) to give a
+// passive "still alive" signal, so the screensaver's motion stands in for one
+// after the operator has walked away. The LCD board does have an RGB LED
+// physically, but it is a WS2812 and indicator.c is LEDC-PWM monochrome, so it
+// is left dark rather than half-driven — which keeps this rationale true for
+// that board too, for now. (The C3 bench board does have a working LED — this
+// still runs there, harmlessly, since it costs nothing on a board that already
+// has its own indicator.)
 #define SCREENSAVER_IDLE_MS (5 * 60 * 1000)
+#if BOARD_CELL_H >= 16
+// 3 pixels on the LCD is 0.3mm and reads as a dead pixel, not a sign of life.
+#define SCREENSAVER_SIZE 8
+#else
 #define SCREENSAVER_SIZE 3
+#endif
 
 // How long after the last input the radio stays at full speed. Short, because
 // this is the tier that costs current: the point is to be at full speed while
@@ -56,17 +79,20 @@ static const char *TAG = "ui";
 // places. The idle clock below reads whichever of the two is more recent.
 static int64_t s_local_wake_us;
 
-static int s_ss_x = 3, s_ss_y = 3, s_ss_dx = 1, s_ss_dy = 1;
+static int s_ss_x = UI_SAFE_INSET + 3, s_ss_y = UI_SAFE_INSET + 3, s_ss_dx = 1,
+           s_ss_dy = 1;
 
 static void draw_screensaver(void) {
   display_clear();
   s_ss_x += s_ss_dx;
   s_ss_y += s_ss_dy;
-  if (s_ss_x <= 0 || s_ss_x >= BOARD_OLED_WIDTH - SCREENSAVER_SIZE) {
+  if (s_ss_x <= UI_SAFE_INSET ||
+      s_ss_x >= DISPLAY_WIDTH - UI_SAFE_INSET - SCREENSAVER_SIZE) {
     s_ss_dx = -s_ss_dx;
     s_ss_x += s_ss_dx;
   }
-  if (s_ss_y <= 0 || s_ss_y >= BOARD_OLED_HEIGHT - SCREENSAVER_SIZE) {
+  if (s_ss_y <= UI_SAFE_INSET ||
+      s_ss_y >= DISPLAY_HEIGHT - UI_SAFE_INSET - SCREENSAVER_SIZE) {
     s_ss_dy = -s_ss_dy;
     s_ss_y += s_ss_dy;
   }
@@ -88,40 +114,92 @@ static int rssi_bars(int8_t rssi) {
   return 1;
 }
 
-// Laid out in pixels rather than rows because the address is drawn at double
-// height and everything else is not. 40 pixels, spent deliberately:
+// Laid out in pixels rather than rows because the address is drawn enlarged
+// and everything else is not. Per board, because the two panels are different
+// shapes rather than one scaled: the OLED spends 40 pixels with nothing to
+// spare, the LCD has 172 and can afford air between rows.
 //
+// Every value except the address must be a whole multiple of the cell height:
+// display_text takes a row, so a value that is not a multiple is silently
+// snapped down and lands somewhere this comment does not say.
+#if BOARD_DISPLAY_ST7789
+//   y 16..31   header     identity + who holds the keyboard     (row 1)
+//   y 40..71   ADDRESS    2x, the one thing you read            (32px)
+//   y 80..95   mDNS name  what you actually type                (row 5)
+//   y 96..111  network    SSID + signal bars                    (row 6)
+//   y 112..127 target     USB state and the event counter       (row 7)
+//   y 144..159 debug      only when physically enabled (R-006)  (row 9)
+//
+// The debug row is deliberately set apart from the block above it rather than
+// packed against it: it is the one row that is not always present, and the one
+// that shows keystrokes. A reader should be able to see at a glance that it is
+// on, not have to notice a fifth line in a paragraph.
+//
+// The name sits directly under the address because they answer the same
+// question — where do I point a browser — and it is deliberately the smaller
+// of the two: mDNS does not resolve on every network, the IP always works, so
+// the fallback is the one that gets the emphasis.
+#define UI_Y_HEADER 16
+#define UI_Y_ADDRESS 40
+#define UI_Y_MDNS 80
+#define UI_Y_NETWORK 96
+#define UI_Y_TARGET 112
+#define UI_Y_DEBUG 144
+#else
+#define UI_Y_HEADER 0
 //   y 0..5    header      identity + who holds the keyboard      (6px)
 //   y 7..16   ADDRESS     double height, the one thing you read  (10px)
 //   y 18..23  network     SSID + signal bars                     (6px)
 //   y 24..29  target      USB state and the event counter        (6px)
 //   y 30..35  debug       only when physically enabled (R-006)   (6px)
-//
-// The lower three are multiples of the 6px cell so they land exactly where
-// this comment says; display_text takes a row, and a value that is not a
-// multiple would be silently snapped down.
 #define UI_Y_ADDRESS 7
 #define UI_Y_NETWORK 18
 #define UI_Y_TARGET 24
 #define UI_Y_DEBUG 30
+#endif
+#ifdef UI_Y_MDNS
+_Static_assert(UI_Y_MDNS % DISPLAY_CELL_H == 0,
+               "UI_Y_MDNS must be a whole multiple of the cell height");
+#endif
+_Static_assert(UI_Y_NETWORK % DISPLAY_CELL_H == 0 &&
+                   UI_Y_TARGET % DISPLAY_CELL_H == 0 &&
+                   UI_Y_DEBUG % DISPLAY_CELL_H == 0,
+               "UI_Y_* rows must be whole multiples of the cell height, or "
+               "display_text silently snaps them somewhere else");
+_Static_assert(UI_Y_DEBUG + DISPLAY_CELL_H <= DISPLAY_HEIGHT,
+               "layout runs off the bottom of the panel");
 
 static void draw(const struct status_snapshot *s) {
   display_clear();
 
   // Identity, and who holds the keyboard — the thing you check first when the
   // console feels unresponsive, so it sits top-right.
-  display_text(0, 0, "AIRKVM");
-  display_text(11, 0, s->client_connected ? "BOUND" : "IDLE");
+  display_text(UI_X_COL, UI_Y_HEADER / DISPLAY_CELL_H, "AIRKVM");
+  display_text(DISPLAY_COLS - 7, UI_Y_HEADER / DISPLAY_CELL_H,
+               s->client_connected ? "BOUND" : "IDLE");
 
   // The address, at double height: this is what the screen is *for*, and at
   // single height it was technically legible rather than actually readable.
   // Stretched vertically only so a 15-character IP still fits on one line
   // (see display_text_tall).
-  display_text_tall(0, UI_Y_ADDRESS, s->wifi_connected ? s->ip : "NO WIFI");
+  display_text_tall(UI_X_COL, UI_Y_ADDRESS,
+                    s->wifi_connected ? s->ip : "NO WIFI");
+
+#ifdef UI_Y_MDNS
+  // The name the certificate is issued for, so this also says which name will
+  // validate in the browser. Only meaningful once there is a network to
+  // resolve it on. The 0.42" panel has no row to spare for it.
+  if (s->wifi_connected) {
+    char host[DISPLAY_COLS + 1];
+    snprintf(host, sizeof(host), "%s.local", CONFIG_AIRKVM_MDNS_HOSTNAME);
+    display_text(UI_X_COL, UI_Y_MDNS / DISPLAY_CELL_H, host);
+  }
+#endif
 
   if (s->wifi_connected) {
-    display_text(0, UI_Y_NETWORK / DISPLAY_CELL_H, s->ssid);
-    display_bar(14, UI_Y_NETWORK / DISPLAY_CELL_H, 4, rssi_bars(s->rssi));
+    display_text(UI_X_COL, UI_Y_NETWORK / DISPLAY_CELL_H, s->ssid);
+    display_bar(DISPLAY_COLS - 4, UI_Y_NETWORK / DISPLAY_CELL_H, 4,
+                rssi_bars(s->rssi));
   }
 
   // Whether a target is actually listening, and proof that input is arriving —
@@ -133,13 +211,21 @@ static void draw(const struct status_snapshot *s) {
   } else {
     snprintf(line, sizeof(line), "NO HID  %lu", (unsigned long)s->events);
   }
-  display_text(0, UI_Y_TARGET / DISPLAY_CELL_H, line);
+  display_text(UI_X_COL, UI_Y_TARGET / DISPLAY_CELL_H, line);
 
   // Debug row. Off by default and only reachable by physically pressing the
   // button on the device (R-006) — this shows what is being typed, so it must
   // never be enable-able from the network.
+  //
+  // Rendered at the smallest cell the panel has, never enlarged, and that is a
+  // security parameter rather than a layout one: R-006's argument is that
+  // anyone who can press the button could already unplug the device, which
+  // silently assumed the row is only legible from arm's reach. On the LCD the
+  // smallest renderable glyph is already 2.5x the OLED's linear size, so the
+  // assumption is weaker here and must not be weakened further. Do not "fix"
+  // this to match the other rows.
   if (s->debug) {
-    display_text(0, UI_Y_DEBUG / DISPLAY_CELL_H,
+    display_text(UI_X_COL, UI_Y_DEBUG / DISPLAY_CELL_H,
                  s->last_event[0] ? s->last_event : "DEBUG ON");
   }
 

@@ -1,0 +1,41 @@
+# LCD overlay: Waveshare ESP32-S3-LCD-1.47B. Applied on top of
+# sdkconfig.defaults, into its own generated sdkconfig — see mise.toml.
+#
+# The separate -DSDKCONFIG= is not tidiness. SDKCONFIG_DEFAULTS files only
+# *seed* symbols a generated sdkconfig does not already contain (AGENTS.md
+# §6.1), so sharing one with the 0.42" dongle would silently give this board
+# that board's 4MB flash size, with no diagnostic of any kind.
+
+CONFIG_AIRKVM_BOARD_S3_LCD147=y
+
+# Flash size measured on this board with `esptool flash_id` on 2026-09-06:
+# ESP32-S3 (QFN56) rev v0.2, embedded 8MB PSRAM, discrete XMC 25QH128 = 16MB.
+# A measurement, not a part-family guarantee — reconfirm if the board revision
+# changes, exactly as sdkconfig.defaults says for the 4MB dongle.
+#
+# Setting this is a correctness fix rather than an optimisation: the value goes
+# into the image header and governs flash mapping, so leaving it at the
+# dongle's 4MB would be a false claim about this part.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+
+# The partition table is deliberately NOT changed. partitions_two_ota_large.csv
+# totals 0x359000 (3.35MB) against a ~1011KB image, so it fits a 16MB part with
+# ~12.6MB unused and ~40% slot headroom. Growing the slots to consume 16MB buys
+# nothing measurable and costs a hand-rolled CSV with offset arithmetic someone
+# has to re-verify — which sdkconfig.defaults already declined once, for the
+# same reason.
+#
+# Note this is close to a one-way door: once OTA is bootstrapped the table
+# cannot be changed over the wire, because an image whose table disagrees with
+# flash breaks the path that would deliver the fix. Revisit only if microSD
+# wants a data partition, and only with a cable in hand.
+
+# NOT set here, inherited from sdkconfig.defaults and verified present in
+# build-lcd147/config/sdkconfig.h before the first flash:
+#   CONFIG_FREERTOS_HZ=1000            (gotcha 12 — halves typing throughput)
+#   CONFIG_MBEDTLS_SSL_PROTO_TLS1_3=n  (gotcha 13 — reboots on every handshake)
+#
+# No CONFIG_SPIRAM* either. The 8MB octal PSRAM stays off: nothing here needs
+# it, and it is a third consumer of shared bus resources on the one part where
+# a shared-clock conflict has already cost an evening (gotcha 10).

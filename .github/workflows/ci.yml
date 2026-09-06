@@ -23,9 +23,23 @@ jobs:
         run: ctest --test-dir test/host/build --output-on-failure
 
   firmware-build:
-    name: Firmware build (esp32s3)
+    # One leg per shipping board. Both are esp32s3, so the board is chosen by a
+    # Kconfig symbol rather than by target — which means a shared generated
+    # sdkconfig would silently build the same image twice and report two green
+    # checks for one configuration. Hence a distinct -DSDKCONFIG per leg; that
+    # is load-bearing, not tidiness (AGENTS.md §6.1: a defaults file cannot
+    # change a symbol an existing sdkconfig already holds).
+    name: Firmware build (${{ matrix.board }})
     runs-on: ubuntu-latest
     container: espressif/idf:release-v5.5
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - board: s3-oled042
+            defaults: "sdkconfig.defaults"
+          - board: s3-lcd147
+            defaults: "sdkconfig.defaults;sdkconfig.lcd147"
     steps:
       - uses: actions/checkout@v4
       # CONFIG_AIRKVM_TLS defaults to y, and the certificates it embeds live in
@@ -45,10 +59,41 @@ jobs:
       # USB enumeration, HID delivery, or latency — see AGENTS.md §7.
       - name: Build
         shell: bash
+        # `idf.py set-target` writes sdkconfig and does not compose with
+        # SDKCONFIG_DEFAULTS, so the target is passed at configure time
+        # instead — the same way mise.toml's build-bench does it.
         run: |
           . "$IDF_PATH/export.sh"
-          idf.py set-target esp32s3
-          idf.py build
+          idf.py -B build-${{ matrix.board }} -DIDF_TARGET=esp32s3 \
+            -DSDKCONFIG_DEFAULTS="${{ matrix.defaults }}" \
+            -DSDKCONFIG=sdkconfig.${{ matrix.board }}.ci build
+      # A build is not a behaviour, and this one is worth confirming rather
+      # than assuming: the board symbol reaching the compiler is exactly the
+      # thing §6.1 says fails silently, and an image built for the wrong board
+      # links and passes just as green as the right one.
+      - name: Confirm the intended board actually reached the compiler
+        shell: bash
+        run: |
+          header="build-${{ matrix.board }}/config/sdkconfig.h"
+          case "${{ matrix.board }}" in
+            s3-oled042) want=CONFIG_AIRKVM_BOARD_S3_OLED042 ;;
+            s3-lcd147)  want=CONFIG_AIRKVM_BOARD_S3_LCD147 ;;
+          esac
+          # `if` rather than `grep && {...}`: this step runs under `bash -e`,
+          # where a failing AND-list aborts the step — so the negative check
+          # would fail the build in exactly the case it is meant to pass.
+          if ! grep -q "^#define $want 1" "$header"; then
+            echo "::error::$want absent from $header"; exit 1
+          fi
+          if ! grep -q "^#define CONFIG_FREERTOS_HZ 1000" "$header"; then
+            echo "::error::FREERTOS_HZ is not 1000 (gotcha 12)"; exit 1
+          fi
+          # A disabled Kconfig symbol is absent from the generated header
+          # entirely, so presence of any kind means it got switched on.
+          if grep -q "CONFIG_MBEDTLS_SSL_PROTO_TLS1_3" "$header"; then
+            echo "::error::TLS 1.3 is enabled (gotcha 13)"; exit 1
+          fi
+          echo "$want present, FREERTOS_HZ=1000, TLS 1.3 off"
 
   lint:
     name: Lint (clang-format, ruff)

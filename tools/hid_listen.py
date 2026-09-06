@@ -28,11 +28,27 @@ Linux only, by construction — it reads the kernel's evdev interface.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import glob
 import os
 import struct
 import sys
 import time
+
+# EVIOCGRAB: _IOW('E', 0x90, int). Grabbing takes the device exclusively, so
+# events go ONLY to this process and never reach the desktop session.
+#
+# That matters here beyond tidiness. The dongle is often plugged into the same
+# machine that is developing it, which makes it a real keyboard attached to the
+# operator's own session — so a typing test types into whatever window has
+# focus, and a stuck modifier is the operator's problem rather than the
+# target's. Grabbing turns the test into something safe to run unattended.
+#
+# The grab lasts only while the fd is open, and the kernel drops it on exit,
+# including on a crash. Not the default: an un-grabbed listen is the honest
+# observation of what a real target would receive, and silently intercepting a
+# keyboard is not something a tool should do unless asked.
+EVIOCGRAB = 0x40044590
 
 # struct input_event: struct timeval (2 x long), __u16 type, __u16 code,
 # __s32 value. 24 bytes on 64-bit; asserted at run time rather than assumed,
@@ -141,7 +157,11 @@ def find_keyboard(wait_s: float = 0.0) -> str:
         time.sleep(0.25)
 
 
-def listen(path: str, deadline: float, quiet: bool) -> str:
+def _set_grab(fd: int, on: bool) -> None:
+    fcntl.ioctl(fd, EVIOCGRAB, 1 if on else 0)
+
+
+def listen(path: str, deadline: float, quiet: bool, grab: bool = False) -> str:
     """Collect typed characters until the deadline. Returns what was typed."""
     typed: list[str] = []
     # A *set* of held shift keycodes, not a boolean. With a boolean, holding
@@ -157,6 +177,22 @@ def listen(path: str, deadline: float, quiet: bool) -> str:
             "(and a fresh login to pick it up). Deliberately not asking for root."
         )
     try:
+        if grab:
+            try:
+                _set_grab(fd, True)
+            except OSError as exc:
+                print(
+                    f"could not grab {path} exclusively ({exc}) — refusing to "
+                    "continue, because the caller asked for keystrokes to be "
+                    "trapped and they would instead reach the desktop",
+                    file=sys.stderr,
+                )
+                raise SystemExit(2) from exc
+            if not quiet:
+                print(
+                    "  [grabbed: keystrokes will NOT reach this session]",
+                    file=sys.stderr,
+                )
         while time.time() < deadline:
             try:
                 data = os.read(fd, EVENT_SIZE * 64)
@@ -217,6 +253,13 @@ def main() -> int:
     parser.add_argument(
         "--quiet", action="store_true", help="suppress modifier chatter"
     )
+    parser.add_argument(
+        "--grab",
+        action="store_true",
+        help="take the device exclusively so keystrokes do NOT reach this "
+        "machine's desktop session — use when the dongle is plugged into the "
+        "same machine you are working on",
+    )
     args = parser.parse_args()
 
     if EVENT_SIZE != 24:
@@ -231,7 +274,7 @@ def main() -> int:
     if not args.quiet:
         print(f"listening on {path} for {args.seconds}s", file=sys.stderr)
 
-    typed = listen(path, time.time() + args.seconds, args.quiet)
+    typed = listen(path, time.time() + args.seconds, args.quiet, args.grab)
 
     if args.expect is None:
         print(typed)
