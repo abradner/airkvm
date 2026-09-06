@@ -18,7 +18,8 @@
 // advertises remote wakeup (bmAttributes 0xA0 rather than 0x80). Enumeration
 // with that bit set, whether a host arms it, whether the wakeup pulse resumes
 // a sleeping target, and whether advertising it makes hosts selectively
-// suspend an idle dongle are all unverified until re-run on hardware.
+// suspend an idle dongle (which wake-on-input in the report task exists to
+// survive) are all unverified until re-run on hardware.
 //
 // The C3 bench board cannot test any of this: its backend logs intents
 // instead of sending reports, so it cannot even lose one. Do not let either
@@ -30,6 +31,7 @@
 #include "class/hid/hid_device.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -130,6 +132,21 @@ static volatile bool s_release_pending;
 static volatile bool s_suspended;
 static volatile bool s_remote_wakeup_en;
 static volatile bool s_wake_pending;
+
+// Wake-on-input. Set by hid_out_submit() for operator input only — key, button,
+// motion, scroll — and consumed by the report task, which turns it into a
+// wakeup when the bus is suspended with wakeup armed. It is deliberately not
+// derived from "is any output owed": the suspend itself leaves a release-all
+// report owed, and a console keeps sending PINGs and the occasional
+// RELEASE_ALL, none of which is a person asking the machine to wake up. Keyed
+// on those, the target could never stay asleep with a dongle plugged in.
+static volatile bool s_input_arrived;
+
+// Rate limit for wake-on-input. 100 ms: long enough for a host to actually
+// resume before we ask again, short enough that a keystroke typed into a
+// suspended bus is not noticeably late on top of the resume itself.
+#define IMPLICIT_WAKE_MIN_INTERVAL_US (100 * 1000)
+static int64_t s_last_implicit_wake_us;
 
 bool hid_out_is_mounted(void) {
   return s_mounted;
@@ -397,6 +414,23 @@ static void report_task(void *arg) {
       s_buttons_dirty = true;
     }
 
+    // Implicit wake: what a physical keyboard does when you tap a key on a
+    // sleeping machine, and what makes advertising remote wakeup safe. Hosts
+    // that selectively suspend an idle HID device (Windows does by default
+    // for wake-capable devices; Linux when a power tool sets power/control to
+    // auto — hypotheses until observed) would otherwise park the bus while the
+    // target is fully awake, and every keystroke after that would sit behind
+    // tud_hid_n_ready() == false until something else resumed it.
+    if (s_input_arrived) {
+      s_input_arrived = false;
+      const int64_t now_us = esp_timer_get_time();
+      if (s_suspended && s_remote_wakeup_en &&
+          now_us - s_last_implicit_wake_us > IMPLICIT_WAKE_MIN_INTERVAL_US) {
+        s_last_implicit_wake_us = now_us;
+        s_wake_pending = true;
+      }
+    }
+
     if (s_wake_pending) {
       s_wake_pending = false;
       // On this task, not the HTTP task: inside the dcd this is a
@@ -493,7 +527,23 @@ bool hid_out_submit(const struct airkvm_intent *intent) {
   }
   // Never block: this runs on the HTTP task, and a stalled network task holding
   // a key down is the failure this design exists to prevent.
-  return xQueueSend(s_queue, intent, 0) == pdTRUE;
+  if (xQueueSend(s_queue, intent, 0) != pdTRUE) {
+    return false;
+  }
+  switch (intent->type) {
+    case AIRKVM_FRAME_KEY_DOWN:
+    case AIRKVM_FRAME_KEY_UP:
+    case AIRKVM_FRAME_MOUSE_MOVE:
+    case AIRKVM_FRAME_MOUSE_BUTTON:
+    case AIRKVM_FRAME_MOUSE_SCROLL:
+      s_input_arrived = true;  // see the note on wake-on-input
+      break;
+    case AIRKVM_FRAME_RELEASE_ALL:
+    case AIRKVM_FRAME_PING:
+    case AIRKVM_FRAME_WAKE:
+      break;
+  }
+  return true;
 }
 
 void hid_out_release_all(void) {
