@@ -14,6 +14,17 @@
 //   0x05 MOUSE_SCROLL [i8 vertical][i8 horizontal]
 //   0x06 RELEASE_ALL  (no payload)
 //   0x07 PING         (no payload)
+//   0x08 WAKE         (no payload)  ask the dongle to signal USB remote wakeup
+//
+// The dongle also sends frames to the console, in the same [u8 type][payload]
+// shape. Downstream types have bit 7 set, so the two directions can never be
+// confused for one another even if a frame is ever reflected:
+//
+//   0x80 WAKE_RESULT  [u8 result]   reply to WAKE; see enum airkvm_wake_result
+//
+// This is the first downstream frame the protocol has had. No convention
+// existed before it; the bit-7 split is a proposal (AGENTS.md §8), not settled
+// law — codify or correct it in review.
 //
 // Mouse buttons are sent as an absolute mask rather than down/up events so that
 // a dropped frame self-corrects on the next one, instead of leaving a button
@@ -31,6 +42,27 @@ enum airkvm_frame_type {
   AIRKVM_FRAME_MOUSE_SCROLL = 0x05,
   AIRKVM_FRAME_RELEASE_ALL = 0x06,
   AIRKVM_FRAME_PING = 0x07,
+  // Asks the dongle to signal USB remote wakeup. Meaningful only while the
+  // target has suspended the bus with wakeup armed; every other state is
+  // reported back rather than guessed at (see airkvm_wake_result).
+  AIRKVM_FRAME_WAKE = 0x08,
+};
+
+// Dongle → console frame types. Bit 7 set, see the table above.
+enum airkvm_downstream_type {
+  AIRKVM_DOWN_WAKE_RESULT = 0x80,
+};
+
+// What happened to a WAKE. REQUESTED means the preconditions held and the
+// wakeup pulse was handed to the USB stack — it does not mean the target woke;
+// only the bus resuming is evidence of that. The other three name which
+// precondition failed, so the console can say something more useful than "no".
+enum airkvm_wake_result {
+  AIRKVM_WAKE_REQUESTED = 0,
+  AIRKVM_WAKE_NO_HOST = 1,        // not enumerated: nothing to wake
+  AIRKVM_WAKE_NOT_SUSPENDED = 2,  // bus is active: the target is not asleep
+  AIRKVM_WAKE_NOT_ENABLED_BY_HOST =
+      3,  // target suspended without arming wakeup
 };
 
 // Longest KeyboardEvent.code this accepts. The longest real one is

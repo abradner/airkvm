@@ -39,6 +39,10 @@ static void decodes_payloadless_frames(void) {
   const uint8_t ping[] = {AIRKVM_FRAME_PING};
   CHECK_EQ_INT(airkvm_decode(ping, sizeof(ping), &out), AIRKVM_DECODE_OK);
   CHECK_EQ_INT(out.type, AIRKVM_FRAME_PING);
+
+  const uint8_t wake[] = {AIRKVM_FRAME_WAKE};
+  CHECK_EQ_INT(airkvm_decode(wake, sizeof(wake), &out), AIRKVM_DECODE_OK);
+  CHECK_EQ_INT(out.type, AIRKVM_FRAME_WAKE);
 }
 
 static void rejects_malformed_frames(void) {
@@ -50,6 +54,12 @@ static void rejects_malformed_frames(void) {
 
   const uint8_t unknown[] = {0x7F, 0x00};
   CHECK_EQ_INT(airkvm_decode(unknown, sizeof(unknown), &out),
+               AIRKVM_DECODE_UNKNOWN_TYPE);
+
+  // A downstream (dongle → console) type reflected back upstream is not an
+  // input frame and must not be mistaken for one (protocol.h, bit-7 rule).
+  const uint8_t reflected[] = {AIRKVM_DOWN_WAKE_RESULT, 0x00};
+  CHECK_EQ_INT(airkvm_decode(reflected, sizeof(reflected), &out),
                AIRKVM_DECODE_UNKNOWN_TYPE);
 
   // Declared length exceeds the bytes actually present.
@@ -68,6 +78,12 @@ static void rejects_malformed_frames(void) {
 
   const uint8_t fat_release[] = {AIRKVM_FRAME_RELEASE_ALL, 0x00};
   CHECK_EQ_INT(airkvm_decode(fat_release, sizeof(fat_release), &out),
+               AIRKVM_DECODE_TRUNCATED);
+
+  // WAKE has no payload either; a trailing byte is a client we don't
+  // understand asking to wake a machine, and is refused the same way.
+  const uint8_t fat_wake[] = {AIRKVM_FRAME_WAKE, 0x00};
+  CHECK_EQ_INT(airkvm_decode(fat_wake, sizeof(fat_wake), &out),
                AIRKVM_DECODE_TRUNCATED);
 }
 

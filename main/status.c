@@ -74,6 +74,12 @@ void status_set_usb_mounted(bool mounted) {
   UNLOCK();
 }
 
+void status_set_usb_suspended(bool suspended) {
+  LOCK();
+  s_state.usb_suspended = suspended;
+  UNLOCK();
+}
+
 void status_note_event(const char *describe) {
   LOCK();
   expire_debug_locked();

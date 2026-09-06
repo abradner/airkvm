@@ -206,7 +206,12 @@ static void draw(const struct status_snapshot *s) {
   // together these separate "my input isn't getting there" from "the target is
   // ignoring me", which is the question this device gets used to answer.
   char line[DISPLAY_COLS + 1];
-  if (s->usb_mounted) {
+  if (s->usb_mounted && s->usb_suspended) {
+    // Enumerated, but the target has parked the bus: nothing typed now will
+    // land until it resumes. "SUSP" is the bus state, not a claim the target
+    // is asleep (see status.h).
+    snprintf(line, sizeof(line), "USB SUSP %lu", (unsigned long)s->events);
+  } else if (s->usb_mounted) {
     snprintf(line, sizeof(line), "USB OK  %lu", (unsigned long)s->events);
   } else {
     snprintf(line, sizeof(line), "NO HID  %lu", (unsigned long)s->events);
