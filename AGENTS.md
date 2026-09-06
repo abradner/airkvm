@@ -282,6 +282,19 @@ add rather than rewrite.
   the API — `gh api repos/abradner/airkvm/pulls/N/comments` — not the web summary. Related: Copilot
   reviews each PR against *its own base*, so in a stack it objects to things a later interstitial
   already fixed; check the cap of the stack before actioning a finding raised low in it.
+- **After `mise run fmt`, an exact-string edit that no longer matches fails
+  SILENTLY — and clang-format realigning one trailing comment is enough to cause
+  it.** This is the reflow entry below biting a second way, and it has now cost
+  three rounds in one session. Twice the edit did nothing and the session
+  believed it had; the third time a *commit message* asserted a property the
+  code did not have, which is a principle-1 violation shipped to a branch. It is
+  particularly nasty because the build stays green: the old code is still valid,
+  so nothing fails, and the only symptom is that reality quietly disagrees with
+  what you just said about it. Every instance here was caught by something that
+  checked the *file* afterwards (a preprocessor run, a grep, a numeric
+  cross-check), never by the edit itself. So: after any scripted edit to a
+  formatted file, assert the new text is present — or have the edit fail loudly
+  (`assert old in s`) rather than silently no-op.
 - **`mise run fmt` (clang-format) reflows across comment boundaries and can orphan a doc comment
   above the wrong function.** It happened in the keepalive PR, and the result compiles and lints
   clean — nothing catches it but reading. Re-read any region you formatted.
