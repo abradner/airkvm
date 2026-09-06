@@ -5,7 +5,6 @@ set(airkvm_srcs
     "session.c"
     "hid_state.c"
     "status.c"
-    "indicator.c"
     "ui.c"
     "keymap.c"
     "protocol.c"
@@ -30,7 +29,7 @@ set(airkvm_srcs
 # appearing to work.
 set(airkvm_requires
     esp_http_server esp_https_server esp_wifi nvs_flash mdns driver esp_timer
-    esp_https_ota app_update esp_lcd)
+    esp_https_ota app_update esp_lcd esp_driver_rmt)
 
 # Exactly one HID backend is compiled in (see main/hid_out.h). The USB backend
 # is only offered on targets with native USB OTG, so this never has to guard
@@ -54,6 +53,14 @@ if(CONFIG_AIRKVM_BOARD_S3_LCD147)
     list(APPEND airkvm_srcs "display_st7789.c" "font8x16.c")
 else()
     list(APPEND airkvm_srcs "display_ssd1306.c" "font3x5.c")
+endif()
+
+# Likewise exactly one indicator backend (see main/indicator.h). An addressable
+# LED is a different driver, not a parameter of the PWM one.
+if(CONFIG_AIRKVM_BOARD_S3_LCD147)
+    list(APPEND airkvm_srcs "indicator_ws2812.c")
+else()
+    list(APPEND airkvm_srcs "indicator.c")
 endif()
 
 # The console is gzipped at build time and served compressed. This is not a

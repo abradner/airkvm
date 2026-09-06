@@ -48,14 +48,11 @@ static const char *TAG = "ui";
 // always registers.
 #define DEBOUNCE_MS 40
 
-// Neither shipping board drives an LED (BOARD_HAS_LED 0 in board.h) to give a
-// passive "still alive" signal, so the screensaver's motion stands in for one
-// after the operator has walked away. The LCD board does have an RGB LED
-// physically, but it is a WS2812 and indicator.c is LEDC-PWM monochrome, so it
-// is left dark rather than half-driven — which keeps this rationale true for
-// that board too, for now. (The C3 bench board does have a working LED — this
-// still runs there, harmlessly, since it costs nothing on a board that already
-// has its own indicator.)
+// The screensaver's motion is a passive "still alive" signal for the 0.42"
+// dongle, which has no LED at all (BOARD_HAS_LED 0). On boards that do drive
+// one — the C3 bench board and now the LCD board's RGB LED — the light already
+// says that better, and this still runs harmlessly: blanking a static screen
+// after the operator has walked away is worth doing on its own merits.
 #define SCREENSAVER_IDLE_MS (5 * 60 * 1000)
 #if BOARD_CELL_H >= 16
 // 3 pixels on the LCD is 0.3mm and reads as a dead pixel, not a sign of life.
