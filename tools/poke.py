@@ -13,6 +13,7 @@ to a debugging aid would mean a virtualenv between you and a stuck key.
     ./tools/poke.py airkvm.local release
     ./tools/poke.py airkvm.local wake
     ./tools/poke.py airkvm.local hold ShiftLeft --seconds 20   # keep pressed
+    ./tools/poke.py --tls airkvm.local media debian.iso        # serve an image
 
 The real firmware serves over TLS by default (CONFIG_AIRKVM_TLS) — add --tls
 to reach it; --port defaults to 443 in that case. Verified against the
@@ -52,6 +53,24 @@ WAKE = 0x08
 
 # Dongle → tool. Bit 7 set, see main/protocol.h.
 DOWN_WAKE_RESULT = 0x80
+
+# The media socket (main/media_proto.h), a separate WebSocket on its own port.
+MEDIA_ATTACH = 0x10
+MEDIA_DETACH = 0x11
+MEDIA_DATA = 0x12
+MEDIA_ERROR = 0x13
+MEDIA_REQ = 0x90
+MEDIA_STATUS = 0x91
+MEDIA_CHUNK = 16384  # MEDIA_CHUNK_SIZE
+MEDIA_BLOCK = 512
+MEDIA_PORT_SECURE = 8443
+MEDIA_PORT_INSECURE = 8080
+MEDIA_STATES = {
+    0: "no medium",
+    1: "attached",
+    2: "busy (another client)",
+    3: "refused: dongle heap too low to hold the cache and keep the console",
+}
 WAKE_RESULTS = {
     0: "requested — pulse sent, watch the target",
     1: "no USB host enumerated",
@@ -155,7 +174,7 @@ class WebSocket:
             raise ValueError("frame too large for this tool")
         self.sock.sendall(header + mask + masked)
 
-    def recv_binary(self, timeout: float = 2.0) -> bytes | None:
+    def recv_binary(self, timeout: float | None = 2.0) -> bytes | None:
         """Read one unmasked server frame, or None if nothing arrives in time.
 
         The dongle only ever replies to WAKE today, so this is deliberately
@@ -170,7 +189,12 @@ class WebSocket:
                 return None
             opcode = header[0] & 0x0F
             length = header[1] & 0x7F
-            if length >= 126:
+            if length == 126:
+                ext = self._recv_exact(2)
+                if ext is None:
+                    return None
+                length = struct.unpack(">H", ext)[0]
+            elif length == 127:
                 raise RuntimeError("server frame longer than this tool expects")
             payload = self._recv_exact(length) if length else b""
             if opcode != 0x2:
@@ -357,6 +381,79 @@ def cmd_hold(ws: WebSocket, combo: str, seconds: float | None) -> int:
     return 0
 
 
+def cmd_media(ws: WebSocket, path: Path) -> int:
+    """Serve a disk image to the target from this machine's filesystem.
+
+    The dongle presents a removable disk; this attaches `path` as its medium
+    and answers chunk requests until Ctrl-C. It is the throughput instrument
+    for the media path — `dd` on the target against a clock here — and the
+    way to boot a target from an image without a browser at all.
+    """
+    size = path.stat().st_size
+    blocks = (size + MEDIA_BLOCK - 1) // MEDIA_BLOCK
+    name = path.name.encode("utf-8")[:31]
+    attach = (
+        bytes([MEDIA_ATTACH])
+        + struct.pack("<HQB", MEDIA_BLOCK, blocks, 0x01)
+        + bytes([len(name)])
+        + name
+    )
+    ws.send_binary(attach, reports=0)
+    served = 0
+    started = time.monotonic()
+    print(f"attaching {path.name}: {size} bytes, {blocks} blocks", file=sys.stderr)
+    try:
+        with path.open("rb") as f:
+            while True:
+                reply = ws.recv_binary(timeout=None)
+                if reply is None:
+                    continue
+                if reply[0] == MEDIA_STATUS and len(reply) == 10:
+                    state = reply[1]
+                    print(f"status: {MEDIA_STATES.get(state, state)}", file=sys.stderr)
+                    if state in (2, 3):
+                        return 1
+                elif reply[0] == MEDIA_REQ and len(reply) == 9:
+                    req_id, chunk = struct.unpack("<II", reply[1:9])
+                    f.seek(chunk * MEDIA_CHUNK)
+                    data = f.read(MEDIA_CHUNK)
+                    if not data and chunk * MEDIA_CHUNK >= blocks * MEDIA_BLOCK:
+                        ws.send_binary(
+                            bytes([MEDIA_ERROR]) + struct.pack("<IB", req_id, 1),
+                            reports=0,
+                        )
+                        continue
+                    # Always a whole chunk; the tail past the image is zeros.
+                    data = data.ljust(MEDIA_CHUNK, b"\0")
+                    frame = (
+                        bytes([MEDIA_DATA])
+                        + struct.pack("<IIIH", req_id, chunk, 0, MEDIA_CHUNK)
+                        + data
+                    )
+                    ws.send_binary(frame, reports=0)
+                    served += MEDIA_CHUNK
+                    elapsed = time.monotonic() - started
+                    if served % (64 * MEDIA_CHUNK) == 0 and elapsed > 0:
+                        print(
+                            f"served {served >> 20} MiB, {served / elapsed / 1048576:.2f} MiB/s",
+                            file=sys.stderr,
+                        )
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try:
+            ws.send_binary(bytes([MEDIA_DETACH]), reports=0)
+        except OSError:
+            pass
+    elapsed = time.monotonic() - started
+    if elapsed > 0:
+        print(
+            f"detached: {served} bytes in {elapsed:.1f}s, {served / elapsed / 1048576:.2f} MiB/s",
+            file=sys.stderr,
+        )
+    return 0
+
+
 def cmd_wake(ws: WebSocket) -> int:
     ws.send_binary(bytes([WAKE]), reports=0)
     reply = ws.recv_binary()
@@ -431,6 +528,13 @@ def main() -> int:
     p_move.add_argument("dx", type=int)
     p_move.add_argument("dy", type=int)
 
+    p_media = sub.add_parser(
+        "media",
+        help="attach a disk image and serve its chunks until Ctrl-C (talks to "
+        "the media socket, not the input one)",
+    )
+    p_media.add_argument("image", type=Path)
+
     p_hold = sub.add_parser(
         "hold",
         help="press a chord and keep it held with the socket open, for the "
@@ -463,9 +567,16 @@ def main() -> int:
     if args.insecure:
         print("--insecure: TLS certificate NOT verified", file=sys.stderr)
 
+    # The media subcommand speaks to a different socket on a different port.
+    path = "/ws"
+    if args.command == "media":
+        path = "/ws-media"
+        if args.port is None:
+            port = MEDIA_PORT_SECURE if args.tls else MEDIA_PORT_INSECURE
+
     try:
         ws = WebSocket(
-            args.host, port, tls=args.tls, ca=args.ca, insecure=args.insecure
+            args.host, port, path=path, tls=args.tls, ca=args.ca, insecure=args.insecure
         )
     except (OSError, RuntimeError, ssl.SSLError) as err:
         # A traceback here says nothing useful: the answer is almost always
@@ -484,6 +595,8 @@ def main() -> int:
             return cmd_wake(ws)
         if args.command == "hold":
             return cmd_hold(ws, args.combo, args.seconds)
+        if args.command == "media":
+            return cmd_media(ws, args.image)
         if args.command == "release":
             ws.send_binary(bytes([RELEASE_ALL]))
             return 0
@@ -502,11 +615,13 @@ def main() -> int:
             pass
         # Always release before leaving: a tool that exits mid-chord and leaves
         # Ctrl held on someone's machine is the exact failure this project's
-        # principle 4 names.
-        try:
-            ws.send_binary(bytes([RELEASE_ALL]))
-        except OSError:
-            pass
+        # principle 4 names. Not on the media socket, which does not speak
+        # input frames and would log a rejection.
+        if args.command != "media":
+            try:
+                ws.send_binary(bytes([RELEASE_ALL]))
+            except OSError:
+                pass
         ws.close()
 
 

@@ -10,6 +10,7 @@
 
 airkvm turns a ~$12 ESP32-S3-0.42 OLED "supermini" board into an ad-hoc wireless KVM input
 dongle: plugged into any machine's USB port it enumerates as a real USB HID keyboard + mouse
+(and a removable disk, whose medium is a disk image the operator's browser holds)
 (boot protocol, so BIOS/UEFI works), and it serves a browser-based console over WiFi from which
 the operator types and points. Video is deliberately out of scope on-device: the operator's
 HDMI→USB capture dongle is a local UVC webcam, and the console displays it in the same browser
@@ -79,7 +80,7 @@ A conflict with a principle is a stop-and-check, never something to quietly work
 |---|---|---|
 | Firmware language | C (C11) | ESP-IDF v5.5, installed by `mise run setup` into `.esp-idf/` |
 | Target hardware | ESP32-S3 (`esp32s3` target) | ESP32-S3-0.42 OLED supermini; native USB OTG is non-negotiable (§4) |
-| USB stack | TinyUSB via `esp_tinyusb` | Composite: boot keyboard + relative mouse + a mass-storage LUN (no medium yet; `main/msc_out.c`). Advertises USB remote wakeup so the console can wake a suspended target. Composite enumeration and wakeup both unverified on hardware |
+| USB stack | TinyUSB via `esp_tinyusb` | Composite: boot keyboard + relative mouse + a mass-storage LUN (`main/msc_out.c`) whose medium is a browser-held image streamed over `/ws-media` (`main/media_ws.c`, `main/block_source_browser.c`). Advertises USB remote wakeup so the console can wake a suspended target. Composite enumeration, media, and wakeup all unverified on hardware |
 | Network | `esp_http_server` (WebSocket) + `mdns` | Single origin serves console and socket |
 | Console | Vanilla HTML/CSS/JS, no build step | Embedded in firmware via `EMBED_FILES`; no npm, no bundler, no CDN |
 | Display | SSD1306 72×40 over I2C, or ST7789 172×320 over SPI | One backend per board behind `main/display.h` (`display_ssd1306.c` / `display_st7789.c`), sharing the drawing layer in `main/canvas.h`. Status only (IP, mDNS name, link state). Both confirmed on real hardware: the OLED's pins and 180° rotation on 2026-08-31, the ST7789's pins, orientation and gap on 2026-09-06 |

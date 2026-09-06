@@ -3,7 +3,8 @@
 > 🤖 **AI Agents:** read [`AGENTS.md`](AGENTS.md) instead. This README is for humans.
 
 A ~$12 ESP32-S3 board that plugs into any machine's USB port, enumerates as a **real USB keyboard
-and mouse**, and serves a web console you drive from your laptop's browser. Walk up to a machine,
+and mouse** (and a removable disk you can drop an ISO onto from the browser — unverified on
+hardware yet), and serves a web console you drive from your laptop's browser. Walk up to a machine,
 plug it in, open a URL, type. Nothing installed on the target. Nothing installed on your laptop.
 
 Because the target sees a plain HID keyboard, it works where software remote-control doesn't:
