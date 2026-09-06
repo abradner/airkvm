@@ -3,7 +3,8 @@
 // No build step, no framework, no CDN: the dongle serves everything, because a
 // machine you walked up to may be on a network with no internet (AGENTS.md §4).
 //
-// UNVERIFIED — this has never talked to a real dongle.
+// Verified against real hardware 2026-09-04 (keystrokes typed on a macOS
+// target). The wake path below is newer and has not been.
 
 "use strict";
 
@@ -15,7 +16,42 @@ const FRAME = {
   MOUSE_SCROLL: 0x05,
   RELEASE_ALL: 0x06,
   PING: 0x07,
+  WAKE: 0x08,
 };
+
+// Dongle → console frames: same shape, bit 7 set (protocol.h).
+const DOWN = {
+  WAKE_RESULT: 0x80,
+};
+
+// Result byte of WAKE_RESULT, keyed by the values in protocol.h's
+// airkvm_wake_result so a reordered enum cannot silently relabel them.
+// "signalled" is not "woke": the dongle can only report that it sent the pulse.
+const WAKE_RESULT = {
+  0: ["wake signalled — watch the target", "ok"],
+  1: ["can't wake: no USB host enumerated", "bad"],
+  2: ["target's USB bus is not suspended — already awake?", ""],
+  3: ["target didn't arm USB wakeup before sleeping — check its OS/firmware wake settings", "bad"],
+};
+
+// A wake outcome is a moment, not a state: the status line goes back to
+// describing the connection after this long, and a request nobody answered
+// says so instead of sitting there as "requested…" forever.
+const WAKE_STATUS_MS = 5000;
+// How long to wait for the dongle's WAKE_RESULT before saying none came.
+const WAKE_REPLY_MS = 2000;
+let wakeStatusTimer = null;
+let wakeReplyTimer = null;
+
+function setWakeStatus(text, kind) {
+  setStatus(text, kind);
+  clearTimeout(wakeStatusTimer);
+  wakeStatusTimer = setTimeout(() => {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      setStatus("connected", "ok");
+    }
+  }, WAKE_STATUS_MS);
+}
 
 // `?ws=host:port` points the console at a dongle while serving this page from
 // somewhere else (`python3 -m http.server` in web/) for UI-only work.
@@ -38,6 +74,7 @@ const el = {
   sendText: document.getElementById("send-text"),
   sensitivity: document.getElementById("sensitivity"),
   releaseAll: document.getElementById("release-all"),
+  wakeTarget: document.getElementById("wake-target"),
 };
 
 let socket = null;
@@ -81,6 +118,10 @@ function connect() {
   // Every terminal event releases: a stuck modifier on someone's machine is the
   // failure that matters, and a spurious release costs nothing (AGENTS.md §2).
   socket.onclose = () => {
+    // A wake outcome pending from before the drop must not overwrite this:
+    // the connection state is the one that matters now.
+    clearTimeout(wakeReplyTimer);
+    clearTimeout(wakeStatusTimer);
     setStatus("disconnected — reconnecting…", "bad");
     stopPinging();
     exitCapture();
@@ -90,6 +131,20 @@ function connect() {
   };
 
   socket.onerror = () => setStatus("connection error", "bad");
+
+  socket.onmessage = (e) => {
+    if (!(e.data instanceof ArrayBuffer)) return;
+    const bytes = new Uint8Array(e.data);
+    if (bytes.length === 2 && bytes[0] === DOWN.WAKE_RESULT) {
+      clearTimeout(wakeReplyTimer);
+      const [text, kind] = WAKE_RESULT[bytes[1]] || [
+        `wake: unknown result ${bytes[1]}`,
+        "bad",
+      ];
+      setWakeStatus(text, kind);
+    }
+    // Anything else is a frame from a newer dongle than this page; ignored.
+  };
 }
 
 function send(bytes) {
@@ -264,6 +319,21 @@ document.querySelectorAll("[data-combo]").forEach((button) => {
 });
 
 el.releaseAll.addEventListener("click", sendReleaseAll);
+
+el.wakeTarget.addEventListener("click", () => {
+  if (send([FRAME.WAKE])) {
+    setStatus("wake requested…");
+    // A spectator session (R-003) gets no answer at all, and "requested…"
+    // must not sit there looking pending forever.
+    clearTimeout(wakeReplyTimer);
+    wakeReplyTimer = setTimeout(
+      () => setWakeStatus("no reply to wake — not the active session?", "bad"),
+      WAKE_REPLY_MS,
+    );
+  } else {
+    setStatus("not connected", "bad");
+  }
+});
 
 // Typing text is a convenience for URLs and long commands. Only the characters
 // in this table are sent; anything else is reported rather than silently

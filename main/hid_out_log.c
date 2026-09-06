@@ -37,6 +37,14 @@ void hid_out_release_all(void) {
   s_release_pending = true;
 }
 
+// There is no bus to wake. Answering NO_HOST — the same answer the USB backend
+// gives before enumeration — lets the bench prove the whole request/reply path
+// short of the last inch (AGENTS.md §9, entry 8).
+enum airkvm_wake_result hid_out_wake_target(void) {
+  ESP_LOGI(TAG, "wake       bench backend has no USB host");
+  return AIRKVM_WAKE_NO_HOST;
+}
+
 bool hid_out_submit(const struct airkvm_intent *intent) {
   if (s_queue == NULL) {
     return false;
@@ -98,6 +106,11 @@ static void apply(const struct airkvm_intent *in) {
       break;
     case AIRKVM_FRAME_PING:
       ESP_LOGD(TAG, "ping");
+      break;
+    case AIRKVM_FRAME_WAKE:
+      // net.c answers WAKE directly and never queues it; this arm exists so the
+      // switch stays total.
+      ESP_LOGI(TAG, "wake       (queued — unexpected, see net.c)");
       break;
   }
 }

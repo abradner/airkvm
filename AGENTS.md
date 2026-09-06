@@ -79,7 +79,7 @@ A conflict with a principle is a stop-and-check, never something to quietly work
 |---|---|---|
 | Firmware language | C (C11) | ESP-IDF v5.5, installed by `mise run setup` into `.esp-idf/` |
 | Target hardware | ESP32-S3 (`esp32s3` target) | ESP32-S3-0.42 OLED supermini; native USB OTG is non-negotiable (§4) |
-| USB stack | TinyUSB via `esp_tinyusb` | Composite HID: boot keyboard + relative mouse |
+| USB stack | TinyUSB via `esp_tinyusb` | Composite HID: boot keyboard + relative mouse. Advertises USB remote wakeup so the console can wake a suspended target (unverified on hardware) |
 | Network | `esp_http_server` (WebSocket) + `mdns` | Single origin serves console and socket |
 | Console | Vanilla HTML/CSS/JS, no build step | Embedded in firmware via `EMBED_FILES`; no npm, no bundler, no CDN |
 | Display | SSD1306 72×40 over I2C, or ST7789 172×320 over SPI | One backend per board behind `main/display.h` (`display_ssd1306.c` / `display_st7789.c`), sharing the drawing layer in `main/canvas.h`. Status only (IP, mDNS name, link state). Both confirmed on real hardware: the OLED's pins and 180° rotation on 2026-08-31, the ST7789's pins, orientation and gap on 2026-09-06 |
@@ -313,7 +313,12 @@ add rather than rewrite.
 
   Both are gitignored. The build then prints a harmless `IDF_PATH is changed from ...` warning as
   it resolves the symlink. Worktrees also need `mise trust` and their own `sdkconfig.local`
-  (credentials are per-machine and gitignored, so a fresh worktree has none).
+  (credentials are per-machine and gitignored, so a fresh worktree has none). One more, found a
+  configure cycle later (2026-09-06): `certs/` (key material, gitignored — symlink it or run
+  `tools/make_certs.sh`). Do **not** symlink `managed_components/`: the component manager prunes
+  it per target, so a C3 bench build deletes `esp_tinyusb` from whatever directory the symlink
+  points at, and the main checkout's next S3 build has to re-fetch. Let each worktree resolve
+  its own; the download comes from `~/.cache/Espressif/ComponentManager` and costs seconds.
 - **An S3 that boots to `waiting for download` has one of two unrelated causes, and the
   strapping register tells you which in one command.** Do not guess, and do not assume it is the
   flash — a verified write plus `boot:0x0 (DOWNLOAD(USB/UART0))` is the ROM reading GPIO0 at

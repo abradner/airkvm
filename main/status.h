@@ -22,6 +22,11 @@ struct status_snapshot {
 
   bool client_connected;
   bool usb_mounted;
+  // The target has suspended the bus. Usually "the target is asleep", but
+  // not only that: hosts may suspend an idle device (selective suspend), and
+  // with no VBUS sense a cable pull can look the same. The display says SUSP,
+  // the bus fact, rather than guessing which.
+  bool usb_suspended;
 
   uint32_t events;           // input events since boot
   int64_t last_activity_us;  // esp_timer_get_time() of the last input event
@@ -39,6 +44,7 @@ void status_set_wifi(bool connected, const char *ip, const char *ssid);
 void status_set_rssi(int8_t rssi);
 void status_set_client(bool connected);
 void status_set_usb_mounted(bool mounted);
+void status_set_usb_suspended(bool suspended);
 
 // Records one input event. `describe` is only stored when debug mode is on.
 void status_note_event(const char *describe);
