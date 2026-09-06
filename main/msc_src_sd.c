@@ -5,6 +5,7 @@
 
 #include "msc_src_sd.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "board.h"

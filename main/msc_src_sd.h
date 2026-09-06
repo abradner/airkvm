@@ -10,9 +10,10 @@
 // and the target owns it.
 //
 // Boundary (docs/repo-map.md, R-008): a card is input the firmware did not
-// author, and it carries state off the device after unplug. Read-only closes
-// the second half today; the first is accepted with the physical-presence
-// argument, since inserting a card is the same kind of act as plugging in.
+// author, accepted with the physical-presence argument (inserting a card is
+// the same kind of act as plugging in). Read-only means the dongle writes
+// nothing to it — the target cannot leave data on the card through us — but a
+// card still leaves carrying whatever was on it when it arrived.
 #pragma once
 
 #include "esp_err.h"
