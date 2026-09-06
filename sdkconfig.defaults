@@ -36,6 +36,9 @@ CONFIG_TINYUSB_MSC_BUFSIZE=4096
 # be told it is not in control.
 CONFIG_LWIP_MAX_SOCKETS=10
 CONFIG_HTTPD_WS_SUPPORT=y
+# IDF's default, pinned because main/media_proto.h sizes a media piece to fit
+# one inbound record payload (MEDIA_DATA_MAX). If this changes, that must too.
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384
 
 # --- Flash & partitions ---
 # Flash size was ESP-IDF's 2MB default until measured against real hardware
