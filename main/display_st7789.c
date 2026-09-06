@@ -2,9 +2,8 @@
 // One of two display backends behind display.h; the other is
 // display_ssd1306.c. CMake compiles exactly one, selected by the board.
 //
-// UNVERIFIED — none of this has run on hardware (R-005). Pins come from the
-// vendor schematic (see board.h); orientation and gap are hypotheses that one
-// flash settles.
+// Verified on hardware 2026-09-06: pins (from the vendor schematic, see
+// board.h), orientation, gap, and the banded flush all render correctly.
 //
 // == Why there is no framebuffer ==
 //
@@ -184,8 +183,9 @@ esp_err_t display_init(void) {
   ESP_ERROR_CHECK_WITHOUT_ABORT(esp_lcd_panel_reset(s_panel));
   ESP_ERROR_CHECK_WITHOUT_ABORT(esp_lcd_panel_init(s_panel));
   // IPS panels of this family ship inverted relative to the controller's
-  // default. UNVERIFIED: if the first solid fill comes out photographic
-  // negative, this is the flag.
+  // default. Confirmed 2026-09-06: white-on-black renders as white on black,
+  // so this is the right way round. If a future panel revision comes out
+  // photographic negative, this is the flag.
   ESP_ERROR_CHECK_WITHOUT_ABORT(esp_lcd_panel_invert_color(s_panel, true));
   ESP_ERROR_CHECK_WITHOUT_ABORT(
       esp_lcd_panel_swap_xy(s_panel, BOARD_LCD_SWAP_XY));

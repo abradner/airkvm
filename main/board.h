@@ -114,8 +114,12 @@
 // bus wedges, two symptoms from one cause and neither pointing at the pin.
 // AGENTS.md §6.1, twice over.
 //
-// UNVERIFIED — nothing here has run on hardware yet (R-005). The panel
-// lighting up is what clears it.
+// VERIFIED on hardware 2026-09-06: the panel renders, WiFi associates, the
+// HTTPS console serves and validates against our CA, and the board enumerates
+// as a USB HID keyboard that delivered 17/17 and 60/60 characters measured
+// with tools/hid_listen.py. WiFi and USB coexist here, so gotcha 10's
+// net_start()-before-hid_out_start() ordering holds on this board too — which
+// had to be re-tested rather than inherited.
 #define BOARD_HAS_DISPLAY 1
 #define BOARD_DISPLAY_ST7789 1
 
