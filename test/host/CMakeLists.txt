@@ -12,12 +12,13 @@ set(AIRKVM_PURE_SOURCES
     ../../main/protocol.c
     ../../main/hid_state.c
     ../../main/session.c
-    ../../main/wake_policy.c)
+    ../../main/wake_policy.c
+    ../../main/msc_lun.c)
 
 include_directories(../../main)
 enable_testing()
 
-foreach(suite keymap protocol hid_state session wake_policy)
+foreach(suite keymap protocol hid_state session wake_policy msc_lun)
   add_executable(test_${suite} test_${suite}.c ${AIRKVM_PURE_SOURCES})
   add_test(NAME ${suite} COMMAND test_${suite})
 endforeach()
