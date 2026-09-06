@@ -18,7 +18,8 @@
 // advertises remote wakeup (bmAttributes 0xA0 rather than 0x80). Enumeration
 // with that bit set, whether a host arms it, whether the wakeup pulse resumes
 // a sleeping target, and whether advertising it makes hosts selectively
-// suspend an idle dongle are all unverified until re-run on hardware.
+// suspend an idle dongle (which wake-on-input in the report task exists to
+// survive) are all unverified until re-run on hardware.
 //
 // The C3 bench board cannot test any of this: its backend logs intents
 // instead of sending reports, so it cannot even lose one. Do not let either
@@ -30,6 +31,7 @@
 #include "class/hid/hid_device.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -142,6 +144,28 @@ static volatile bool s_suspended;  // display/log mirror only, see above
 static volatile bool s_remote_wakeup_en;
 static volatile bool s_wake_pending;
 
+// Wake-on-input. `s_input_arrived` is set by hid_out_submit() for operator
+// input only — key, button, scroll (wake_policy_is_operator_input) — and
+// consumed by the report task, which turns it into `s_implicit_wake_wanted`
+// when the bus is suspended with wakeup armed. It is deliberately not derived
+// from "is any output owed": the suspend itself leaves a release-all report
+// owed, and a console keeps sending PINGs and the occasional RELEASE_ALL, none
+// of which is a person asking the machine to wake up. Keyed on those, the
+// target could never stay asleep with a dongle plugged in.
+//
+// The edge flag alone can lose a request: a submit landing between the read
+// and the clear, or input that arrives after dwc2 has marked the bus suspended
+// but before tud_suspend_cb has run. Both leave the keystroke parked at the
+// head of the queue, so the drain below also re-raises the request whenever it
+// finds itself parked on a keyboard intent during a suspend — level, not edge.
+//
+// Timing (5 ms after suspend, spacing, the per-episode budget) lives in
+// wake_policy.c, where it is host-tested.
+static volatile bool s_input_arrived;
+static volatile bool s_implicit_wake_wanted;
+static struct wake_policy s_wake;
+static bool s_wake_budget_logged;  // one warning per episode, not one per pass
+
 bool hid_out_is_mounted(void) {
   return s_mounted;
 }
@@ -176,6 +200,8 @@ void tud_mount_cb(void) {
   s_suspended = false;
   s_remote_wakeup_en = false;
   s_wake_pending = false;
+  s_implicit_wake_wanted = false;
+  wake_policy_reset(&s_wake);
   status_set_usb_mounted(true);
   status_set_usb_suspended(false);
 }
@@ -185,6 +211,8 @@ void tud_umount_cb(void) {
   s_mounted = false;
   s_suspended = false;
   s_wake_pending = false;
+  s_implicit_wake_wanted = false;
+  wake_policy_reset(&s_wake);
   status_set_usb_mounted(false);
   status_set_usb_suspended(false);
   // Unplugged mid-session: drop everything so a replug does not resume a state
@@ -202,6 +230,8 @@ void tud_suspend_cb(bool remote_wakeup_en) {
            remote_wakeup_en ? "armed" : "not armed");
   s_suspended = true;
   s_remote_wakeup_en = remote_wakeup_en;
+  wake_policy_suspend(&s_wake, esp_timer_get_time());
+  s_wake_budget_logged = false;
   status_set_usb_suspended(true);
   s_release_pending = true;
 }
@@ -216,6 +246,8 @@ void tud_resume_cb(void) {
   // refuses on its own because the bus is no longer suspended. That refusal is
   // the load-bearing check.
   s_wake_pending = false;
+  s_implicit_wake_wanted = false;
+  wake_policy_reset(&s_wake);
   status_set_usb_suspended(false);
 }
 
@@ -414,20 +446,59 @@ static void report_task(void *arg) {
       s_buttons_dirty = true;
     }
 
-    if (s_wake_pending) {
-      s_wake_pending = false;
-      // On this task, not the HTTP task: inside the dcd this is a
-      // read-modify-write of DCTL followed by a ~1 ms delay (dwc2's
-      // remote-wakeup delay is pdMS_TO_TICKS(1), which is one tick only
-      // because CONFIG_FREERTOS_HZ is 1000 — at the default 100 Hz it would
-      // be the zero-tick non-delay of AGENTS.md §9 entry 12, in vendor code
-      // we cannot static-assert). TinyUSB re-checks its own preconditions and
-      // returns false if the bus is no longer suspended or wakeup was never
-      // armed. The task is woken within REPORT_TICK_MS by the timed peek
-      // below, the same way release-all gets serviced.
-      const bool issued = tud_remote_wakeup();
-      ESP_LOGI(TAG, "remote wakeup %s",
-               issued ? "signalled" : "refused by stack");
+    // Implicit wake: what a physical keyboard does when you tap a key on a
+    // sleeping machine, and what makes advertising remote wakeup survivable
+    // for typing. Hosts that selectively suspend an idle HID device (Windows
+    // does by default for wake-capable devices; Linux when a power tool sets
+    // power/control to auto — hypotheses until observed) would otherwise park
+    // the bus while the target is fully awake, and every keystroke after that
+    // would sit behind tud_hid_n_ready() == false until something else
+    // resumed it.
+    if (s_input_arrived) {
+      s_input_arrived = false;
+      if (tud_suspended() && s_remote_wakeup_en) {
+        s_implicit_wake_wanted = true;
+      }
+    }
+
+    if (s_wake_pending || s_implicit_wake_wanted) {
+      // The operator's own request is never budget-capped; only input is.
+      const bool implicit = !s_wake_pending;
+      switch (wake_policy_pulse(&s_wake, esp_timer_get_time(), implicit)) {
+        case WAKE_PULSE_NOW: {
+          s_wake_pending = false;
+          s_implicit_wake_wanted = false;
+          // On this task, not the HTTP task: inside the dcd this is a
+          // read-modify-write of DCTL and then dwc2's remote-wakeup delay,
+          // vTaskDelay(pdMS_TO_TICKS(1)) — which waits until the next tick,
+          // 0–1 ms at CONFIG_FREERTOS_HZ=1000, below the spec's 1 ms minimum
+          // pulse width and, at the default 100 Hz, the zero-tick non-delay
+          // of AGENTS.md §9 entry 12. Vendor code; cannot be static-asserted
+          // from here. TinyUSB re-checks its own preconditions and returns
+          // false if the bus is no longer suspended or wakeup was never armed.
+          const bool issued = tud_remote_wakeup();
+          ESP_LOGI(TAG, "remote wakeup %s (%s)",
+                   issued ? "signalled" : "refused by stack",
+                   implicit ? "on input" : "requested");
+          break;
+        }
+        case WAKE_PULSE_DEFER:
+          // Too soon after the suspend or the last pulse. Flags stay set; the
+          // timed peek at the bottom of the loop brings us back within
+          // REPORT_TICK_MS, the same way release-all gets serviced.
+          break;
+        case WAKE_PULSE_NO:
+          s_wake_pending = false;
+          s_implicit_wake_wanted = false;
+          if (implicit && !s_wake_budget_logged) {
+            s_wake_budget_logged = true;
+            ESP_LOGW(TAG,
+                     "target did not resume after %d wake-on-input pulses; "
+                     "parked until it does or the operator asks",
+                     WAKE_POLICY_MAX_IMPLICIT_PULSES);
+          }
+          break;
+      }
     }
 
     // Apply everything already queued before emitting, so a burst collapses
@@ -459,7 +530,14 @@ static void report_task(void *arg) {
       if (is_keyboard && s_kbd_dirty) {
         pump_keyboard();
         if (s_kbd_dirty) {
-          break;  // endpoint not ready; this intent waits its turn
+          // Endpoint not ready; this intent waits its turn. If the reason is
+          // a suspended bus, waiting is not enough — nothing will resume it
+          // unless we ask (see the note on wake-on-input; this is the level
+          // half of the trigger, and the policy's budget bounds it).
+          if (tud_suspended() && s_remote_wakeup_en) {
+            s_implicit_wake_wanted = true;
+          }
+          break;
         }
       }
       (void)xQueueReceive(s_queue, &intent, 0);
@@ -510,7 +588,13 @@ bool hid_out_submit(const struct airkvm_intent *intent) {
   }
   // Never block: this runs on the HTTP task, and a stalled network task holding
   // a key down is the failure this design exists to prevent.
-  return xQueueSend(s_queue, intent, 0) == pdTRUE;
+  if (xQueueSend(s_queue, intent, 0) != pdTRUE) {
+    return false;
+  }
+  if (wake_policy_is_operator_input(intent->type)) {
+    s_input_arrived = true;  // see the note on wake-on-input
+  }
+  return true;
 }
 
 void hid_out_release_all(void) {
