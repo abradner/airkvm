@@ -16,11 +16,13 @@
 
 static const char *TAG = "media_src";
 
-// Four chunks: the one being read, the one after it (prefetched), and room
-// for the pair to slide. 64 KB in internal RAM until PSRAM is enabled; the
-// allocation below prefers PSRAM when it exists, so enabling it changes only
-// this number.
-#define CACHE_SLOTS 4
+// Two chunks: the one being read and the one after it (prefetched); the LRU
+// pair slides. Was four, and on the LCD147 board four missed the heap floor
+// by about 5 KB with the log tap on — the guard refused correctly, but a
+// margin the size of a diagnostic is not a margin. 32 KB in internal RAM
+// until PSRAM is enabled; the allocation below prefers PSRAM when it exists,
+// so enabling it is where this number goes back up.
+#define CACHE_SLOTS 2
 
 // Internal heap that must remain after the cache is allocated from it. One
 // console TLS handshake needs on the order of 40 KB; the rest is margin for
