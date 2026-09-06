@@ -338,7 +338,23 @@ static esp_err_t start_inner(void) {
   tls.httpd.max_open_sockets = 1;
   // A different control port from the console instance, or the second
   // httpd_start fails with EADDRINUSE on the internal UDP socket.
-  tls.httpd.ctrl_port = ESP_HTTPD_DEF_CTRL_PORT + 1;
+  //
+  // +2, not +1, and the difference is the whole bug: HTTPD_SSL_CONFIG_DEFAULT()
+  // already sets ctrl_port to ESP_HTTPD_DEF_CTRL_PORT + 1 (esp_https_server.h),
+  // so the console — which is an HTTPS instance — is ALREADY on +1. Setting
+  // this to +1 to "avoid the console" landed on exactly the console's port.
+  //
+  // It failed silently in the sense that mattered: the image built, CI passed
+  // (CI only builds), the console worked, and the only symptom was
+  //   E httpd: httpd_server_init: error in creating ctrl socket (112)
+  // at boot, 112 being EADDRINUSE, followed by "no disk image support" — on a
+  // board nobody was watching the log of. Confirmed on hardware 2026-09-06:
+  // port 8443 closed with +1, open with +2.
+  //
+  // Note the plain-HTTP branch below is correct at +1, because
+  // HTTPD_DEFAULT_CONFIG() does NOT apply the same offset. The two branches
+  // differ on purpose; do not "tidy" them to match.
+  tls.httpd.ctrl_port = ESP_HTTPD_DEF_CTRL_PORT + 2;
   tls.servercert = servercert_start;
   tls.servercert_len = servercert_end - servercert_start;
   tls.prvtkey_pem = serverkey_start;
