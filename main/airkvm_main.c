@@ -7,6 +7,9 @@
 #include "esp_log.h"
 #include "hid_out.h"
 #include "logtap.h"
+#if CONFIG_AIRKVM_MSC_SD
+#include "msc_src_sd.h"
+#endif
 #include "net.h"
 #include "ota.h"
 #include "status.h"
@@ -67,6 +70,15 @@ void app_main(void) {
              esp_err_to_name(err));
   }
   ESP_ERROR_CHECK(hid_out_start());
+#if CONFIG_AIRKVM_MSC_SD
+  // After USB, so the LUN exists to bind to; never blocks on a card (the
+  // probe runs on its own task). SDMMC slot 1 is on the GPIO matrix and clocks
+  // from the CPU's PLL, not the USB PHY enable gotcha 10 is about — a check,
+  // not an assumption: WiFi must still associate with this in place.
+  if (msc_src_sd_start() != ESP_OK) {
+    ESP_LOGE(TAG, "microSD failed to start — no card support this boot");
+  }
+#endif
 
   // Only now is there a network stack to bind to (esp_netif_init happens
   // inside net_start). No-op unless AIRKVM_LOG_TAP is set.

@@ -42,6 +42,7 @@
 #define BOARD_TALL_SY 2
 
 #define BOARD_HAS_LED 1
+#define BOARD_HAS_SDCARD 0
 #define BOARD_LED_PRIMARY 8  // blue "signal" LED, active-low
 #define BOARD_LED_PRIMARY_INVERTED 1
 
@@ -94,6 +95,7 @@
 #define BOARD_TALL_SY 2
 
 #define BOARD_HAS_LED 0
+#define BOARD_HAS_SDCARD 0
 #define BOARD_BUTTON 0
 #define BOARD_BUTTON_ACTIVE_LOW 1
 
@@ -196,9 +198,25 @@
 #define BOARD_BUTTON 0  // BOOT button, active-low with pull-up
 #define BOARD_BUTTON_ACTIVE_LOW 1
 
+// microSD slot, wired for 4-bit SDMMC. The schematic labels the nets with
+// SPI names (SD_SCLK/MOSI/MISO/CS) but maps them to SDIO roles explicitly:
+// SCLK=CLK, MOSI=CMD, MISO=D0, CS=D3, and D1/D2 are NOT in numeric order —
+// 18 is D1 and 17 is D2. Do not tidy that. 10 K pull-ups to 3V3 on all six
+// lines per the schematic; card-detect pads have no GPIO net found, so
+// presence is polled (main/msc_src_sd.c). UNVERIFIED on hardware until the
+// init log shows a card; SDSPI on the same pins is the fallback.
+#define BOARD_HAS_SDCARD 1
+#define BOARD_SD_CLK 14
+#define BOARD_SD_CMD 15
+#define BOARD_SD_D0 16
+#define BOARD_SD_D1 18
+#define BOARD_SD_D2 17
+#define BOARD_SD_D3 21
+#define BOARD_SD_BUS_WIDTH 4
+
 // Not driven this pass, recorded so the next person does not re-derive them
 // from the schematic: QMI8658 IMU on I2C SDA=48 SCL=47 (INT1=13, INT2=12),
-// microSD on SCLK=14 MOSI=15 MISO=16 D2=17 D1=18 CS=21, RGB_IO=38.
+// RGB_IO=38.
 // Note 47/48 are the same pins the 0.42" dongle uses for its OLED — same
 // pins, different peripheral, different board.
 //

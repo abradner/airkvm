@@ -230,7 +230,36 @@ static void degenerate_sources_are_handled(void) {
   CHECK(msc_lun_writable(&lun));
 }
 
+static void first_medium_to_arrive_holds_the_lun(void) {
+  struct msc_lun lun;
+  reset_fake();
+  msc_lun_init(&lun);
+  // Nobody home: the first taker wins and raises attention.
+  CHECK(msc_lun_try_bind(&lun, &s_rw));
+  CHECK(lun.src == &s_rw);
+  CHECK(lun.attention);
+  const uint32_t g = lun.generation;
+  // A second medium cannot displace it, and the LUN is untouched by the try.
+  CHECK(!msc_lun_try_bind(&lun, &s_ro));
+  CHECK(lun.src == &s_rw);
+  CHECK_EQ_INT(lun.generation, g);
+  // Only the holder can release it; the loser's unbind is a no-op.
+  CHECK(!msc_lun_unbind_if(&lun, &s_ro));
+  CHECK(lun.src == &s_rw);
+  CHECK(msc_lun_unbind_if(&lun, &s_rw));
+  CHECK(lun.src == NULL);
+  CHECK(lun.generation != g);
+  // Now the other one can take it; NULL is never a medium; an unbind of an
+  // empty LUN is a no-op.
+  CHECK(!msc_lun_try_bind(&lun, NULL));
+  CHECK(msc_lun_try_bind(&lun, &s_ro));
+  CHECK(!msc_lun_unbind_if(&lun, &s_rw));
+  CHECK(msc_lun_unbind_if(&lun, &s_ro));
+  CHECK(!msc_lun_unbind_if(&lun, &s_ro));
+}
+
 int main(void) {
+  RUN(first_medium_to_arrive_holds_the_lun);
   RUN(degenerate_sources_are_handled);
   RUN(no_medium_is_not_ready);
   RUN(bind_reports_attention_exactly_once);

@@ -72,7 +72,8 @@ static void drop_medium(const char *why) {
     return;
   }
   ESP_LOGI(TAG, "medium dropped (%s)", why);
-  msc_out_unbind();
+  // Only ours: if a card took the LUN meanwhile, it stays the target's disk.
+  msc_out_unbind_if(browser_source());
   browser_source_detach();
   status_set_media(false, NULL);
 }
@@ -217,6 +218,7 @@ static esp_err_t media_handler(httpd_req_t *req) {
         // Re-attach from the same client: a detach then an attach, so the
         // LUN raises attention and the host re-reads capacity. Through the
         // one drop path, so it is logged and total like every other drop.
+        // A card can take the LUN in the gap; bind_if_free below decides.
         drop_medium("re-attach");
       }
       if (!browser_source_attach(msg.attach.block_count, msg.attach.block_size,
@@ -226,10 +228,16 @@ static esp_err_t media_handler(httpd_req_t *req) {
         send_status(req, MEDIA_STATE_NO_MEMORY);
         return ESP_OK;
       }
+      // Another kind of medium — a card in the slot — may hold the LUN.
+      // First to arrive wins, atomically; the operator pulls the card first.
+      if (!msc_out_bind_if_free(browser_source())) {
+        browser_source_detach();
+        send_status(req, MEDIA_STATE_BUSY);
+        return ESP_OK;
+      }
       LOCK();
       s_owner_fd = fd;
       UNLOCK();
-      msc_out_bind(browser_source());
       status_set_media(true, msg.attach.name);
       ESP_LOGI(TAG, "fd %d attached \"%s\"", fd, msg.attach.name);
       send_status(req, MEDIA_STATE_ATTACHED);

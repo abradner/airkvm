@@ -39,6 +39,22 @@ void msc_lun_unbind(struct msc_lun *lun) {
   lun->generation++;
 }
 
+bool msc_lun_try_bind(struct msc_lun *lun, const struct msc_source *src) {
+  if (lun->src != NULL || src == NULL) {
+    return false;
+  }
+  msc_lun_bind(lun, src);
+  return true;
+}
+
+bool msc_lun_unbind_if(struct msc_lun *lun, const struct msc_source *src) {
+  if (lun->src == NULL || lun->src != src) {
+    return false;
+  }
+  msc_lun_unbind(lun);
+  return true;
+}
+
 bool msc_lun_test_unit_ready(struct msc_lun *lun, struct msc_sense *sense) {
   if (!present(lun, NULL)) {
     set_sense(sense, MSC_SENSE_KEY_NOT_READY, MSC_ASC_MEDIUM_NOT_PRESENT);

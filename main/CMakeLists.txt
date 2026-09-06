@@ -28,9 +28,14 @@ set(airkvm_srcs
 # back on — it is an in-tree IDF component, not a managed one — so a
 # conditional REQUIRES here would genuinely fail to link rather than silently
 # appearing to work.
+# sdmmc and esp_driver_sdmmc are required unconditionally for the same reason
+# as everything above (gotcha 7): only the LCD147 build compiles msc_src_sd.c,
+# and the C3 has no SDMMC host at all, but the requirement has to be visible
+# in the early pass. Both components register empty on targets without the
+# peripheral.
 set(airkvm_requires
     esp_http_server esp_https_server esp_wifi nvs_flash mdns driver esp_timer
-    esp_https_ota app_update esp_lcd esp_driver_rmt)
+    esp_https_ota app_update esp_lcd esp_driver_rmt sdmmc esp_driver_sdmmc)
 
 # Exactly one HID backend is compiled in (see main/hid_out.h). The USB backend
 # is only offered on targets with native USB OTG, so this never has to guard
@@ -55,6 +60,14 @@ endif()
 if(CONFIG_TINYUSB_MSC_ENABLED)
     list(APPEND airkvm_srcs "msc_lun.c" "msc_out.c" "media_proto.c" "block_cache.c"
         "block_source_browser.c" "media_ws.c")
+endif()
+if(CONFIG_AIRKVM_MSC_SD)
+    if(NOT CONFIG_TINYUSB_MSC_ENABLED)
+        # Kconfig cannot express this dependency on a symbol the C3 lacks; say
+        # it here rather than fail on an undefined msc_out_* at link.
+        message(FATAL_ERROR "AIRKVM_MSC_SD needs CONFIG_TINYUSB_MSC_ENABLED=y")
+    endif()
+    list(APPEND airkvm_srcs "msc_src_sd.c")
 endif()
 
 # Exactly one display backend, selected by the board. Conditional SRCS (unlike
