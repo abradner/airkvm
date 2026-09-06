@@ -38,6 +38,9 @@
 #include "hid_out.h"
 #include "hid_state.h"
 #include "keymap.h"
+#if CONFIG_TINYUSB_MSC_ENABLED
+#include "msc_out.h"
+#endif
 #include "status.h"
 #include "tinyusb.h"
 #include "wake_policy.h"
@@ -53,15 +56,32 @@ enum {
   HID_ITF_KEYBOARD = 0,
   HID_ITF_MOUSE = 1,
   HID_ITF_COUNT,
+#if CONFIG_TINYUSB_MSC_ENABLED
+  // Mass storage comes *after* both HID interfaces: interface 0 must stay the
+  // boot keyboard, because that is what a BIOS looks at (AGENTS.md §4).
+  ITF_MSC = HID_ITF_COUNT,
+#endif
 };
 
 #define EPNUM_HID_KEYBOARD 0x81
 #define EPNUM_HID_MOUSE 0x82
+// Endpoint budget: the S3's DWC2 core has 4 usable IN endpoints. HID takes
+// two, MSC one (plus one OUT); one IN is left, which is why HID + MSC + a
+// network function can never coexist on this part.
+#define EPNUM_MSC_OUT 0x03
+#define EPNUM_MSC_IN 0x83
 
 static const uint8_t s_kbd_report_desc[] = {TUD_HID_REPORT_DESC_KEYBOARD()};
 static const uint8_t s_mouse_report_desc[] = {TUD_HID_REPORT_DESC_MOUSE()};
 
+#if CONFIG_TINYUSB_MSC_ENABLED
+#define ITF_COUNT (HID_ITF_COUNT + 1)
+#define CONFIG_TOTAL_LEN \
+  (TUD_CONFIG_DESC_LEN + 2 * TUD_HID_DESC_LEN + TUD_MSC_DESC_LEN)
+#else
+#define ITF_COUNT HID_ITF_COUNT
 #define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + 2 * TUD_HID_DESC_LEN)
+#endif
 
 static const uint8_t s_configuration_desc[] = {
     // Remote wakeup advertised: it is what lets a "Wake target" from the
@@ -71,7 +91,7 @@ static const uint8_t s_configuration_desc[] = {
     // knowingly wrong (WiFi TX peaks well above it) and knowingly left alone:
     // raising it is its own enumeration test, not something to bundle with
     // a second descriptor change (issue #32).
-    TUD_CONFIG_DESCRIPTOR(1, HID_ITF_COUNT, 0, CONFIG_TOTAL_LEN,
+    TUD_CONFIG_DESCRIPTOR(1, ITF_COUNT, 0, CONFIG_TOTAL_LEN,
                           TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
     // Boot protocol on the keyboard interface is what makes this work before an
     // OS loads its own HID driver.
@@ -81,6 +101,16 @@ static const uint8_t s_configuration_desc[] = {
     TUD_HID_DESCRIPTOR(HID_ITF_MOUSE, 0, HID_ITF_PROTOCOL_MOUSE,
                        sizeof(s_mouse_report_desc), EPNUM_HID_MOUSE,
                        CFG_TUD_HID_EP_BUFSIZE, 10),
+#if CONFIG_TINYUSB_MSC_ENABLED
+    // Always present, even with no medium: a static descriptor means the
+    // target's USB topology never changes under it. Attaching media later is
+    // a removable-disk "medium inserted", not a re-enumeration — which would
+    // drop the keyboard mid-session and force a release-all. 64 is the
+    // full-speed bulk packet size. UNVERIFIED on hardware: whether a BIOS
+    // still accepts the boot keyboard beside an empty card reader is the
+    // claim this whole project rests on, and no OS-booted host can test it.
+    TUD_MSC_DESCRIPTOR(ITF_MSC, 6, EPNUM_MSC_OUT, EPNUM_MSC_IN, 64),
+#endif
 };
 
 static const tusb_desc_device_t s_device_desc = {
@@ -95,7 +125,15 @@ static const tusb_desc_device_t s_device_desc = {
     // VID: unallocated VIDs collide, and a colliding VID/PID pair can make a
     // target load the wrong driver for a device it thinks it has seen before.
     .idVendor = 0x303A,
+// Espressif's PID map encodes the interface set (bit 2 HID, bit 1 MSC),
+// and it exists because hosts cache descriptors per VID/PID: the same
+// PID with a different interface list is how Windows ends up loading
+// yesterday's driver for today's device.
+#if CONFIG_TINYUSB_MSC_ENABLED
+    .idProduct = 0x4006,
+#else
     .idProduct = 0x4004,
+#endif
     .bcdDevice = 0x0100,
     .iManufacturer = 0x01,
     .iProduct = 0x02,
@@ -110,6 +148,7 @@ static const char *s_string_desc[] = {
     "000001",
     "airkvm keyboard",
     "airkvm mouse",
+    "airkvm disk",  // index 6, the MSC interface string
 };
 
 // --- state ------------------------------------------------------------------
@@ -173,16 +212,12 @@ bool hid_out_is_mounted(void) {
 // TinyUSB device callbacks. These are weak-by-convention hooks that the
 // application is expected to define — but esp_tinyusb's tusb_msc_storage.c
 // defines tud_mount_cb and tud_umount_cb *strongly* too, and it is compiled
-// whenever CONFIG_TINYUSB_MSC_ENABLED is set. Today that symbol is =n
-// (sdkconfig.defaults), so only these definitions exist and this is a
-// non-issue.
+// whenever CONFIG_TINYUSB_MSC_ENABLED is set, which it now is.
 //
-// It stops being a non-issue the moment anyone enables MSC — e.g. to expose
-// the LCD board's TF slot as mass storage. The outcome is then either a
-// duplicate-symbol link error, which is the good case because it is loud, or
-// Espressif's implementation winning the link, which is the bad one: the
-// firmware still builds and still enumerates, and the only symptom is that
-// tud_umount_cb below never runs.
+// Two outcomes were possible: a duplicate-symbol link error, which is the
+// good case because it is loud, or Espressif's implementation winning the
+// link, which is the bad one: the firmware still builds and still enumerates,
+// and the only symptom is that tud_umount_cb below never runs.
 //
 // That is a safety regression rather than a cosmetic one. tud_umount_cb sets
 // s_release_pending, which is how an unplug releases every held key — §2
@@ -190,8 +225,14 @@ bool hid_out_is_mounted(void) {
 // that quietly lost it would leave keys held on the target after the cable
 // was pulled, with nothing in any log to say so.
 //
-// So: if MSC is ever enabled here, prove these still run (an unplug must log
-// "USB host disconnected") before believing the build.
+// What makes ours win deterministically: main is linked WHOLE_ARCHIVE
+// (main/CMakeLists.txt), so every object here enters the link before any
+// archive is searched and no tud_* reference survives to be satisfied by
+// tusb_msc_storage.o; and tools/check_msc_symbols.cmake fails the build if
+// that object made it into the ELF anyway (AGENTS.md §9). The hardware
+// acceptance test is still the real proof: with a key held, pull the cable —
+// the log must say "USB host disconnected" and the key must be released.
+// Nothing else reveals it, not a green build and not a working mount.
 void tud_mount_cb(void) {
   ESP_LOGI(TAG, "USB host enumerated the device");
   s_mounted = true;
@@ -608,6 +649,13 @@ esp_err_t hid_out_start(void) {
   }
   hid_state_reset(&s_state);
 
+#if CONFIG_TINYUSB_MSC_ENABLED
+  // Before the driver: the host's first INQUIRY can land as soon as
+  // enumeration completes, and the LUN has to be there to answer it. Never
+  // blocks — nothing about a medium is touched here.
+  ESP_RETURN_ON_ERROR(msc_out_start(), TAG, "msc_out_start failed");
+#endif
+
   const tinyusb_config_t cfg = {
       .device_descriptor = &s_device_desc,
       .string_descriptor = s_string_desc,
@@ -622,7 +670,7 @@ esp_err_t hid_out_start(void) {
   if (xTaskCreate(report_task, "hid_report", 3072, NULL, 5, NULL) != pdPASS) {
     return ESP_ERR_NO_MEM;
   }
-  ESP_LOGI(TAG, "USB HID started (keyboard itf %d, mouse itf %d)",
-           HID_ITF_KEYBOARD, HID_ITF_MOUSE);
+  ESP_LOGI(TAG, "USB HID started (keyboard itf %d, mouse itf %d, %d itfs)",
+           HID_ITF_KEYBOARD, HID_ITF_MOUSE, ITF_COUNT);
   return ESP_OK;
 }
