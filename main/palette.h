@@ -51,6 +51,26 @@
 #define SOL_SCREEN_SECONDARY RGB565(0x58, 0x6E, 0x75)
 #define SOL_SCREEN_ACCENT RGB565(0x2A, 0xA1, 0x98)
 
+// LED hues. Separate from the screen entries above, and the reason is that the
+// two have genuinely different jobs.
+//
+// Solarized's palette is tuned for TEXT: its accents are desaturated and share
+// a lightness so none dominates a page. That is exactly wrong for a status
+// light, which is a single point of colour at low brightness where the only
+// question is "which state is this". Solarized green (#859900) is (133,153,0)
+// — red and green almost equal — so on an LED it reads YELLOW, confirmed on
+// hardware 2026-09-07. Its blue (#268bd2) has enough green to read cyan, which
+// would have made "bound" and "suspended" nearly the same light.
+//
+// So these keep Solarized's softness (nothing here is a full-gamut primary)
+// while pulling the hues apart far enough to name at a glance.
+#define SOL_LED_OK 0x21, 0x99, 0x00     // green: red cut to a quarter of green
+#define SOL_LED_BOUND 0x1A, 0x5F, 0xD2  // blue: green cut so it is not cyan
+#define SOL_LED_SUSPEND 0x2A, 0xA1, 0x98
+#define SOL_LED_WARN 0xB5, 0x89, 0x00
+#define SOL_LED_FAULT 0xDC, 0x32, 0x2F
+#define SOL_LED_DEBUG 0xD3, 0x36, 0x82
+
 // Accents. Only these carry meaning; everything else is text.
 #define SOL_YELLOW 0xB5, 0x89, 0x00
 #define SOL_ORANGE 0xCB, 0x4B, 0x16

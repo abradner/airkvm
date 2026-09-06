@@ -163,7 +163,7 @@ void indicator_tick(void) {
   int ceiling;
   switch (indicator_state_for(&s)) {
     case INDICATOR_FAULT: {
-      const uint8_t c[] = {SOL_RED};
+      const uint8_t c[] = {SOL_LED_FAULT};
       r = c[0], g = c[1], b = c[2];
       ceiling = LEVEL_FAULT;
       break;
@@ -171,25 +171,25 @@ void indicator_tick(void) {
     case INDICATOR_SUSPENDED: {
       // Cyan: distinct from every other state, and reads as dormant rather
       // than alarming — nothing is wrong, the target is just asleep.
-      const uint8_t c[] = {SOL_CYAN};
+      const uint8_t c[] = {SOL_LED_SUSPEND};
       r = c[0], g = c[1], b = c[2];
       ceiling = LEVEL_SUSPENDED;
       break;
     }
     case INDICATOR_WARN: {
-      const uint8_t c[] = {SOL_YELLOW};
+      const uint8_t c[] = {SOL_LED_WARN};
       r = c[0], g = c[1], b = c[2];
       ceiling = LEVEL_WARN;
       break;
     }
     case INDICATOR_BOUND: {
-      const uint8_t c[] = {SOL_BLUE};
+      const uint8_t c[] = {SOL_LED_BOUND};
       r = c[0], g = c[1], b = c[2];
       ceiling = LEVEL_BOUND;
       break;
     }
     default: {
-      const uint8_t c[] = {SOL_GREEN};
+      const uint8_t c[] = {SOL_LED_OK};
       r = c[0], g = c[1], b = c[2];
       ceiling = LEVEL_IDLE;
       break;
@@ -231,7 +231,7 @@ void indicator_tick(void) {
   // change rather than a flash — a brightness flash would be indistinguishable
   // from the activity blip below it.
   if (s.debug) {
-    const uint8_t dbg[] = {SOL_MAGENTA};
+    const uint8_t dbg[] = {SOL_LED_DEBUG};
     const int64_t phase = (esp_timer_get_time() / 1000) % DEBUG_PULSE_PERIOD_MS;
     const int half = DEBUG_PULSE_PERIOD_MS / 2;
     const int up =

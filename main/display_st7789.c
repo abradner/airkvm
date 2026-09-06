@@ -90,11 +90,24 @@ static const char *TAG = "display";
 // are the first real colours on this panel, so if they come out with red and
 // blue transposed, esp_lcd_panel_dev_config_t.data_endian is the flag — not
 // the palette. UNVERIFIED until someone looks at the panel.
+// Byte-swapped, and that is the fix rather than a quirk. The panel takes RGB565
+// most-significant byte first; this chip is little-endian, so a uint16_t handed
+// to DMA arrives with its bytes reversed. Black and white are palindromic in
+// RGB565, which is why the monochrome build never noticed and why this could
+// not be caught until there were real colours: the first coloured frame came
+// out with base03 as vivid green and the text blue (hardware, 2026-09-07),
+// which is exactly what swapping the bytes of 0x0146 predicts.
+//
+// Done here rather than by asking esp_lcd to do it, because the swap is a
+// property of this transport and palette.h should keep saying what the colours
+// ARE. If a future panel wants natural order, this is the one place to change.
+#define BE16(v) ((uint16_t)((((v) & 0x00FF) << 8) | (((v) & 0xFF00) >> 8)))
+
 static const uint16_t k_palette[4] = {
-    [CANVAS_INK_NONE] = SOL_SCREEN_BG,
-    [CANVAS_INK_PRIMARY] = SOL_SCREEN_PRIMARY,
-    [CANVAS_INK_SECONDARY] = SOL_SCREEN_SECONDARY,
-    [CANVAS_INK_ACCENT] = SOL_SCREEN_ACCENT,
+    [CANVAS_INK_NONE] = BE16(SOL_SCREEN_BG),
+    [CANVAS_INK_PRIMARY] = BE16(SOL_SCREEN_PRIMARY),
+    [CANVAS_INK_SECONDARY] = BE16(SOL_SCREEN_SECONDARY),
+    [CANVAS_INK_ACCENT] = BE16(SOL_SCREEN_ACCENT),
 };
 
 static esp_lcd_panel_handle_t s_panel;
