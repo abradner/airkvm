@@ -109,6 +109,28 @@ bool hid_out_is_mounted(void) {
   return s_mounted;
 }
 
+// TinyUSB device callbacks. These are weak-by-convention hooks that the
+// application is expected to define — but esp_tinyusb's tusb_msc_storage.c
+// defines tud_mount_cb and tud_umount_cb *strongly* too, and it is compiled
+// whenever CONFIG_TINYUSB_MSC_ENABLED is set. Today that symbol is =n
+// (sdkconfig.defaults), so only these definitions exist and this is a
+// non-issue.
+//
+// It stops being a non-issue the moment anyone enables MSC — e.g. to expose
+// the LCD board's TF slot as mass storage. The outcome is then either a
+// duplicate-symbol link error, which is the good case because it is loud, or
+// Espressif's implementation winning the link, which is the bad one: the
+// firmware still builds and still enumerates, and the only symptom is that
+// tud_umount_cb below never runs.
+//
+// That is a safety regression rather than a cosmetic one. tud_umount_cb sets
+// s_release_pending, which is how an unplug releases every held key — §2
+// principle 4, the dongle must never be the thing typing. A composite build
+// that quietly lost it would leave keys held on the target after the cable
+// was pulled, with nothing in any log to say so.
+//
+// So: if MSC is ever enabled here, prove these still run (an unplug must log
+// "USB host disconnected") before believing the build.
 void tud_mount_cb(void) {
   ESP_LOGI(TAG, "USB host enumerated the device");
   s_mounted = true;

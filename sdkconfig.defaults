@@ -14,6 +14,11 @@ CONFIG_IDF_TARGET="esp32s3"
 # needs no report ID and BIOS boot protocol works (see main/usb_hid.c).
 CONFIG_TINYUSB_HID_COUNT=2
 CONFIG_TINYUSB_CDC_ENABLED=n
+# Not merely unused: esp_tinyusb's tusb_msc_storage.c is compiled when this is
+# =y, and it defines tud_mount_cb/tud_umount_cb strongly, competing with the
+# ones in main/hid_out_usb.c. If Espressif's win the link, unplugging no longer
+# releases held keys and nothing says so. See the comment at those callbacks
+# before enabling this.
 CONFIG_TINYUSB_MSC_ENABLED=n
 
 # The console holds one long-lived WebSocket plus three short static requests;
