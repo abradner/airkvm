@@ -93,7 +93,8 @@ bool block_cache_fill(struct block_cache *c, uint32_t chunk,
   }
   // In order, contiguous, inside the chunk. See the header for why a byte
   // count would not do.
-  if (len == 0 || offset != s->filled || len > c->chunk_size - offset) {
+  if (data == NULL || len == 0 || offset != s->filled ||
+      len > c->chunk_size - offset) {
     return false;
   }
   memcpy(c->mem + (size_t)(s - c->slots) * c->chunk_size + offset, data, len);

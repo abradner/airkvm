@@ -96,6 +96,7 @@ static void fill_is_bounds_checked(void) {
   CHECK(!block_cache_fill(&s_c, 1, s_c.generation, 1, piece, CHUNK));
   CHECK(!block_cache_fill(&s_c, 1, s_c.generation, CHUNK, piece, 1));
   CHECK(!block_cache_fill(&s_c, 1, s_c.generation, 0, piece, 0));
+  CHECK(!block_cache_fill(&s_c, 1, s_c.generation, 0, NULL, 1));
   // A chunk nobody claimed.
   CHECK(!block_cache_fill(&s_c, 2, s_c.generation, 0, piece, 1));
   // Positive control: exactly the whole chunk in one piece.

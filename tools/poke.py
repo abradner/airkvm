@@ -345,8 +345,15 @@ def cmd_hold(ws: WebSocket, combo: str, seconds: float | None) -> int:
             time.sleep(1.0)
     except KeyboardInterrupt:
         pass
-    for code in reversed(codes):
-        ws.send_binary(key_frame(KEY_UP, code))
+    finally:
+        # Best effort on every exit path. If the socket itself is what broke,
+        # this cannot land — and then the dongle's own close path has already
+        # released everything, which is the point of that path.
+        for code in reversed(codes):
+            try:
+                ws.send_binary(key_frame(KEY_UP, code))
+            except OSError:
+                break
     return 0
 
 
