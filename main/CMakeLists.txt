@@ -48,6 +48,15 @@ else()
     list(APPEND airkvm_srcs "hid_out_log.c")
 endif()
 
+# Mass storage rides on the USB backend and is keyed on esp_tinyusb's own
+# symbol rather than one of ours: a `select` from an airkvm Kconfig would
+# reference a symbol that does not exist on the C3, and Kconfig has no way to
+# say "only if defined". msc_lun.c is pure and host-tested; msc_out.c is the
+# TinyUSB glue.
+if(CONFIG_TINYUSB_MSC_ENABLED)
+    list(APPEND airkvm_srcs "msc_lun.c" "msc_out.c")
+endif()
+
 # Exactly one display backend, selected by the board. Conditional SRCS (unlike
 # conditional REQUIRES) are consumed in CMake's real pass, where CONFIG_ values
 # are visible, which is why this pattern works and the one above does not.
@@ -113,6 +122,19 @@ if(CONFIG_AIRKVM_TLS)
         "${CMAKE_CURRENT_LIST_DIR}/../certs/device.key")
 endif()
 
+# WHOLE_ARCHIVE is load-bearing, not tidiness. esp_tinyusb's tusb_msc_storage.c
+# is compiled whenever CONFIG_TINYUSB_MSC_ENABLED is set, and it defines every
+# tud_msc_* callback and tud_mount_cb/tud_umount_cb *strongly* — the same
+# symbols main defines. Which copy an ordinary link takes depends on archive
+# search order (it happened to take main's when tried on 2026-09-06, which is
+# luck, not a property), and one of the losing outcomes is silent: Espressif's
+# tud_umount_cb links, the image builds and enumerates, and an unplug no longer
+# releases held keys (§2 principle 4). With main's objects all placed before
+# any archive is searched, no tud_* reference is left for tusb_msc_storage.o to
+# satisfy, so it is never pulled in — and if it somehow were, main's copies
+# would collide with it loudly instead of losing quietly.
+# tools/check_msc_symbols.cmake proves the object is absent after every link
+# (root CMakeLists.txt). AGENTS.md §9.
 idf_component_register(
     SRCS ${airkvm_srcs}
     INCLUDE_DIRS "."
@@ -120,7 +142,8 @@ idf_component_register(
     # _binary_index_html_gz_start (see net.c).
     EMBED_FILES ${web_assets}
     EMBED_TXTFILES ${airkvm_embed_txt}
-    REQUIRES ${airkvm_requires})
+    REQUIRES ${airkvm_requires}
+    WHOLE_ARCHIVE)
 
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     add_dependencies(${COMPONENT_LIB} airkvm_web_assets)
