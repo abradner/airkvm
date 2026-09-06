@@ -435,3 +435,223 @@ if (!navigator.mediaDevices) {
 }
 
 connect();
+
+// --- disk image over /ws-media --------------------------------------------
+//
+// The image never leaves this browser. The dongle presents an empty
+// removable disk to the target; attaching a file here tells it the geometry,
+// and from then on it asks for 16 KB chunks (MEDIA_CHUNK_SIZE in
+// main/media_proto.h — this constant ships in the same firmware image as that
+// one, so they cannot drift) as the target reads them. Slices are read
+// lazily, so a multi-gigabyte ISO costs nothing until it is read.
+//
+// Its own socket on its own port, so a chunk in flight never sits in front of
+// a keystroke on the input socket's task (main/media_ws.h).
+
+const MEDIA = {
+  ATTACH: 0x10,
+  DETACH: 0x11,
+  DATA: 0x12,
+  ERROR: 0x13,
+  REQ: 0x90,
+  STATUS: 0x91,
+  CHUNK: 16384,
+  BLOCK: 512,
+  PORT_SECURE: 8443,
+  PORT_INSECURE: 8080,
+  STATE: [
+    "no image attached",
+    "attached",
+    "another client holds the medium",
+    "refused: not enough memory on the dongle to hold the cache and keep the console",
+  ],
+  ERR_OUT_OF_RANGE: 1,
+  ERR_READ_FAILED: 2,
+};
+
+const mediaEl = {
+  file: document.getElementById("media-file"),
+  attach: document.getElementById("media-attach"),
+  eject: document.getElementById("media-eject"),
+  status: document.getElementById("media-status"),
+};
+
+// Host follows the console's host (or the ?ws= override); only the port
+// differs, and the scheme follows the page like the input socket does.
+const mediaHost = (wsOverride || location.host).replace(/:\d+$/, "");
+const mediaUrl = `${wsScheme}://${mediaHost}:${
+  wsScheme === "wss" ? MEDIA.PORT_SECURE : MEDIA.PORT_INSECURE
+}/ws-media`;
+
+let mediaSocket = null;
+let mediaReconnectDelay = 1000;
+let mediaFile = null; // what the file input holds
+let attachedFile = null; // what the dongle was told about — served from this
+let mediaServed = 0;
+
+function setMediaStatus(text, kind) {
+  mediaEl.status.textContent = text;
+  mediaEl.status.className = `status ${kind || ""}`;
+}
+
+function mediaSend(bytes) {
+  if (mediaSocket && mediaSocket.readyState === WebSocket.OPEN) {
+    mediaSocket.send(bytes);
+    return true;
+  }
+  return false;
+}
+
+function encodeAttach(file) {
+  const name = new TextEncoder().encode(file.name).slice(0, 31);
+  const buf = new ArrayBuffer(13 + name.length);
+  const v = new DataView(buf);
+  v.setUint8(0, MEDIA.ATTACH);
+  v.setUint16(1, MEDIA.BLOCK, true);
+  // The target sees whole blocks; the tail of the last one is zero-padded on
+  // the way out (see serveChunk).
+  v.setBigUint64(3, BigInt(Math.ceil(file.size / MEDIA.BLOCK)), true);
+  v.setUint8(11, 0x01); // read-only
+  v.setUint8(12, name.length);
+  new Uint8Array(buf, 13).set(name);
+  return buf;
+}
+
+async function serveChunk(reqId, chunk) {
+  // Always the file the dongle was told about, never whatever the input
+  // holds now: changing the selection must not serve a different image under
+  // the old geometry.
+  const file = attachedFile;
+  if (!file) return;
+  const start = chunk * MEDIA.CHUNK;
+  if (start >= Math.ceil(file.size / MEDIA.BLOCK) * MEDIA.BLOCK) {
+    mediaSend(encodeError(reqId, MEDIA.ERR_OUT_OF_RANGE));
+    return;
+  }
+  let bytes;
+  try {
+    // Blob.arrayBuffer: Safari 14+, Chrome 76+, Firefox 69+. Lazy: only this
+    // slice is read.
+    bytes = new Uint8Array(
+      await file.slice(start, start + MEDIA.CHUNK).arrayBuffer(),
+    );
+  } catch (err) {
+    // The file went away (unplugged drive, revoked handle).
+    mediaSend(encodeError(reqId, MEDIA.ERR_READ_FAILED));
+    setMediaStatus(`read failed: ${err.message}`, "bad");
+    return;
+  }
+  // Always a full chunk: the dongle's cache completes on the last byte, and
+  // bytes past the image are zeros, which is what the padded last block is.
+  const out = new ArrayBuffer(15 + MEDIA.CHUNK);
+  const v = new DataView(out);
+  v.setUint8(0, MEDIA.DATA);
+  v.setUint32(1, reqId, true);
+  v.setUint32(5, chunk, true);
+  v.setUint32(9, 0, true);
+  v.setUint16(13, MEDIA.CHUNK, true);
+  new Uint8Array(out, 15).set(bytes);
+  mediaSend(out);
+  mediaServed += bytes.length;
+}
+
+function encodeError(reqId, code) {
+  const buf = new ArrayBuffer(6);
+  const v = new DataView(buf);
+  v.setUint8(0, MEDIA.ERROR);
+  v.setUint32(1, reqId, true);
+  v.setUint8(5, code);
+  return buf;
+}
+
+// Connected on demand, never at page load: every open console tab holding a
+// media socket would be one more TLS session on the dongle's heap for a
+// feature the tab may never use.
+function mediaConnect() {
+  if (mediaSocket) return;
+  mediaSocket = new WebSocket(mediaUrl);
+  mediaSocket.binaryType = "arraybuffer";
+  mediaSocket.onopen = () => {
+    mediaReconnectDelay = 1000;
+    mediaEl.attach.disabled = !mediaFile;
+    if (mediaFile) setMediaStatus("ready to attach");
+  };
+  mediaSocket.onclose = () => {
+    // The dongle drops the medium when this socket closes (its release-all
+    // for storage), so the page must not pretend otherwise — and it must not
+    // re-attach on its own: the operator chose to attach, and the dongle may
+    // have dropped the medium for a reason.
+    attachedFile = null;
+    mediaEl.attach.disabled = true;
+    mediaEl.eject.disabled = true;
+    mediaEl.file.disabled = false;
+    mediaSocket = null;
+    // Reconnect only while there is a file to serve, and back off: the
+    // dongle has one media slot, and a refused connect is a TLS handshake it
+    // paid for. Nothing to serve means nothing to reconnect for.
+    if (mediaFile) {
+      setMediaStatus(
+        `media socket closed — retrying in ${mediaReconnectDelay / 1000}s`,
+        "bad",
+      );
+      setTimeout(mediaConnect, mediaReconnectDelay);
+      mediaReconnectDelay = Math.min(mediaReconnectDelay * 2, 30000);
+    } else {
+      setMediaStatus("no image");
+    }
+  };
+  mediaSocket.onmessage = (e) => {
+    if (!(e.data instanceof ArrayBuffer)) return;
+    const v = new DataView(e.data);
+    const type = v.getUint8(0);
+    if (type === MEDIA.REQ && e.data.byteLength === 9) {
+      serveChunk(v.getUint32(1, true), v.getUint32(5, true));
+    } else if (type === MEDIA.STATUS && e.data.byteLength === 10) {
+      const state = v.getUint8(1);
+      const served = v.getUint32(2, true);
+      const attached = state === 1;
+      if (!attached) attachedFile = null;
+      mediaEl.eject.disabled = !attached;
+      mediaEl.attach.disabled = attached || !mediaFile;
+      // While attached the selection is frozen: see serveChunk.
+      mediaEl.file.disabled = attached;
+      setMediaStatus(
+        attached
+          ? `attached: ${attachedFile ? attachedFile.name : "?"} — ${(served / 1048576).toFixed(1)} MB served`
+          : MEDIA.STATE[state] || `state ${state}`,
+        attached ? "ok" : state >= 2 ? "bad" : "",
+      );
+    }
+  };
+}
+
+mediaEl.file.addEventListener("change", () => {
+  mediaFile = mediaEl.file.files[0] || null;
+  mediaServed = 0;
+  if (mediaFile) mediaConnect();
+  mediaEl.attach.disabled =
+    !mediaFile || !mediaSocket || mediaSocket.readyState !== WebSocket.OPEN;
+  setMediaStatus(
+    mediaFile
+      ? `${mediaFile.name}: ${(mediaFile.size / 1048576).toFixed(1)} MB, not attached`
+      : "no image",
+  );
+});
+
+mediaEl.attach.addEventListener("click", () => {
+  if (!mediaFile) return;
+  // Snapshot now; the STATUS reply confirms or clears it.
+  attachedFile = mediaFile;
+  if (mediaSend(encodeAttach(mediaFile))) setMediaStatus("attaching…");
+});
+
+mediaEl.eject.addEventListener("click", () => {
+  mediaSend(new Uint8Array([MEDIA.DETACH]));
+});
+
+// DataView.setBigUint64 (encodeAttach) is Safari 15+. Older Safari gets a
+// clear message instead of a silent no-op.
+if (typeof DataView.prototype.setBigUint64 !== "function") {
+  mediaEl.file.disabled = true;
+  setMediaStatus("disk images need a newer browser (BigInt DataView)", "bad");
+}

@@ -53,7 +53,8 @@ endif()
 # say "only if defined". msc_lun.c is pure and host-tested; msc_out.c is the
 # TinyUSB glue.
 if(CONFIG_TINYUSB_MSC_ENABLED)
-    list(APPEND airkvm_srcs "msc_lun.c" "msc_out.c" "media_proto.c" "block_cache.c")
+    list(APPEND airkvm_srcs "msc_lun.c" "msc_out.c" "media_proto.c" "block_cache.c"
+        "block_source_browser.c" "media_ws.c")
 endif()
 
 # Exactly one display backend, selected by the board. Conditional SRCS (unlike

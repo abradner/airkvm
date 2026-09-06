@@ -195,7 +195,45 @@ static void encodes_downstream_frames(void) {
                0);
 }
 
+static void splits_ranges_across_chunks(void) {
+  struct media_span sp[2];
+  // Inside one chunk.
+  CHECK_EQ_INT(media_split(100, 50, sp), 1);
+  CHECK_EQ_INT(sp[0].chunk, 0);
+  CHECK_EQ_INT(sp[0].offset, 100);
+  CHECK_EQ_INT(sp[0].len, 50);
+  // Ending exactly on the boundary stays in one chunk.
+  CHECK_EQ_INT(media_split(MEDIA_CHUNK_SIZE - 512, 512, sp), 1);
+  CHECK_EQ_INT(sp[0].len, 512);
+  // One byte over the boundary: two pieces that add up.
+  CHECK_EQ_INT(media_split(MEDIA_CHUNK_SIZE - 512, 513, sp), 2);
+  CHECK_EQ_INT(sp[0].chunk, 0);
+  CHECK_EQ_INT(sp[0].len, 512);
+  CHECK_EQ_INT(sp[1].chunk, 1);
+  CHECK_EQ_INT(sp[1].offset, 0);
+  CHECK_EQ_INT(sp[1].len, 1);
+  // Starting on a boundary.
+  CHECK_EQ_INT(media_split(3ull * MEDIA_CHUNK_SIZE, 4096, sp), 1);
+  CHECK_EQ_INT(sp[0].chunk, 3);
+  CHECK_EQ_INT(sp[0].offset, 0);
+  // Deep into a large image: 64-bit byte offsets, 32-bit chunk numbers.
+  CHECK_EQ_INT(media_split(0x1FFFF0000ull, 8, sp), 1);
+  CHECK_EQ_INT(sp[0].chunk, 0x1FFFF0000ull / MEDIA_CHUNK_SIZE);
+  CHECK_EQ_INT(sp[0].offset, 0);
+  // And one byte before that boundary, 8 bytes straddle it.
+  CHECK_EQ_INT(media_split(0x1FFFEFFFFull, 8, sp), 2);
+  CHECK_EQ_INT(sp[0].len, 1);
+  CHECK_EQ_INT(sp[1].len, 7);
+  // Degenerate: nothing, or more than a chunk.
+  CHECK_EQ_INT(media_split(0, 0, sp), 0);
+  CHECK_EQ_INT(media_split(0, MEDIA_CHUNK_SIZE + 1, sp), 0);
+  // A whole chunk starting mid-chunk is the largest two-piece case.
+  CHECK_EQ_INT(media_split(1, MEDIA_CHUNK_SIZE, sp), 2);
+  CHECK_EQ_INT(sp[0].len + sp[1].len, MEDIA_CHUNK_SIZE);
+}
+
 int main(void) {
+  RUN(splits_ranges_across_chunks);
   RUN(decodes_attach);
   RUN(attach_name_is_bounded);
   RUN(decodes_data_and_points_into_frame);

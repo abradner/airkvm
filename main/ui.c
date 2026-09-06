@@ -209,7 +209,11 @@ static void draw(const struct status_snapshot *s) {
     // is asleep (see status.h).
     snprintf(line, sizeof(line), "USB SUSP %lu", (unsigned long)s->events);
   } else if (s->usb_mounted) {
-    snprintf(line, sizeof(line), "USB OK  %lu", (unsigned long)s->events);
+    // "+DSK": a medium is attached to the mass-storage LUN, so the target
+    // sees a disk as well as a keyboard.
+    snprintf(line, sizeof(line), "%s %lu",
+             s->media_attached ? "USB+DSK" : "USB OK ",
+             (unsigned long)s->events);
   } else {
     snprintf(line, sizeof(line), "NO HID  %lu", (unsigned long)s->events);
   }

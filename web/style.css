@@ -180,3 +180,8 @@ label {
   color: var(--muted);
   font-size: 0.8rem;
 }
+
+.row {
+  display: flex;
+  gap: 0.5rem;
+}

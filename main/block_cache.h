@@ -26,7 +26,7 @@
 // releases a claim pins that slot for good, and N such claims leave nothing
 // to evict. The caller owes every request a timeout that ends in release();
 // nothing in here can recover a stuck claim on its own. Nothing in here
-// locks either; the caller serialises (msc_out.c's lock).
+// locks either; the caller serialises (block_source_browser.c's lock).
 #pragma once
 
 #include <stdbool.h>
