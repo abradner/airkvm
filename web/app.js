@@ -484,6 +484,7 @@ const mediaUrl = `${wsScheme}://${mediaHost}:${
 }/ws-media`;
 
 let mediaSocket = null;
+let mediaReconnectDelay = 1000;
 let mediaFile = null; // what the file input holds
 let attachedFile = null; // what the dongle was told about — served from this
 let mediaServed = 0;
@@ -571,6 +572,7 @@ function mediaConnect() {
   mediaSocket = new WebSocket(mediaUrl);
   mediaSocket.binaryType = "arraybuffer";
   mediaSocket.onopen = () => {
+    mediaReconnectDelay = 1000;
     mediaEl.attach.disabled = !mediaFile;
     if (mediaFile) setMediaStatus("ready to attach");
   };
@@ -583,9 +585,20 @@ function mediaConnect() {
     mediaEl.attach.disabled = true;
     mediaEl.eject.disabled = true;
     mediaEl.file.disabled = false;
-    setMediaStatus("media socket closed — reconnecting…", "bad");
     mediaSocket = null;
-    setTimeout(mediaConnect, 2000);
+    // Reconnect only while there is a file to serve, and back off: the
+    // dongle has one media slot, and a refused connect is a TLS handshake it
+    // paid for. Nothing to serve means nothing to reconnect for.
+    if (mediaFile) {
+      setMediaStatus(
+        `media socket closed — retrying in ${mediaReconnectDelay / 1000}s`,
+        "bad",
+      );
+      setTimeout(mediaConnect, mediaReconnectDelay);
+      mediaReconnectDelay = Math.min(mediaReconnectDelay * 2, 30000);
+    } else {
+      setMediaStatus("no image");
+    }
   };
   mediaSocket.onmessage = (e) => {
     if (!(e.data instanceof ArrayBuffer)) return;

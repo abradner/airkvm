@@ -93,7 +93,11 @@ static void req_sent(esp_err_t err, int socket, void *arg) {
   if (err != ESP_OK) {
     ESP_LOGW(TAG, "REQ send failed: %s", esp_err_to_name(err));
   }
+  // Under the lock, like the claim in request_chunk: the two run on different
+  // tasks and a flag is not a synchronisation primitive.
+  LOCK();
   ((volatile bool *)arg)[0] = false;
+  UNLOCK();
 }
 
 // browser_stalled_fn: the client stopped answering. Called from the msc_io
@@ -106,23 +110,22 @@ static void client_stalled(void) {
 // is queued to the media server's task, and a queue that cannot take it is a
 // failed request, which the source turns into a failed USB transfer.
 static bool request_chunk(uint32_t req_id, uint32_t chunk) {
+  int slot = -1;
   LOCK();
   const int fd = s_owner_fd;
-  UNLOCK();
-  if (fd < 0) {
-    return false;
-  }
-  int slot = -1;
-  for (int i = 0; i < REQ_BUFS; i++) {
-    if (!s_req[i].busy) {
-      slot = i;
-      break;
+  if (fd >= 0) {
+    for (int i = 0; i < REQ_BUFS; i++) {
+      if (!s_req[i].busy) {
+        slot = i;
+        s_req[i].busy = true;
+        break;
+      }
     }
   }
-  if (slot < 0) {
+  UNLOCK();
+  if (fd < 0 || slot < 0) {
     return false;
   }
-  s_req[slot].busy = true;
   media_encode_req(s_req[slot].buf, sizeof(s_req[slot].buf), req_id, chunk);
   httpd_ws_frame_t frame;
   memset(&frame, 0, sizeof(frame));
@@ -133,7 +136,9 @@ static bool request_chunk(uint32_t req_id, uint32_t chunk) {
   const esp_err_t err = httpd_ws_send_data_async(s_server, fd, &frame, req_sent,
                                                  (void *)&s_req[slot].busy);
   if (err != ESP_OK) {
+    LOCK();
     s_req[slot].busy = false;
+    UNLOCK();
     ESP_LOGW(TAG, "could not queue REQ: %s", esp_err_to_name(err));
     return false;
   }
@@ -278,7 +283,29 @@ static void wifi_lost(void *arg, esp_event_base_t base, int32_t id,
 
 // --- lifecycle --------------------------------------------------------------
 
+static esp_err_t start_inner(void);
+
+// Failure here is non-fatal to the console (net.c logs and carries on), and
+// it is most likely under exactly the low-heap conditions where a leak would
+// matter, so everything allocated is given back on the way out.
 esp_err_t media_ws_start(void) {
+  const esp_err_t err = start_inner();
+  if (err != ESP_OK) {
+    if (s_server) {
+      httpd_stop(s_server);
+      s_server = NULL;
+    }
+    free(s_rx);
+    s_rx = NULL;
+    if (s_lock) {
+      vSemaphoreDelete(s_lock);
+      s_lock = NULL;
+    }
+  }
+  return err;
+}
+
+static esp_err_t start_inner(void) {
   s_lock = xSemaphoreCreateMutex();
   s_rx = malloc(RX_MAX);
   ESP_RETURN_ON_FALSE(s_lock && s_rx, ESP_ERR_NO_MEM, TAG, "alloc failed");
@@ -304,7 +331,10 @@ esp_err_t media_ws_start(void) {
   tls.httpd.keep_alive_count = 3;
   // One client slot, not two: a second media client would cost a second TLS
   // session (~40 KB) from the heap the console's own handshakes come out of.
-  // The second client simply cannot connect, and its console says so.
+  // A second client therefore cannot connect at all while one is connected
+  // (it waits at the listen backlog and its console shows "reconnecting");
+  // MEDIA_STATE_BUSY in the protocol is reserved for a future build that can
+  // afford a spectator slot.
   tls.httpd.max_open_sockets = 1;
   // A different control port from the console instance, or the second
   // httpd_start fails with EADDRINUSE on the internal UDP socket.

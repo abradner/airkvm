@@ -6,6 +6,11 @@
 // 3 s keepalive (AGENTS.md §9 entry 9). Principle 6 wants input latency
 // unaffected by design, so the media path gets a task of its own.
 //
+// One client at a time, enforced at the socket: the instance has a single
+// client slot, so a second media client cannot connect while one is
+// connected. (MEDIA_STATE_BUSY exists in the protocol for a build that can
+// afford a spectator slot; today it is unreachable.)
+//
 // Trust: the same as /ws — none (R-001). A LAN peer that can reach this port
 // can present arbitrary boot media to the target. That is R-008 in
 // docs/repo-map.md, a real widening within the physical-presence model, and
