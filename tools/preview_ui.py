@@ -42,14 +42,33 @@ def parse_font(path, name):
 
 
 def parse_ui_offsets(st7789):
-    """Read the UI_Y_* block for one board out of main/ui.c."""
+    """Read one board's layout constants out of main/ui.c.
+
+    Reads rather than hardcodes, so this cannot drift from the firmware. There
+    is more than one `#if BOARD_DISPLAY_ST7789` in that file, so the block is
+    found by the constant it must contain rather than by position.
+    """
     src = (ROOT / "main/ui.c").read_text()
-    block = src.split("#if BOARD_DISPLAY_ST7789", 1)[1]
-    lcd, oled = block.split("#else", 1)
+    blocks = [
+        b for b in src.split("#if BOARD_DISPLAY_ST7789")[1:] if "UI_Y_ADDRESS" in b
+    ]
+    if len(blocks) != 1:
+        sys.exit(f"expected exactly one layout block, found {len(blocks)}")
+    lcd, oled = blocks[0].split("#else", 1)
     chosen = lcd if st7789 else oled.split("#endif", 1)[0]
+
     out = {}
-    for key in ("ADDRESS", "NETWORK", "TARGET", "DEBUG"):
-        out[key] = int(re.search(rf"#define UI_Y_{key} (\d+)", chosen).group(1))
+    for key in ("HEADER", "ADDRESS", "NETWORK", "TARGET", "DEBUG"):
+        m = re.search(rf"#define UI_Y_{key} (\d+)", chosen)
+        out[key] = int(m.group(1)) if m else 0
+    m = re.search(r"#define UI_Y_MDNS (\d+)", chosen)
+    out["MDNS"] = int(m.group(1)) if m else None
+
+    # The safe-area inset lives in its own block near the top of the file.
+    safe = src.split("#if BOARD_DISPLAY_ST7789", 1)[1].split("#endif", 1)[0]
+    lcd_safe, oled_safe = safe.split("#else", 1)
+    chosen_safe = lcd_safe if st7789 else oled_safe
+    out["X_COL"] = int(re.search(r"#define UI_X_COL (\d+)", chosen_safe).group(1))
     return out
 
 
@@ -94,19 +113,22 @@ class Canvas:
                     self.pixel(x0 + i * f["advance"] * sx + gx, y0 + gy, on or edge)
 
 
-def draw_status(c, y, tall, ip, ssid, rssi_bars, events, usb, bound, debug):
+def draw_status(c, y, tall, mdns, ip, ssid, rssi_bars, events, usb, bound, debug):
     """Mirrors main/ui.c draw(). Keep in step with it by hand."""
     f = c.font
     cols = c.w // f["advance"]
     cell_h = f["line_h"]
-    c.text(0, 0, "AIRKVM")
-    c.text((cols - 7) * f["advance"], 0, "BOUND" if bound else "IDLE")
-    c.text(0, y["ADDRESS"], ip or "NO WIFI", *tall)
-    c.text(0, y["NETWORK"], ssid)
+    x0 = y["X_COL"] * f["advance"]
+    c.text(x0, y["HEADER"], "AIRKVM")
+    c.text((cols - 7) * f["advance"], y["HEADER"], "BOUND" if bound else "IDLE")
+    c.text(x0, y["ADDRESS"], ip or "NO WIFI", *tall)
+    if y["MDNS"] is not None:
+        c.text(x0, y["MDNS"], f"{mdns}.local")
+    c.text(x0, y["NETWORK"], ssid)
     c.bar(cols - 4, y["NETWORK"] // cell_h, 4, rssi_bars)
-    c.text(0, y["TARGET"], f"{'USB OK' if usb else 'NO HID'}  {events}")
+    c.text(x0, y["TARGET"], f"{'USB OK' if usb else 'NO HID'}  {events}")
     if debug:
-        c.text(0, y["DEBUG"], debug)
+        c.text(x0, y["DEBUG"], debug)
 
 
 def ascii_art(c):
@@ -132,6 +154,7 @@ def main():
             c,
             y,
             tall,
+            mdns="airkvm-lcd",
             ip="192.168.100.100",
             ssid="asn-iot",
             rssi_bars=3,

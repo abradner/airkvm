@@ -156,13 +156,24 @@
 // and the same failure signature: a wrong gap renders a shifted picture, not
 // no picture, which reads as a wiring fault.
 //
-// HYPOTHESIS, settle on hardware in one flash. esp_lcd's driver adds x_gap to
-// the caller's x *before* CASET, while swap_xy only flips MADCTL's MV bit — so
-// which of the two gaps carries the 34 depends on swap_xy, and that is not
-// decidable by reading the driver. Draw a 1px border at the canvas edges: a
-// clipped or offset border says which. Then fix these and delete this note.
+// CONFIRMED on hardware 2026-09-06: text renders the right way round and in
+// the right place, and nothing is displaced. x_gap stays 0 because the logical
+// long axis maps to the controller's 320-row axis, which has no offset; the
+// 34 lands on y_gap, which is the 172-in-240 window.
+//
+// Note the panel's corners are physically ROUNDED and simply have no pixels
+// there. That is not a gap error — it displaces nothing — and must not be
+// "fixed" by adjusting these values, which would shift the whole image to hide
+// a few missing corner pixels. The layout keeps content out of the corners
+// instead; see UI_SAFE_INSET in ui.c.
+// Landscape. swap_xy transposes; a transpose on its own is a reflection about
+// the diagonal, which on screen reads as "mirrored" — so a rotation is always
+// swap_xy plus EXACTLY ONE mirror. mirror_x gives 90 degrees, mirror_y gives
+// 270; the two differ by 180, so if the text is the right way round but
+// upside down, swap which of these is 1. Confirmed mirrored-with-neither on
+// hardware 2026-09-06, which is what identified the missing mirror.
 #define BOARD_LCD_SWAP_XY 1
-#define BOARD_LCD_MIRROR_X 0
+#define BOARD_LCD_MIRROR_X 1
 #define BOARD_LCD_MIRROR_Y 0
 #define BOARD_LCD_X_GAP 0
 #define BOARD_LCD_Y_GAP 34
