@@ -41,12 +41,26 @@ static const char *TAG = "indicator";
 // working on, and a status light at full brightness in a dark room is worse
 // than no status light. A WS2812 at 255 is a torch. These are percentages of
 // full scale, and they are low on purpose.
-#define BRIGHT_IDLE 8
-#define BRIGHT_BOUND 20
-#define BRIGHT_WARN 28
-#define BRIGHT_FAULT 35
-#define BLIP_BOOST_PCT 18
+// Ceilings are 0..255 scale factors, not percentages. Percentages were the
+// original mistake: at an 8% ceiling the brightest channel spanned roughly ten
+// distinct values across the whole breath, and ten steps over four seconds is
+// visibly steppy. Working in the LED's own units keeps every code available.
+//
+// Still low on purpose. indicator.h: a status light at full brightness in a
+// dark room is worse than no status light, and a WS2812 at 255 is a torch.
+#define LEVEL_IDLE 44
+#define LEVEL_BOUND 78
+#define LEVEL_SUSPENDED 96
+#define LEVEL_WARN 96
+#define LEVEL_FAULT 120
+#define BLIP_BOOST 60
 #define BLIP_MS 120
+
+// The breath swings between this fraction of the ceiling and the ceiling.
+// Deliberately not near zero: a wider swing has no more codes to spend, so it
+// only makes each step bigger, and an LED that fully extinguishes reads as
+// "off/dead" rather than "idle and well".
+#define BREATHE_FLOOR_PCT 55
 
 // Debug mode (R-006) pulses the light between whatever it was showing and a
 // colour used for nothing else, so you cannot leave keystroke display on
@@ -75,24 +89,35 @@ static void emit(uint8_t r, uint8_t g, uint8_t b) {
   if (!s_ready) {
     return;
   }
-  // WS2812 takes green first.
-  const uint8_t grb[3] = {g, r, b};
-  const uint32_t packed = ((uint32_t)g << 16) | ((uint32_t)r << 8) | b;
+  // RED FIRST, not green — measured, not assumed.
+  //
+  // The schematic calls this part a WS2812B-0807, and a WS2812B latches GRB.
+  // This one does not: driven GRB, Solarized blue came out magenta and magenta
+  // came out cyan, which is red and green transposed and is explained by
+  // nothing else. Two independent colours agreeing settles it. (Green was not
+  // diagnostic — Solarized green is olive, so it looks yellowish either way.)
+  //
+  // AGENTS.md §6.1: trust a working config over a published label. Confirmed
+  // on hardware 2026-09-06.
+  const uint8_t wire[3] = {r, g, b};
+  const uint32_t packed = ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
   if (packed == s_last_grb) {
     return;  // nothing changed; do not spend a transmission on it
   }
   const rmt_transmit_config_t cfg = {.loop_count = 0};
-  if (rmt_transmit(s_chan, s_encoder, grb, sizeof(grb), &cfg) == ESP_OK) {
+  if (rmt_transmit(s_chan, s_encoder, wire, sizeof(wire), &cfg) == ESP_OK) {
     s_last_grb = packed;
   }
   // No explicit reset symbol: the latch is >50us of idle line, and the gap
   // until the next tick is three orders of magnitude longer than that.
 }
 
-static void scale(uint8_t *r, uint8_t *g, uint8_t *b, int percent) {
-  *r = (uint8_t)((*r * percent) / 100);
-  *g = (uint8_t)((*g * percent) / 100);
-  *b = (uint8_t)((*b * percent) / 100);
+// Rounds rather than truncates: at these levels an off-by-one code is a
+// visible step, and truncation loses one consistently on every channel.
+static void scale(uint8_t *r, uint8_t *g, uint8_t *b, int level) {
+  *r = (uint8_t)((*r * level + 127) / 255);
+  *g = (uint8_t)((*g * level + 127) / 255);
+  *b = (uint8_t)((*b * level + 127) / 255);
 }
 
 void indicator_init(void) {
@@ -140,7 +165,7 @@ void indicator_tick(void) {
     case INDICATOR_FAULT: {
       const uint8_t c[] = {SOL_RED};
       r = c[0], g = c[1], b = c[2];
-      ceiling = BRIGHT_FAULT;
+      ceiling = LEVEL_FAULT;
       break;
     }
     case INDICATOR_SUSPENDED: {
@@ -148,49 +173,53 @@ void indicator_tick(void) {
       // than alarming — nothing is wrong, the target is just asleep.
       const uint8_t c[] = {SOL_CYAN};
       r = c[0], g = c[1], b = c[2];
-      ceiling = BRIGHT_WARN;
+      ceiling = LEVEL_SUSPENDED;
       break;
     }
     case INDICATOR_WARN: {
       const uint8_t c[] = {SOL_YELLOW};
       r = c[0], g = c[1], b = c[2];
-      ceiling = BRIGHT_WARN;
+      ceiling = LEVEL_WARN;
       break;
     }
     case INDICATOR_BOUND: {
       const uint8_t c[] = {SOL_BLUE};
       r = c[0], g = c[1], b = c[2];
-      ceiling = BRIGHT_BOUND;
+      ceiling = LEVEL_BOUND;
       break;
     }
     default: {
       const uint8_t c[] = {SOL_GREEN};
       r = c[0], g = c[1], b = c[2];
-      ceiling = BRIGHT_IDLE;
+      ceiling = LEVEL_IDLE;
       break;
     }
   }
 
-  // Triangle-wave breath. A fault does NOT breathe: something being wrong
-  // should read as steady and insistent, not as a pulse you stop noticing.
-  int percent = ceiling;
+  // Breath. A fault does NOT breathe: something being wrong should read as
+  // steady and insistent, not as a pulse you stop noticing.
+  int level = ceiling;
   if (indicator_state_for(&s) != INDICATOR_FAULT) {
-    const int64_t phase = (esp_timer_get_time() / 1000) % BREATHE_PERIOD_MS;
+    const int64_t ms = (esp_timer_get_time() / 1000) % BREATHE_PERIOD_MS;
     const int half = BREATHE_PERIOD_MS / 2;
-    const int up = phase < half ? (int)phase : BREATHE_PERIOD_MS - (int)phase;
-    // Never all the way to zero: an LED that fully extinguishes reads as
-    // "off/dead" rather than "idle and well".
-    percent = (ceiling / 3) + ((ceiling * 2 / 3) * up) / half;
+    const int up = ms < half ? (int)ms : BREATHE_PERIOD_MS - (int)ms;
+    // Smoothstep (3t^2 - 2t^3) rather than a raw triangle. A triangle reverses
+    // direction instantly at each end, and that corner is a good part of what
+    // reads as "steppy" even when the levels themselves are fine.
+    const int32_t t = (up * 1000) / half;                            // 0..1000
+    const int32_t ease = (3 * t * t - 2 * t * t * t / 1000) / 1000;  // 0..1000
+    const int floor_level = (ceiling * BREATHE_FLOOR_PCT) / 100;
+    level = floor_level + (int)(((ceiling - floor_level) * ease) / 1000);
   }
 
   // A blip on input, so "my keystrokes are arriving" is answerable without
   // looking at the screen at all.
   const int64_t since_ms = (esp_timer_get_time() - s.last_activity_us) / 1000;
   if (since_ms >= 0 && since_ms < BLIP_MS) {
-    percent += BLIP_BOOST_PCT;
+    level += BLIP_BOOST;
   }
-  if (percent > 100) {
-    percent = 100;
+  if (level > 255) {
+    level = 255;
   }
 
   // Debug pulse. Applied to the hue before brightness so it reads as a colour
@@ -208,7 +237,7 @@ void indicator_tick(void) {
     b = (uint8_t)((b * (100 - mix) + dbg[2] * mix) / 100);
   }
 
-  scale(&r, &g, &b, percent);
+  scale(&r, &g, &b, level);
   emit(r, g, b);
 }
 
