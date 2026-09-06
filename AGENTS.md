@@ -79,7 +79,7 @@ A conflict with a principle is a stop-and-check, never something to quietly work
 |---|---|---|
 | Firmware language | C (C11) | ESP-IDF v5.5, installed by `mise run setup` into `.esp-idf/` |
 | Target hardware | ESP32-S3 (`esp32s3` target) | ESP32-S3-0.42 OLED supermini; native USB OTG is non-negotiable (§4) |
-| USB stack | TinyUSB via `esp_tinyusb` | Composite HID: boot keyboard + relative mouse. Advertises USB remote wakeup so the console can wake a suspended target (unverified on hardware) |
+| USB stack | TinyUSB via `esp_tinyusb` | Composite: boot keyboard + relative mouse + a mass-storage LUN (no medium yet; `main/msc_out.c`). Advertises USB remote wakeup so the console can wake a suspended target. Composite enumeration and wakeup both unverified on hardware |
 | Network | `esp_http_server` (WebSocket) + `mdns` | Single origin serves console and socket |
 | Console | Vanilla HTML/CSS/JS, no build step | Embedded in firmware via `EMBED_FILES`; no npm, no bundler, no CDN |
 | Display | SSD1306 72×40 over I2C, or ST7789 172×320 over SPI | One backend per board behind `main/display.h` (`display_ssd1306.c` / `display_st7789.c`), sharing the drawing layer in `main/canvas.h`. Status only (IP, mDNS name, link state). Both confirmed on real hardware: the OLED's pins and 180° rotation on 2026-08-31, the ST7789's pins, orientation and gap on 2026-09-06 |
@@ -116,6 +116,28 @@ Two things depend on this and would each be a real-world bug if it were violated
 - **HID reports must not be constructed on the HTTP task.** A blocked network task must never be
   able to leave a key held. Also, TinyUSB's device stack is not thread-safe across arbitrary
   callers.
+
+### One LUN owner; block sources and sockets never touch TinyUSB
+
+The HID rule above, applied to mass storage. `main/msc_lun.c` is the single owner of "is there a
+medium, how big, may it be written, has it changed since the host last asked", and
+`main/msc_out.c` is the only thing that calls it, from TinyUSB's callbacks. A block source
+(`main/msc_source.h`) supplies bytes and nothing else; the transport that feeds a source checks
+frame shape and nothing else; range is enforced once, in the LUN. Detach is the storage
+release-all: total, and run on every terminal event, so an in-flight transfer against a gone
+medium fails with NOT READY instead of delivering stale bytes.
+
+Two mechanics that are not preferences:
+
+- **Block I/O never runs on the TinyUSB task.** `tud_msc_read10_cb` returns `TUD_MSC_RET_ASYNC`
+  and the `msc_io` worker completes it. Returning 0 is not "wait" — it is BUSY, and TinyUSB
+  answers it by faking a completion and re-invoking the callback immediately, a hot spin on the
+  USB task (§9 entry 12's shape). A blocking read in the callback would also stall the endpoint
+  service that clears the keyboard's busy flag for the read's duration (principle 6).
+- **main is linked `WHOLE_ARCHIVE`, and the post-link check must stay.** esp_tinyusb's
+  `tusb_msc_storage.c` is compiled whenever MSC is enabled and strongly defines every `tud_msc_*`
+  callback *and* `tud_mount_cb`/`tud_umount_cb`. `tud_umount_cb` is how an unplug releases held
+  keys. See §9 entry 15, and the acceptance test there: a key held while the cable is pulled.
 
 ### The keymap is a pure lookup table with no I/O, and it is host-tested
 
@@ -746,6 +768,27 @@ code is written.*
     what makes an extraction like this safe to do at all* — `test/host/test_canvas.c` compares
     against a framebuffer captured by compiling the ORIGINAL `display.c` from git, so "the
     refactor changed no pixel on the working board" is a check rather than a claim.
+
+15. **Enabling a TinyUSB class in esp_tinyusb can silently replace your device callbacks.**
+    `CONFIG_TINYUSB_MSC_ENABLED=y` compiles esp_tinyusb's `tusb_msc_storage.c`, which defines
+    every `tud_msc_*` callback and — the part that matters — `tud_mount_cb` and `tud_umount_cb`,
+    all as strong symbols. `hid_out_usb.c` defines the last two, and `tud_umount_cb` is how an
+    unplug releases held keys (principle 4). Which copy an ordinary link takes is archive search
+    order. Both outcomes were reasoned through before enabling: a duplicate-symbol error is the
+    good case because it is loud; Espressif's copy winning is the bad one, because the image
+    builds, enumerates, mounts, and the only symptom is a key that stays held after the cable is
+    pulled, with nothing in any log. Mechanism, not care (§10 meta-rule 5): `main` is linked
+    `WHOLE_ARCHIVE` so no reference survives for that object to satisfy, and
+    `tools/check_msc_symbols.cmake` fails the build if that object entered the link. It reads the
+    linker *map*, not `nm`: with `--gc-sections` an unreferenced function in the offending object
+    is discarded, so an `nm` sentinel is absent in exactly the case that matters — the first
+    version of the script had that hole, and a review caught it. Seen to fail on synthetic maps
+    for both the glue-present and class-dropped cases before being trusted. **The acceptance test is on
+    hardware and nothing else reveals it:** hold a key, pull the cable, and the log must say
+    "USB host disconnected" with the key released. Not a green build, not a working mount.
+    Raised by the LCD147 onboarding session (2026-09-06) while reading the vendor glue; the
+    general rule is that any vendor "helper" compiled by a Kconfig flag deserves an `nm` of what
+    it defines before the flag is flipped.
 
 ## 10. Maintaining This Document
 

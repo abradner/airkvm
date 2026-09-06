@@ -14,12 +14,22 @@ CONFIG_IDF_TARGET="esp32s3"
 # needs no report ID and BIOS boot protocol works (see main/usb_hid.c).
 CONFIG_TINYUSB_HID_COUNT=2
 CONFIG_TINYUSB_CDC_ENABLED=n
-# Not merely unused: esp_tinyusb's tusb_msc_storage.c is compiled when this is
-# =y, and it defines tud_mount_cb/tud_umount_cb strongly, competing with the
-# ones in main/hid_out_usb.c. If Espressif's win the link, unplugging no longer
-# releases held keys and nothing says so. See the comment at those callbacks
-# before enabling this.
-CONFIG_TINYUSB_MSC_ENABLED=n
+# Mass storage: a third interface, one removable-disk LUN, no medium until a
+# source is attached (main/msc_out.c). Enabling this also compiles
+# esp_tinyusb's tusb_msc_storage.c, which defines tud_mount_cb/tud_umount_cb
+# and every tud_msc_* callback strongly, competing with main's. If Espressif's
+# won the link, unplugging would no longer release held keys and nothing would
+# say so — which is why main is linked WHOLE_ARCHIVE and
+# tools/check_msc_symbols.cmake runs after every link. See the comment at
+# those callbacks in main/hid_out_usb.c. This is an EXISTING symbol in any
+# generated sdkconfig from before it flipped, and a defaults file cannot
+# change an existing value (AGENTS.md §6.1): delete build/sdkconfig or edit
+# it, then confirm in build/config/sdkconfig.h.
+CONFIG_TINYUSB_MSC_ENABLED=y
+# One TinyUSB callback per buffer-full of data. The default 512 means eight
+# callbacks per 4 KB; this is one static DRAM buffer of this size. Tune after
+# measuring (principle 6), not before.
+CONFIG_TINYUSB_MSC_BUFSIZE=4096
 
 # The console holds one long-lived WebSocket plus three short static requests;
 # the default of 7 open sockets leaves room for a second browser to connect and
