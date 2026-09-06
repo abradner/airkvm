@@ -110,6 +110,32 @@ enum media_decode_result media_decode(const uint8_t *frame, size_t len,
   return MEDIA_DECODE_OK;
 }
 
+size_t media_split(uint64_t byte_start, uint32_t len,
+                   struct media_span out[2]) {
+  if (len == 0 || len > MEDIA_CHUNK_SIZE || out == NULL) {
+    return 0;
+  }
+  const uint64_t first_chunk = byte_start / MEDIA_CHUNK_SIZE;
+  const uint32_t first_off = (uint32_t)(byte_start % MEDIA_CHUNK_SIZE);
+  if (first_chunk > UINT32_MAX) {
+    return 0;
+  }
+  out[0].chunk = (uint32_t)first_chunk;
+  out[0].offset = first_off;
+  if (first_off + len <= MEDIA_CHUNK_SIZE) {
+    out[0].len = len;
+    return 1;
+  }
+  out[0].len = MEDIA_CHUNK_SIZE - first_off;
+  if (first_chunk + 1 > UINT32_MAX) {
+    return 0;
+  }
+  out[1].chunk = (uint32_t)first_chunk + 1;
+  out[1].offset = 0;
+  out[1].len = len - out[0].len;
+  return 2;
+}
+
 size_t media_encode_req(uint8_t *buf, size_t cap, uint32_t req_id,
                         uint32_t chunk) {
   if (buf == NULL || cap < MEDIA_DOWN_REQ_LEN) {

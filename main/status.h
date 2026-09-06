@@ -13,6 +13,7 @@
 #define STATUS_IP_LEN 16
 #define STATUS_SSID_LEN 33
 #define STATUS_EVENT_LEN 20
+#define STATUS_MEDIA_LEN 32
 
 struct status_snapshot {
   bool wifi_connected;
@@ -27,6 +28,9 @@ struct status_snapshot {
   // with no VBUS sense a cable pull can look the same. The display says SUSP,
   // the bus fact, rather than guessing which.
   bool usb_suspended;
+  // A medium is attached to the mass-storage LUN (main/media_ws.c).
+  bool media_attached;
+  char media_name[STATUS_MEDIA_LEN];
 
   uint32_t events;           // input events since boot
   int64_t last_activity_us;  // esp_timer_get_time() of the last input event
@@ -45,6 +49,8 @@ void status_set_rssi(int8_t rssi);
 void status_set_client(bool connected);
 void status_set_usb_mounted(bool mounted);
 void status_set_usb_suspended(bool suspended);
+// `name` may be NULL; it is copied.
+void status_set_media(bool attached, const char *name);
 
 // Records one input event. `describe` is only stored when debug mode is on.
 void status_note_event(const char *describe);
