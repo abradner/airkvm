@@ -76,6 +76,20 @@ config AIRKVM_HID_BACKEND_LOG
 
 endchoice
 
+config AIRKVM_MSC_SD
+    bool "Expose the microSD slot to the target as the mass-storage medium"
+    depends on AIRKVM_BOARD_S3_LCD147 && AIRKVM_HID_BACKEND_USB
+    default y
+    help
+        Boards with a card slot only. An inserted card becomes the medium of
+        the USB mass-storage LUN (read-only in this version); pulling it is a
+        removal. A browser-attached image and the card are exclusive — the
+        first to arrive holds the LUN.
+
+        This is a trust-boundary change on top of R-008 (docs/repo-map.md):
+        a card is input the firmware did not author. Read-only means it
+        cannot carry state off the device yet.
+
 config AIRKVM_TLS
     bool "Serve the console over HTTPS/WSS"
     default y

@@ -7,6 +7,10 @@
 # that board's 4MB flash size, with no diagnostic of any kind.
 
 CONFIG_AIRKVM_BOARD_S3_LCD147=y
+# The card slot as the target's disk (main/msc_src_sd.c). New symbol, so a
+# defaults file does seed it — but a generated sdkconfig from before this line
+# needs a reconfigure to learn it exists (AGENTS.md §6.1, first trap).
+CONFIG_AIRKVM_MSC_SD=y
 
 # Flash size measured on this board with `esptool flash_id` on 2026-09-06:
 # ESP32-S3 (QFN56) rev v0.2, embedded 8MB PSRAM, discrete XMC 25QH128 = 16MB.

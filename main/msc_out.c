@@ -59,7 +59,9 @@ struct msc_io {
 };
 static QueueHandle_t s_io_q;
 static uint32_t s_xfer_id;  // under s_lock
-static uint8_t s_bounce[CONFIG_TINYUSB_MSC_BUFSIZE];
+// 4-byte aligned for the SDMMC driver's DMA path: an unaligned buffer makes
+// it allocate a bounce of its own and read one block at a time.
+static uint8_t s_bounce[CONFIG_TINYUSB_MSC_BUFSIZE] __attribute__((aligned(4)));
 // A flush is owed after a write burst. Done by the worker when the mailbox
 // goes quiet, never on the USB task (AGENTS.md §4).
 static volatile bool s_flush_wanted;
@@ -321,16 +323,31 @@ void msc_out_bus_reset(void) {
   UNLOCK();
 }
 
-void msc_out_bind(const struct msc_source *src) {
+bool msc_out_bind_if_free(const struct msc_source *src) {
   LOCK();
-  msc_lun_bind(&s_lun, src);
+  const bool bound = msc_lun_try_bind(&s_lun, src);
   UNLOCK();
-  ESP_LOGI(TAG, "medium attached: %s", src && src->name ? src->name : "?");
+  if (bound) {
+    ESP_LOGI(TAG, "medium attached: %s", src->name ? src->name : "?");
+  }
+  return bound;
 }
 
-void msc_out_unbind(void) {
+bool msc_out_unbind_if(const struct msc_source *src) {
   LOCK();
-  msc_lun_unbind(&s_lun);
+  const bool released = msc_lun_unbind_if(&s_lun, src);
   UNLOCK();
-  ESP_LOGI(TAG, "medium detached");
+  if (released) {
+    ESP_LOGI(TAG, "medium detached: %s", src->name ? src->name : "?");
+  }
+  return released;
 }
+
+const struct msc_source *msc_out_current(void) {
+  LOCK();
+  const struct msc_source *src = s_lun.src;
+  UNLOCK();
+  return src;
+}
+
+// (plain bind/unbind deliberately not offered: see msc_out.h)
