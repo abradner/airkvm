@@ -38,3 +38,13 @@ void hid_out_release_all(void);
 // True once a USB host has enumerated and configured the device — i.e. the
 // target is actually listening. The log backend reports false: nothing is.
 bool hid_out_is_mounted(void);
+
+// Asks the backend to signal USB remote wakeup to a suspended target. Safe to
+// call from the HTTP task: like release-all it sets a flag the report task
+// services, and never touches the transport itself. AIRKVM_WAKE_REQUESTED
+// means the pulse was scheduled, not that the target woke — the bus resuming
+// (tud_resume_cb) is the only evidence of that. The checks here are for the
+// console's benefit; TinyUSB refuses a wakeup on its own when the preconditions
+// do not hold, so deleting them would change the message, not what is possible
+// (AGENTS.md §8, layered checks).
+enum airkvm_wake_result hid_out_wake_target(void);

@@ -3,7 +3,8 @@
 // No build step, no framework, no CDN: the dongle serves everything, because a
 // machine you walked up to may be on a network with no internet (AGENTS.md §4).
 //
-// UNVERIFIED — this has never talked to a real dongle.
+// Verified against real hardware 2026-09-04 (keystrokes typed on a macOS
+// target). The wake path below is newer and has not been.
 
 "use strict";
 
@@ -15,7 +16,22 @@ const FRAME = {
   MOUSE_SCROLL: 0x05,
   RELEASE_ALL: 0x06,
   PING: 0x07,
+  WAKE: 0x08,
 };
+
+// Dongle → console frames: same shape, bit 7 set (protocol.h).
+const DOWN = {
+  WAKE_RESULT: 0x80,
+};
+
+// Result byte of WAKE_RESULT, in the dongle's words rather than a bare number.
+// "requested" is not "woke": the dongle can only report that it sent the pulse.
+const WAKE_RESULT = [
+  ["wake signalled — watch the target", "ok"],
+  ["can't wake: no USB host enumerated", "bad"],
+  ["target's USB bus is not suspended — already awake?", ""],
+  ["target didn't arm USB wakeup before sleeping — check its OS/firmware wake settings", "bad"],
+];
 
 // `?ws=host:port` points the console at a dongle while serving this page from
 // somewhere else (`python3 -m http.server` in web/) for UI-only work.
@@ -38,6 +54,7 @@ const el = {
   sendText: document.getElementById("send-text"),
   sensitivity: document.getElementById("sensitivity"),
   releaseAll: document.getElementById("release-all"),
+  wakeTarget: document.getElementById("wake-target"),
 };
 
 let socket = null;
@@ -90,6 +107,19 @@ function connect() {
   };
 
   socket.onerror = () => setStatus("connection error", "bad");
+
+  socket.onmessage = (e) => {
+    if (!(e.data instanceof ArrayBuffer)) return;
+    const bytes = new Uint8Array(e.data);
+    if (bytes.length === 2 && bytes[0] === DOWN.WAKE_RESULT) {
+      const [text, kind] = WAKE_RESULT[bytes[1]] || [
+        `wake: unknown result ${bytes[1]}`,
+        "bad",
+      ];
+      setStatus(text, kind);
+    }
+    // Anything else is a frame from a newer dongle than this page; ignored.
+  };
 }
 
 function send(bytes) {
@@ -264,6 +294,14 @@ document.querySelectorAll("[data-combo]").forEach((button) => {
 });
 
 el.releaseAll.addEventListener("click", sendReleaseAll);
+
+el.wakeTarget.addEventListener("click", () => {
+  if (send([FRAME.WAKE])) {
+    setStatus("wake requested…");
+  } else {
+    setStatus("not connected", "bad");
+  }
+});
 
 // Typing text is a convenience for URLs and long commands. Only the characters
 // in this table are sent; anything else is reported rather than silently

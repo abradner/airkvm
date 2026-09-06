@@ -317,6 +317,31 @@ static esp_err_t ws_handler(httpd_req_t *req) {
     return ESP_OK;
   }
 
+  if (intent.type == AIRKVM_FRAME_WAKE) {
+    // Answered here, not queued. A suspended bus is exactly the state in which
+    // the HID queue's head is parked (hid_out_usb.c, s_wake_pending), so a
+    // wake routed through it would wait for the resume it is meant to cause.
+    // hid_out_wake_target() only sets a flag; the transport is still touched
+    // by the report task alone (AGENTS.md §4). Only the session owner reaches
+    // this line, so a spectator cannot wake the target (R-003).
+    //
+    // The reply is the protocol's first downstream frame. Sent synchronously
+    // from the handler on the server task: no stored handle, no cross-task
+    // send, nothing new that can block.
+    const enum airkvm_wake_result result = hid_out_wake_target();
+    uint8_t reply[2] = {AIRKVM_DOWN_WAKE_RESULT, (uint8_t)result};
+    httpd_ws_frame_t out;
+    memset(&out, 0, sizeof(out));
+    out.final = true;
+    out.type = HTTPD_WS_TYPE_BINARY;
+    out.payload = reply;
+    out.len = sizeof(reply);
+    const esp_err_t sent = httpd_ws_send_frame(req, &out);
+    ESP_LOGI(TAG, "wake requested: result %d, reply %s", (int)result,
+             esp_err_to_name(sent));
+    return ESP_OK;
+  }
+
   if (!hid_out_submit(&intent)) {
     // Queue full. Whether that is dangerous depends on what was dropped: a lost
     // key or button event can leave something held, but a lost movement or

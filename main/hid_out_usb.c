@@ -14,6 +14,12 @@
 // any host other than macOS; and the mouse path, which has had no hardware
 // exercise at all — only the keyboard has.
 //
+// The descriptor has changed since that verification: the configuration now
+// advertises remote wakeup (bmAttributes 0xA0 rather than 0x80). Enumeration
+// with that bit set, whether a host arms it, whether the wakeup pulse resumes
+// a sleeping target, and whether advertising it makes hosts selectively
+// suspend an idle dongle are all unverified until re-run on hardware.
+//
 // The C3 bench board cannot test any of this: its backend logs intents
 // instead of sending reports, so it cannot even lose one. Do not let either
 // the project's general "it works" or this file's new partial verification
@@ -55,7 +61,15 @@ static const uint8_t s_mouse_report_desc[] = {TUD_HID_REPORT_DESC_MOUSE()};
 #define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + 2 * TUD_HID_DESC_LEN)
 
 static const uint8_t s_configuration_desc[] = {
-    TUD_CONFIG_DESCRIPTOR(1, HID_ITF_COUNT, 0, CONFIG_TOTAL_LEN, 0, 100),
+    // Remote wakeup advertised: it is what lets a "Wake target" from the
+    // console resume a sleeping machine, and it is what a physical keyboard
+    // does. The host still has to arm it (SET_FEATURE DEVICE_REMOTE_WAKEUP)
+    // before suspending; tud_remote_wakeup() refuses otherwise. 100 mA is
+    // knowingly wrong (WiFi TX peaks well above it) and knowingly left alone:
+    // raising it is its own enumeration test, not something to bundle with
+    // a second descriptor change (tracked separately).
+    TUD_CONFIG_DESCRIPTOR(1, HID_ITF_COUNT, 0, CONFIG_TOTAL_LEN,
+                          TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
     // Boot protocol on the keyboard interface is what makes this work before an
     // OS loads its own HID driver.
     TUD_HID_DESCRIPTOR(HID_ITF_KEYBOARD, 0, HID_ITF_PROTOCOL_KEYBOARD,
@@ -105,6 +119,18 @@ static volatile bool s_mounted;
 // services it ahead of the queue.
 static volatile bool s_release_pending;
 
+// Bus suspend state, as reported by TinyUSB. `s_remote_wakeup_en` is whether
+// the host armed wakeup before suspending — TinyUSB has no getter for it, so
+// the value handed to tud_suspend_cb is the only copy. `s_wake_pending` is a
+// flag rather than a queued intent for the same reason release-all is: while
+// the bus is suspended tud_hid_n_ready() is false, so the report task's drain
+// is parked on whatever keyboard intent is at the head of the queue (issue
+// #27), and a wake behind it would wait for exactly the resume it exists to
+// cause.
+static volatile bool s_suspended;
+static volatile bool s_remote_wakeup_en;
+static volatile bool s_wake_pending;
+
 bool hid_out_is_mounted(void) {
   return s_mounted;
 }
@@ -140,18 +166,55 @@ void tud_mount_cb(void) {
 void tud_umount_cb(void) {
   ESP_LOGI(TAG, "USB host disconnected");
   s_mounted = false;
+  s_suspended = false;
+  s_wake_pending = false;
   status_set_usb_mounted(false);
+  status_set_usb_suspended(false);
   // Unplugged mid-session: drop everything so a replug does not resume a state
   // the console has since forgotten about.
   s_release_pending = true;
 }
 
+// Fires on any bus suspend: the target sleeping, but also a host parking an
+// idle device (selective suspend), and — on this board, which has no VBUS
+// sense — possibly a cable pull, which TinyUSB's own comments warn can look
+// like a suspend rather than an unmount. Whether that last one happens here is
+// unobserved. Hence "suspended", never "asleep", anywhere this state is shown.
 void tud_suspend_cb(bool remote_wakeup_en) {
-  (void)remote_wakeup_en;
+  ESP_LOGI(TAG, "USB bus suspended (remote wakeup %s by host)",
+           remote_wakeup_en ? "armed" : "not armed");
+  s_suspended = true;
+  s_remote_wakeup_en = remote_wakeup_en;
+  status_set_usb_suspended(true);
   s_release_pending = true;
 }
 
-void tud_resume_cb(void) {}
+// The only real evidence a wakeup worked: the host resumed the bus. Logged as
+// such so a hardware test can tell "pulse sent" from "target woke".
+void tud_resume_cb(void) {
+  ESP_LOGI(TAG, "USB bus resumed");
+  s_suspended = false;
+  s_wake_pending = false;
+  status_set_usb_suspended(false);
+}
+
+enum airkvm_wake_result hid_out_wake_target(void) {
+  if (!s_mounted) {
+    return AIRKVM_WAKE_NO_HOST;
+  }
+  if (!s_suspended) {
+    return AIRKVM_WAKE_NOT_SUSPENDED;
+  }
+  if (!s_remote_wakeup_en) {
+    // An honest answer, not a dongle fault: the host went to sleep without
+    // asking to be woken by this device. On Linux that is
+    // /sys/bus/usb/devices/<dev>/power/wakeup; on a PC it is usually a
+    // firmware "wake on USB" setting.
+    return AIRKVM_WAKE_NOT_ENABLED_BY_HOST;
+  }
+  s_wake_pending = true;
+  return AIRKVM_WAKE_REQUESTED;
+}
 
 const uint8_t *tud_hid_descriptor_report_cb(uint8_t instance) {
   return instance == HID_ITF_MOUSE ? s_mouse_report_desc : s_kbd_report_desc;
@@ -308,6 +371,12 @@ static void apply(const struct airkvm_intent *in) {
       break;
     case AIRKVM_FRAME_PING:
       break;
+    case AIRKVM_FRAME_WAKE:
+      // net.c answers WAKE directly rather than queueing it (see the note on
+      // s_wake_pending), so this arm is reached only if that ever changes. One
+      // flag either way, so there are not two ways to ask for a wakeup.
+      s_wake_pending = true;
+      break;
   }
 }
 
@@ -326,6 +395,22 @@ static void report_task(void *arg) {
       s_pending_scroll_v = s_pending_scroll_h = 0;
       s_kbd_dirty = true;
       s_buttons_dirty = true;
+    }
+
+    if (s_wake_pending) {
+      s_wake_pending = false;
+      // On this task, not the HTTP task: inside the dcd this is a
+      // read-modify-write of DCTL followed by a ~1 ms delay (dwc2's
+      // remote-wakeup delay is pdMS_TO_TICKS(1), which is one tick only
+      // because CONFIG_FREERTOS_HZ is 1000 — at the default 100 Hz it would
+      // be the zero-tick non-delay of AGENTS.md §9 entry 12, in vendor code
+      // we cannot static-assert). TinyUSB re-checks its own preconditions and
+      // returns false if the bus is no longer suspended or wakeup was never
+      // armed. The task is woken within REPORT_TICK_MS by the timed peek
+      // below, the same way release-all gets serviced.
+      const bool issued = tud_remote_wakeup();
+      ESP_LOGI(TAG, "remote wakeup %s",
+               issued ? "signalled" : "refused by stack");
     }
 
     // Apply everything already queued before emitting, so a burst collapses

@@ -31,7 +31,7 @@ change that found the disagreement.
 | Surface | Path / entry point | Auth mechanism | Notes |
 |---|---|---|---|
 | Console page | `GET /` (HTTPS, port 443) | **None** — transport encrypted, caller unauthenticated | Static page embedded in firmware. Anyone who can route to the dongle gets it. |
-| Input socket | `GET /ws` (WSS upgrade) | **None** — see R-001 | The actual keystroke path. Every frame here becomes a USB HID report on the target. |
+| Input socket | `GET /ws` (WSS upgrade) | **None** — see R-001 | The actual keystroke path. Every frame here becomes a USB HID report on the target. Also carries the wake request: on `WAKE` the dongle signals USB remote wakeup to a suspended target and replies with a result frame, the protocol's only dongle→console message (unverified on hardware). |
 | USB HID device | USB-C port → target machine | **None, by design** | The target cannot authenticate a keyboard. This is inherent to HID, not a gap we can close. |
 | Serial console | UART/USB-JTAG in bootloader mode | Physical access | Flashing and logs. Only present when firmware hasn't claimed USB (AGENTS.md §6.1). |
 | Status display + button | On-board panel (SSD1306 72x40 OLED, or ST7789 172x320 LCD) and BOOT button | Physical access | Shows IP, signal, and link state; blanks to an idle animation after 5 minutes with no client input and no local button interaction (no LED on this board to show it's alive otherwise). The button dismisses that animation if it's showing, or toggles a debug view of live input if not — see R-006. |
@@ -42,7 +42,10 @@ change that found the disagreement.
 - **Browser → dongle (`/ws`).** Caller identity is *not established at all*: any host that can
   open a TCP connection to the dongle can send input frames. If the caller "lies" there is
   nothing to lie about — there is no identity to forge. The dongle will happily type for a second
-  concurrent client. This is the honest current state, recorded here deliberately (R-001).
+  concurrent client. This is the honest current state, recorded here deliberately (R-001). The
+  same caller can wake a suspended target (USB remote wakeup): that is a new *action* on this
+  surface, not a new surface, and it is owner-only like every other frame (R-003). Nothing about
+  the boundary changes — anyone who can type on a machine could already wake it by typing.
 - **Dongle → target (USB).** The target trusts the dongle completely and unconditionally: it is
   a keyboard. No mitigation exists on this edge and none can — a HID device is authorized by
   being plugged in. Everything protecting the target therefore has to live on the *previous*

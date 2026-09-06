@@ -11,6 +11,7 @@ to a debugging aid would mean a virtualenv between you and a stuck key.
     ./tools/poke.py airkvm.local type "hello world"
     ./tools/poke.py airkvm.local key ControlLeft+AltLeft+Delete
     ./tools/poke.py airkvm.local release
+    ./tools/poke.py airkvm.local wake
 
 The real firmware serves over TLS by default (CONFIG_AIRKVM_TLS) — add --tls
 to reach it; --port defaults to 443 in that case. Verified against the
@@ -46,6 +47,16 @@ MOUSE_BUTTON = 0x04
 MOUSE_SCROLL = 0x05
 RELEASE_ALL = 0x06
 PING = 0x07
+WAKE = 0x08
+
+# Dongle → tool. Bit 7 set, see main/protocol.h.
+DOWN_WAKE_RESULT = 0x80
+WAKE_RESULTS = {
+    0: "requested — pulse sent, watch the target",
+    1: "no USB host enumerated",
+    2: "bus not suspended (target already awake?)",
+    3: "host did not arm remote wakeup before suspending",
+}
 
 MAX_CODE_LEN = 23  # must match AIRKVM_MAX_CODE_LEN in main/protocol.h
 
@@ -142,6 +153,41 @@ class WebSocket:
         else:
             raise ValueError("frame too large for this tool")
         self.sock.sendall(header + mask + masked)
+
+    def recv_binary(self, timeout: float = 2.0) -> bytes | None:
+        """Read one unmasked server frame, or None if nothing arrives in time.
+
+        The dongle only ever replies to WAKE today, so this is deliberately
+        minimal: no fragmentation, no extended lengths, no control-frame
+        handling beyond ignoring them. Server frames are unmasked (RFC 6455
+        §5.1), which is why there is no unmasking here.
+        """
+        self.sock.settimeout(timeout)
+        try:
+            header = self._recv_exact(2)
+            if header is None:
+                return None
+            opcode = header[0] & 0x0F
+            length = header[1] & 0x7F
+            if length >= 126:
+                raise RuntimeError("server frame longer than this tool expects")
+            payload = self._recv_exact(length) if length else b""
+            if opcode != 0x2:
+                return None  # ping/pong/close: not a reply
+            return payload
+        except (TimeoutError, socket.timeout):
+            return None
+        finally:
+            self.sock.settimeout(5)
+
+    def _recv_exact(self, n: int) -> bytes | None:
+        buf = b""
+        while len(buf) < n:
+            chunk = self.sock.recv(n - len(buf))
+            if not chunk:
+                return None
+            buf += chunk
+        return buf
 
     def settle(self) -> None:
         """Wait for the device to work through what we sent, before closing.
@@ -273,6 +319,16 @@ def cmd_key(ws: WebSocket, combo: str) -> int:
     return 0
 
 
+def cmd_wake(ws: WebSocket) -> int:
+    ws.send_binary(bytes([WAKE]), reports=0)
+    reply = ws.recv_binary()
+    if reply is None or len(reply) != 2 or reply[0] != DOWN_WAKE_RESULT:
+        print("no wake reply from the dongle", file=sys.stderr)
+        return 1
+    print(f"wake: {WAKE_RESULTS.get(reply[1], f'unknown result {reply[1]}')}")
+    return 0 if reply[1] == 0 else 1
+
+
 def cmd_move(ws: WebSocket, dx: int, dy: int) -> int:
     ws.send_binary(
         bytes([MOUSE_MOVE]) + struct.pack("<hh", dx, dy),
@@ -339,6 +395,11 @@ def main() -> int:
 
     sub.add_parser("release", help="release every held key and button")
     sub.add_parser("ping", help="check the socket answers")
+    sub.add_parser(
+        "wake",
+        help="signal USB remote wakeup to a suspended target and print the "
+        "dongle's reply (exit 0 only if the pulse was actually sent)",
+    )
 
     args = parser.parse_args()
     port = args.port if args.port is not None else (443 if args.tls else 80)
@@ -368,6 +429,8 @@ def main() -> int:
             return cmd_key(ws, args.combo)
         if args.command == "move":
             return cmd_move(ws, args.dx, args.dy)
+        if args.command == "wake":
+            return cmd_wake(ws)
         if args.command == "release":
             ws.send_binary(bytes([RELEASE_ALL]))
             return 0

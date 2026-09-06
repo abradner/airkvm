@@ -77,6 +77,7 @@ enum airkvm_decode_result airkvm_decode(const uint8_t *data, size_t len,
 
     case AIRKVM_FRAME_RELEASE_ALL:
     case AIRKVM_FRAME_PING:
+    case AIRKVM_FRAME_WAKE:
       if (payload_len != 0) {
         return AIRKVM_DECODE_TRUNCATED;
       }
