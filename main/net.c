@@ -342,7 +342,10 @@ static esp_err_t ws_handler(httpd_req_t *req) {
     out.type = HTTPD_WS_TYPE_BINARY;
     out.payload = reply;
     out.len = sizeof(reply);
-    (void)httpd_ws_send_frame(req, &out);
+    const esp_err_t sent = httpd_ws_send_frame(req, &out);
+    if (sent != ESP_OK) {
+      ESP_LOGW(TAG, "STATUS reply failed: %s", esp_err_to_name(sent));
+    }
     return ESP_OK;
   }
 

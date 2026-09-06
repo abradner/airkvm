@@ -154,7 +154,7 @@ function connect() {
         !mounted
           ? "no USB host"
           : suspended
-            ? "USB host suspended (asleep?)"
+            ? "USB host suspended"
             : media
               ? "USB host awake, disk attached"
               : "USB host awake"
