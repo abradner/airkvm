@@ -12,6 +12,7 @@ to a debugging aid would mean a virtualenv between you and a stuck key.
     ./tools/poke.py airkvm.local key ControlLeft+AltLeft+Delete
     ./tools/poke.py airkvm.local release
     ./tools/poke.py airkvm.local wake
+    ./tools/poke.py airkvm.local hold ShiftLeft --seconds 20   # keep pressed
 
 The real firmware serves over TLS by default (CONFIG_AIRKVM_TLS) — add --tls
 to reach it; --port defaults to 443 in that case. Verified against the
@@ -319,6 +320,36 @@ def cmd_key(ws: WebSocket, combo: str) -> int:
     return 0
 
 
+def cmd_hold(ws: WebSocket, combo: str, seconds: float | None) -> int:
+    """Press a chord and keep the socket open, pinging, until told to stop.
+
+    Exists for one hardware test that nothing else can run: is a key still
+    released when the USB cable is pulled with the socket alive? `key` and
+    `type` press and release, and closing the socket releases everything on
+    its own (net_end_session), so any test built on them exercises the close
+    path and passes for the wrong reason. This one holds the key down with
+    the session live, so the *only* thing that can release it is the USB
+    unmount path — and after the port comes back, no key event must arrive
+    at the target that nobody typed.
+    """
+    codes = combo.split("+")
+    for code in codes:
+        ws.send_binary(key_frame(KEY_DOWN, code))
+    print(f"holding {combo} — Ctrl-C to release", file=sys.stderr)
+    deadline = None if seconds is None else time.monotonic() + seconds
+    try:
+        while deadline is None or time.monotonic() < deadline:
+            # One PING per second keeps the dongle's 3s keepalive fed; without
+            # it the session expires and release-all runs for the wrong reason.
+            ws.send_binary(bytes([PING]), reports=0)
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        pass
+    for code in reversed(codes):
+        ws.send_binary(key_frame(KEY_UP, code))
+    return 0
+
+
 def cmd_wake(ws: WebSocket) -> int:
     ws.send_binary(bytes([WAKE]), reports=0)
     reply = ws.recv_binary()
@@ -393,6 +424,19 @@ def main() -> int:
     p_move.add_argument("dx", type=int)
     p_move.add_argument("dy", type=int)
 
+    p_hold = sub.add_parser(
+        "hold",
+        help="press a chord and keep it held with the socket open, for the "
+        "unplug-releases-keys hardware test (see cmd_hold)",
+    )
+    p_hold.add_argument("combo")
+    p_hold.add_argument(
+        "--seconds",
+        type=float,
+        default=None,
+        help="release after this long (default: hold until Ctrl-C)",
+    )
+
     sub.add_parser("release", help="release every held key and button")
     sub.add_parser("ping", help="check the socket answers")
     sub.add_parser(
@@ -431,6 +475,8 @@ def main() -> int:
             return cmd_move(ws, args.dx, args.dy)
         if args.command == "wake":
             return cmd_wake(ws)
+        if args.command == "hold":
+            return cmd_hold(ws, args.combo, args.seconds)
         if args.command == "release":
             ws.send_binary(bytes([RELEASE_ALL]))
             return 0
