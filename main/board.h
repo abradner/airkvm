@@ -182,13 +182,16 @@
 #define BOARD_LCD_X_GAP 0
 #define BOARD_LCD_Y_GAP 34
 
-// The WS2812B-0807 on GPIO38 is not driven yet: indicator.c is LEDC-PWM
-// monochrome and an addressable LED is a different driver (RMT), not a
-// parameter. Left dark deliberately rather than half-implemented. If a
-// backlight fade later wants LEDC, pick a channel other than LEDC_CHANNEL_0 —
-// indicator.c claims that one, and only stays out of the way today because
-// BOARD_HAS_LED is 0 here.
-#define BOARD_HAS_LED 0
+// The WS2812B-0807 on GPIO38 is the PRIMARY status channel on this board, with
+// the panel secondary — a light is readable from any angle and any distance
+// without reading, so it answers "is this healthy" instantly and leaves the
+// screen free to be a calm page of information rather than an alarm.
+//
+// Driven by indicator_ws2812.c over RMT, not by indicator.c's LEDC PWM. If a
+// backlight fade later wants LEDC, note indicator.c claims LEDC_CHANNEL_0 —
+// pick another, even though that file is not compiled for this board.
+#define BOARD_HAS_LED 1
+#define BOARD_LED_RGB_GPIO 38
 
 #define BOARD_BUTTON 0  // BOOT button, active-low with pull-up
 #define BOARD_BUTTON_ACTIVE_LOW 1

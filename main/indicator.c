@@ -98,10 +98,21 @@ void indicator_tick(void) {
 
   const int64_t now = esp_timer_get_time();
 
-  // No client bound: dark. This is the state the device spends most of its life
-  // in, and a dark LED is also the honest signal that nobody is holding the
-  // keyboard.
-  if (!s.client_connected) {
+  // State comes from the shared policy in indicator.h, not from re-reading the
+  // snapshot here — a single-colour LED renders it differently from the RGB
+  // one, but they must not disagree about what is being rendered.
+  const enum indicator_state state = indicator_state_for(&s);
+
+  // With one channel the only vocabulary is brightness, so the mapping is
+  // coarser than the RGB backend's: a fault sits steady at full, and anything
+  // healthy-but-unbound stays dark. Dark is the honest signal that nobody is
+  // holding the keyboard, and it is the state the device spends most of its
+  // life in.
+  if (state == INDICATOR_FAULT) {
+    set_percent(100);
+    return;
+  }
+  if (state == INDICATOR_IDLE) {
     set_percent(0);
     return;
   }

@@ -39,3 +39,8 @@ add_test(NAME canvas COMMAND test_canvas)
 # and is the part R-006 depends on being right.
 add_executable(test_status_debug test_status_debug.c)
 add_test(NAME status_debug COMMAND test_status_debug)
+
+# indicator.c needs LEDC/RMT, but the question "what is the LED saying" is pure
+# and is now shared by two backends, so it is exactly the part worth pinning.
+add_executable(test_indicator test_indicator.c)
+add_test(NAME indicator COMMAND test_indicator)
