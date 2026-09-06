@@ -78,6 +78,7 @@ enum airkvm_decode_result airkvm_decode(const uint8_t *data, size_t len,
     case AIRKVM_FRAME_RELEASE_ALL:
     case AIRKVM_FRAME_PING:
     case AIRKVM_FRAME_WAKE:
+    case AIRKVM_FRAME_STATUS_REQ:
       if (payload_len != 0) {
         return AIRKVM_DECODE_TRUNCATED;
       }
@@ -89,4 +90,16 @@ enum airkvm_decode_result airkvm_decode(const uint8_t *data, size_t len,
 
   *out = scratch;
   return AIRKVM_DECODE_OK;
+}
+
+size_t airkvm_encode_status(uint8_t *buf, size_t cap,
+                            const struct airkvm_status_frame *st) {
+  if (buf == NULL || st == NULL || cap < AIRKVM_DOWN_STATUS_LEN) {
+    return 0;
+  }
+  buf[0] = AIRKVM_DOWN_STATUS;
+  buf[1] = st->mounted ? 1 : 0;
+  buf[2] = st->suspended ? 1 : 0;
+  buf[3] = st->media ? 1 : 0;
+  return AIRKVM_DOWN_STATUS_LEN;
 }

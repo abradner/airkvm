@@ -17,11 +17,13 @@ const FRAME = {
   RELEASE_ALL: 0x06,
   PING: 0x07,
   WAKE: 0x08,
+  STATUS_REQ: 0x09,
 };
 
 // Dongle → console frames: same shape, bit 7 set (protocol.h).
 const DOWN = {
   WAKE_RESULT: 0x80,
+  STATUS: 0x81,
 };
 
 // Result byte of WAKE_RESULT, keyed by the values in protocol.h's
@@ -75,6 +77,7 @@ const el = {
   sensitivity: document.getElementById("sensitivity"),
   releaseAll: document.getElementById("release-all"),
   wakeTarget: document.getElementById("wake-target"),
+  target: document.getElementById("target-state"),
 };
 
 let socket = null;
@@ -93,9 +96,15 @@ function setStatus(text, kind) {
 const PING_INTERVAL_MS = 1000;
 let pingTimer = null;
 
+// Every other keepalive is a status poll instead of a bare PING: same
+// liveness effect on the dongle, and the reply keeps the target row honest.
+let pingCount = 0;
 function startPinging() {
   stopPinging();
-  pingTimer = setInterval(() => send([FRAME.PING]), PING_INTERVAL_MS);
+  pingTimer = setInterval(() => {
+    pingCount += 1;
+    send([pingCount % 2 ? FRAME.PING : FRAME.STATUS_REQ]);
+  }, PING_INTERVAL_MS);
 }
 
 function stopPinging() {
@@ -112,6 +121,9 @@ function connect() {
   socket.onopen = () => {
     reconnectDelay = 500;
     setStatus("connected", "ok");
+    // Unknown until the first STATUS reply; a spectator session never gets
+    // one, and must not inherit the previous owner's facts.
+    el.target.textContent = "target: unknown";
     startPinging();
   };
 
@@ -122,6 +134,7 @@ function connect() {
     // the connection state is the one that matters now.
     clearTimeout(wakeReplyTimer);
     clearTimeout(wakeStatusTimer);
+    el.target.textContent = "target: unknown";
     setStatus("disconnected — reconnecting…", "bad");
     stopPinging();
     exitCapture();
@@ -135,6 +148,19 @@ function connect() {
   socket.onmessage = (e) => {
     if (!(e.data instanceof ArrayBuffer)) return;
     const bytes = new Uint8Array(e.data);
+    if (bytes.length === 4 && bytes[0] === DOWN.STATUS) {
+      const [, mounted, suspended, media] = bytes;
+      el.target.textContent = `target: ${
+        !mounted
+          ? "no USB host"
+          : suspended
+            ? "USB host suspended"
+            : media
+              ? "USB host awake, disk attached"
+              : "USB host awake"
+      }`;
+      return;
+    }
     if (bytes.length === 2 && bytes[0] === DOWN.WAKE_RESULT) {
       clearTimeout(wakeReplyTimer);
       const [text, kind] = WAKE_RESULT[bytes[1]] || [

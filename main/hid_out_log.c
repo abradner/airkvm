@@ -108,9 +108,11 @@ static void apply(const struct airkvm_intent *in) {
       ESP_LOGD(TAG, "ping");
       break;
     case AIRKVM_FRAME_WAKE:
-      // net.c answers WAKE directly and never queues it; this arm exists so the
-      // switch stays total.
-      ESP_LOGI(TAG, "wake       (queued — unexpected, see net.c)");
+    case AIRKVM_FRAME_STATUS_REQ:
+      // net.c answers these directly and never queues them; this arm exists
+      // so the switch stays total.
+      ESP_LOGI(TAG, "request    0x%02x (queued — unexpected, see net.c)",
+               (unsigned)in->type);
       break;
   }
 }
