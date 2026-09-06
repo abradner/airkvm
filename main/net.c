@@ -322,6 +322,30 @@ static esp_err_t ws_handler(httpd_req_t *req) {
     return ESP_OK;
   }
 
+  if (intent.type == AIRKVM_FRAME_STATUS_REQ) {
+    // The display's facts, for a machine. Synchronous like WAKE_RESULT and as
+    // small — but unlike it, periodic: the console polls every other
+    // keepalive tick, so the send_wait_timeout exposure described at
+    // WAKE_RESULT below is steady rather than rare. Four bytes to a peer
+    // that just sent us a frame; if that blocks, the keepalive path was
+    // already in trouble.
+    struct status_snapshot snap;
+    status_get(&snap);
+    const struct airkvm_status_frame st = {.mounted = snap.usb_mounted,
+                                           .suspended = snap.usb_suspended,
+                                           .media = snap.media_attached};
+    uint8_t reply[AIRKVM_DOWN_STATUS_LEN];
+    airkvm_encode_status(reply, sizeof(reply), &st);
+    httpd_ws_frame_t out;
+    memset(&out, 0, sizeof(out));
+    out.final = true;
+    out.type = HTTPD_WS_TYPE_BINARY;
+    out.payload = reply;
+    out.len = sizeof(reply);
+    (void)httpd_ws_send_frame(req, &out);
+    return ESP_OK;
+  }
+
   if (intent.type == AIRKVM_FRAME_WAKE) {
     // Answered here, not queued. A suspended bus is exactly the state in which
     // the HID queue's head is parked (hid_out_usb.c, s_wake_pending), so a
@@ -335,8 +359,8 @@ static esp_err_t ws_handler(httpd_req_t *req) {
     // hop. It can block the way any response can — a client whose receive
     // window is full holds the send for up to send_wait_timeout (5 s), which
     // is the §9 entry 9 exposure the console's static assets already have —
-    // but two bytes to a peer that just sent us a frame is the smallest
-    // version of that risk this server takes anywhere.
+    // but two bytes to a peer that just sent us a frame is as small as that
+    // risk gets (STATUS above is the same size class, and periodic).
     const enum airkvm_wake_result result = hid_out_wake_target();
     uint8_t reply[2] = {AIRKVM_DOWN_WAKE_RESULT, (uint8_t)result};
     httpd_ws_frame_t out;

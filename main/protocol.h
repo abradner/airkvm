@@ -15,14 +15,19 @@
 //   0x06 RELEASE_ALL  (no payload)
 //   0x07 PING         (no payload)
 //   0x08 WAKE         (no payload)  ask the dongle to signal USB remote wakeup
+//   0x09 STATUS_REQ   (no payload)  ask for the target-side state, see below
 //
 // The dongle also sends frames to the console, in the same [u8 type][payload]
 // shape. Downstream types have bit 7 set, so the two directions can never be
 // confused for one another even if a frame is ever reflected:
 //
 //   0x80 WAKE_RESULT  [u8 result]   reply to WAKE; see enum airkvm_wake_result
+//   0x81 STATUS       [u8 mounted][u8 suspended][u8 media]   reply to STATUS_REQ
+//                     mounted: a USB host has enumerated the device
+//                     suspended: that host has suspended the bus
+//                     media: a medium is attached to the mass-storage LUN
 //
-// This is the first downstream frame the protocol has had. No convention
+// WAKE_RESULT was the first downstream frame the protocol had. No convention
 // existed before it; the bit-7 split is a proposal (AGENTS.md §8), not settled
 // law — codify or correct it in review.
 //
@@ -31,6 +36,7 @@
 // held (AGENTS.md §2, principle 4).
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -46,12 +52,30 @@ enum airkvm_frame_type {
   // target has suspended the bus with wakeup armed; every other state is
   // reported back rather than guessed at (see airkvm_wake_result).
   AIRKVM_FRAME_WAKE = 0x08,
+  // Asks for the USB-side facts the display shows. Exists so a hardware test
+  // can assert "the unmount path ran" by machine instead of a person
+  // watching the panel, and so the console can show the target's state
+  // continuously (issue #33).
+  AIRKVM_FRAME_STATUS_REQ = 0x09,
 };
 
 // Dongle → console frame types. Bit 7 set, see the table above.
 enum airkvm_downstream_type {
   AIRKVM_DOWN_WAKE_RESULT = 0x80,
+  AIRKVM_DOWN_STATUS = 0x81,
 };
+
+// Payload of STATUS, in wire order. Encoded by airkvm_encode_status so the
+// layout is pinned by a host test rather than by two hand-written copies.
+struct airkvm_status_frame {
+  bool mounted;
+  bool suspended;
+  bool media;
+};
+#define AIRKVM_DOWN_STATUS_LEN 4
+// Returns the bytes written (AIRKVM_DOWN_STATUS_LEN), or 0 if cap is short.
+size_t airkvm_encode_status(uint8_t *buf, size_t cap,
+                            const struct airkvm_status_frame *st);
 
 // What happened to a WAKE. REQUESTED means the preconditions held and the
 // wakeup pulse was handed to the USB stack — it does not mean the target woke;

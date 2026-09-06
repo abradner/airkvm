@@ -1,3 +1,5 @@
+#include <string.h>
+
 #include "protocol.h"
 #include "test_support.h"
 
@@ -43,6 +45,27 @@ static void decodes_payloadless_frames(void) {
   const uint8_t wake[] = {AIRKVM_FRAME_WAKE};
   CHECK_EQ_INT(airkvm_decode(wake, sizeof(wake), &out), AIRKVM_DECODE_OK);
   CHECK_EQ_INT(out.type, AIRKVM_FRAME_WAKE);
+
+  const uint8_t status_req[] = {AIRKVM_FRAME_STATUS_REQ};
+  CHECK_EQ_INT(airkvm_decode(status_req, sizeof(status_req), &out),
+               AIRKVM_DECODE_OK);
+  CHECK_EQ_INT(out.type, AIRKVM_FRAME_STATUS_REQ);
+}
+
+static void encodes_status(void) {
+  uint8_t buf[8];
+  const struct airkvm_status_frame st = {
+      .mounted = true, .suspended = false, .media = true};
+  CHECK_EQ_INT(airkvm_encode_status(buf, sizeof(buf), &st),
+               AIRKVM_DOWN_STATUS_LEN);
+  const uint8_t want[] = {AIRKVM_DOWN_STATUS, 1, 0, 1};
+  CHECK(memcmp(buf, want, sizeof(want)) == 0);
+  CHECK_EQ_INT(airkvm_encode_status(buf, AIRKVM_DOWN_STATUS_LEN - 1, &st), 0);
+  CHECK_EQ_INT(airkvm_encode_status(NULL, 8, &st), 0);
+  // The reply type is downstream and must be refused if reflected upstream.
+  struct airkvm_intent out;
+  CHECK_EQ_INT(airkvm_decode(buf, AIRKVM_DOWN_STATUS_LEN, &out),
+               AIRKVM_DECODE_UNKNOWN_TYPE);
 }
 
 static void rejects_malformed_frames(void) {
@@ -85,6 +108,9 @@ static void rejects_malformed_frames(void) {
   const uint8_t fat_wake[] = {AIRKVM_FRAME_WAKE, 0x00};
   CHECK_EQ_INT(airkvm_decode(fat_wake, sizeof(fat_wake), &out),
                AIRKVM_DECODE_TRUNCATED);
+  const uint8_t fat_status[] = {AIRKVM_FRAME_STATUS_REQ, 0x00};
+  CHECK_EQ_INT(airkvm_decode(fat_status, sizeof(fat_status), &out),
+               AIRKVM_DECODE_TRUNCATED);
 }
 
 static void rejects_overlong_key_code(void) {
@@ -125,6 +151,7 @@ int main(void) {
   RUN(decodes_mouse_move_including_negatives);
   RUN(decodes_scroll_and_buttons);
   RUN(decodes_payloadless_frames);
+  RUN(encodes_status);
   RUN(rejects_malformed_frames);
   RUN(rejects_overlong_key_code);
   RUN(rejection_leaves_output_untouched);

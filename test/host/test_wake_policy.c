@@ -26,6 +26,8 @@ static void input_classification_is_total(void) {
   CHECK(!wake_policy_is_operator_input(AIRKVM_FRAME_PING));
   CHECK(!wake_policy_is_operator_input(AIRKVM_FRAME_RELEASE_ALL));
   CHECK(!wake_policy_is_operator_input(AIRKVM_FRAME_WAKE));
+  // A console polling status must not keep a target awake either.
+  CHECK(!wake_policy_is_operator_input(AIRKVM_FRAME_STATUS_REQ));
   // Motion is excluded on purpose (see wake_policy.c).
   CHECK(!wake_policy_is_operator_input(AIRKVM_FRAME_MOUSE_MOVE));
 }

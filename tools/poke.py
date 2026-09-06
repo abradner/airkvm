@@ -12,6 +12,7 @@ to a debugging aid would mean a virtualenv between you and a stuck key.
     ./tools/poke.py airkvm.local key ControlLeft+AltLeft+Delete
     ./tools/poke.py airkvm.local release
     ./tools/poke.py airkvm.local wake
+    ./tools/poke.py airkvm.local status      # mounted / suspended / media
     ./tools/poke.py airkvm.local hold ShiftLeft --seconds 20   # keep pressed
     ./tools/poke.py --tls airkvm.local media debian.iso        # serve an image
 
@@ -50,9 +51,11 @@ MOUSE_SCROLL = 0x05
 RELEASE_ALL = 0x06
 PING = 0x07
 WAKE = 0x08
+STATUS_REQ = 0x09
 
 # Dongle → tool. Bit 7 set, see main/protocol.h.
 DOWN_WAKE_RESULT = 0x80
+DOWN_STATUS = 0x81
 
 # The media socket (main/media_proto.h), a separate WebSocket on its own port.
 MEDIA_ATTACH = 0x10
@@ -177,8 +180,8 @@ class WebSocket:
     def recv_binary(self, timeout: float | None = 2.0) -> bytes | None:
         """Read one unmasked server frame, or None if nothing arrives in time.
 
-        The dongle only ever replies to WAKE today, so this is deliberately
-        minimal: no fragmentation, no extended lengths, no control-frame
+        The dongle replies only to explicit requests (WAKE, STATUS_REQ, and
+        the media socket's traffic), so this is deliberately minimal: no fragmentation, no extended lengths, no control-frame
         handling beyond ignoring them. Server frames are unmasked (RFC 6455
         §5.1), which is why there is no unmasking here.
         """
@@ -341,6 +344,23 @@ def cmd_key(ws: WebSocket, combo: str) -> int:
         ws.send_binary(key_frame(KEY_DOWN, code))
     for code in reversed(codes):
         ws.send_binary(key_frame(KEY_UP, code))
+    return 0
+
+
+def cmd_status(ws: WebSocket) -> int:
+    """Print the dongle's USB-side state, one word per fact, and exit 0.
+
+    Machine-readable on purpose: `poke.py status | grep -q 'mounted=0'` after
+    a cable pull is how a hardware test asserts the unplug was seen as an
+    unmount (mounted=0) rather than a suspend (mounted=1 suspended=1),
+    instead of a person watching the panel.
+    """
+    ws.send_binary(bytes([STATUS_REQ]), reports=0)
+    reply = ws.recv_binary()
+    if reply is None or len(reply) != 4 or reply[0] != DOWN_STATUS:
+        print("no status reply from the dongle", file=sys.stderr)
+        return 1
+    print(f"mounted={reply[1]} suspended={reply[2]} media={reply[3]}")
     return 0
 
 
@@ -551,6 +571,10 @@ def main() -> int:
     sub.add_parser("release", help="release every held key and button")
     sub.add_parser("ping", help="check the socket answers")
     sub.add_parser(
+        "status",
+        help="print USB mounted / suspended / media state (see cmd_status)",
+    )
+    sub.add_parser(
         "wake",
         help="signal USB remote wakeup to a suspended target and print the "
         "dongle's reply (exit 0 only if the pulse was actually sent)",
@@ -593,6 +617,8 @@ def main() -> int:
             return cmd_move(ws, args.dx, args.dy)
         if args.command == "wake":
             return cmd_wake(ws)
+        if args.command == "status":
+            return cmd_status(ws)
         if args.command == "hold":
             return cmd_hold(ws, args.combo, args.seconds)
         if args.command == "media":
