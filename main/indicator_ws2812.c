@@ -206,8 +206,13 @@ void indicator_tick(void) {
     // Smoothstep (3t^2 - 2t^3) rather than a raw triangle. A triangle reverses
     // direction instantly at each end, and that corner is a good part of what
     // reads as "steppy" even when the levels themselves are fine.
-    const int32_t t = (up * 1000) / half;                            // 0..1000
-    const int32_t ease = (3 * t * t - 2 * t * t * t / 1000) / 1000;  // 0..1000
+    const int32_t t = (up * 1000) / half;  // 0..1000
+    // One divide, at the end. Peak intermediate is 1e9 (at t=1000), leaving
+    // 2x int32 headroom. The tempting "safer" form,
+    // (t*t/1000)*(3000-2*t)/1000, is NOT equivalent: it truncates to whole
+    // thousandths before the second multiply and returns 2 where the answer
+    // is 5 at t=42, flattening the start of every breath.
+    const int32_t ease = (t * t * (3000 - 2 * t)) / 1000000;  // 0..1000
     const int floor_level = (ceiling * BREATHE_FLOOR_PCT) / 100;
     level = floor_level + (int)(((ceiling - floor_level) * ease) / 1000);
   }
