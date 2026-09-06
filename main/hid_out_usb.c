@@ -467,11 +467,13 @@ static void apply(const struct airkvm_intent *in) {
     case AIRKVM_FRAME_PING:
       break;
     case AIRKVM_FRAME_WAKE:
-      // net.c answers WAKE directly rather than queueing it (see the note on
-      // s_wake_pending). A queued WAKE would bypass every precondition and
-      // produce no reply, so it is refused rather than half-honoured; the arm
-      // exists to keep the switch total.
-      ESP_LOGW(TAG, "WAKE arrived through the queue — ignored, see net.c");
+    case AIRKVM_FRAME_STATUS_REQ:
+      // net.c answers these directly rather than queueing them (see the note
+      // on s_wake_pending). Queued, they would bypass every precondition and
+      // produce no reply, so they are refused rather than half-honoured; the
+      // arm exists to keep the switch total.
+      ESP_LOGW(TAG, "request 0x%02x arrived through the queue — ignored",
+               (unsigned)in->type);
       break;
   }
 }
