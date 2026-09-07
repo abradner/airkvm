@@ -113,10 +113,9 @@ config AIRKVM_WIFI_SSID
     help
         Network the dongle joins on a fresh flash. Once the radio has a stored
         configuration (this value after first boot, or whatever setup mode
-        saves once it exists — the 5 s BOOT hold is landed, the mode is the
-        next change), the stored one wins and this is ignored. Until setup
-        mode lands, a stale stored network is dropped by erasing the nvs
-        partition (`idf.py erase-flash`).
+        saved — hold BOOT for 5 s and release), the stored one wins and this
+        is ignored; re-point a provisioned dongle through setup mode, not by
+        rebuilding.
 
         No default: a plausible-looking wrong value fails as a radio problem
         rather than as a config problem (AGENTS.md §8). With neither source

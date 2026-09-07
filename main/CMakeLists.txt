@@ -11,6 +11,9 @@ set(airkvm_srcs
     "wake_policy.c"
     "hold_button.c"
     "setup_flag.c"
+    "setup_mode.c"
+    "provision.c"
+    "captive_dns.c"
     "ota.c"
     "logtap.c")
 
@@ -116,7 +119,7 @@ set(WEB_GZ "${CMAKE_CURRENT_BINARY_DIR}/web")
 file(MAKE_DIRECTORY "${WEB_GZ}")
 
 set(web_assets "")
-foreach(asset IN ITEMS index.html app.js style.css)
+foreach(asset IN ITEMS index.html app.js style.css setup.html)
     list(APPEND web_assets "${WEB_GZ}/${asset}.gz")
 endforeach()
 
@@ -124,7 +127,7 @@ endforeach()
 # requirements, where add_custom_command does not exist, and once for real.
 # Without this guard the first pass fails with "command is not scriptable".
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)
-    foreach(asset IN ITEMS index.html app.js style.css)
+    foreach(asset IN ITEMS index.html app.js style.css setup.html)
         add_custom_command(
             OUTPUT "${WEB_GZ}/${asset}.gz"
             # -n omits the timestamp so identical input gives identical output,

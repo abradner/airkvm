@@ -8,6 +8,7 @@
 #include "driver/gpio.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
@@ -285,7 +286,27 @@ static void draw_hold(uint8_t fraction, bool armed) {
   display_flush();
 }
 
-static void poll_button(bool screensaver_active) {
+// The setup-mode page. Six rows fit the OLED exactly; the LCD gets the same
+// six at its larger cell. The passphrase is deliberately on screen: reading
+// the panel is the presence the security model asks for (R-009).
+static void draw_setup(const struct status_snapshot *s) {
+  char line[DISPLAY_COLS + 1];
+  display_clear();
+  snprintf(line, sizeof(line), "SETUP  %u:%02u", s->setup_remaining_s / 60,
+           s->setup_remaining_s % 60);
+  display_text(UI_X_COL, 0, line);
+  snprintf(line, sizeof(line), "AP %s", s->setup_ssid);
+  display_text(UI_X_COL, 1, line);
+  snprintf(line, sizeof(line), "PW %s", s->setup_psk);
+  display_set_ink(DISPLAY_INK_ACCENT);
+  display_text(UI_X_COL, 2, line);
+  display_set_ink(DISPLAY_INK_SECONDARY);
+  display_text(UI_X_COL, 3, s->setup_ip);
+  display_text(UI_X_COL, 5, "HOLD 5S: EXIT");
+  display_flush();
+}
+
+static void poll_button(bool screensaver_active, bool in_setup) {
 #if defined(BOARD_BUTTON)
   static bool was_pressed;
   static int64_t last_change_us;
@@ -368,11 +389,16 @@ static void poll_button(bool screensaver_active) {
       break;
 
     case HOLD_BUTTON_FIRE:
-      // On the release edge, so BOOT is high when the ROM samples it.
+      // On the release edge, so BOOT is high when the ROM samples it. From
+      // setup mode the same gesture is the way out: a plain restart, no flag.
       s_hold_showing = false;
       display_clear();
-      display_text(UI_X_COL, 3, "SETUP: RESTARTING");
+      display_text(UI_X_COL, 3,
+                   in_setup ? "LEAVING SETUP" : "SETUP: RESTARTING");
       display_flush();
+      if (in_setup) {
+        esp_restart();
+      }
       setup_flag_request_and_restart();  // does not return
       break;
   }
@@ -392,7 +418,7 @@ static void ui_task(void *arg) {
     const int64_t idle_ms = (esp_timer_get_time() - last_activity_us) / 1000;
     const bool screensaver_active = idle_ms >= SCREENSAVER_IDLE_MS;
 
-    poll_button(screensaver_active);
+    poll_button(screensaver_active, snapshot.setup_active);
     indicator_tick();
 
     // Let the radio follow the operator. This task already knows how long it
@@ -424,6 +450,8 @@ static void ui_task(void *arg) {
     if (tick % DISPLAY_EVERY_TICKS == 0 && display_present()) {
       if (s_hold_showing) {
         draw_hold(s_hold_fraction, s_hold_armed);
+      } else if (snapshot.setup_active) {
+        draw_setup(&snapshot);
       } else if (screensaver_active) {
         draw_screensaver();
       } else {
