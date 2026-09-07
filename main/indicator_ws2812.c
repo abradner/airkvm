@@ -159,9 +159,16 @@ void indicator_tick(void) {
   struct status_snapshot s;
   status_get(&s);
 
+  // Held across ticks so the weak-signal warning has hysteresis; see
+  // indicator.h. Evaluated once per tick rather than three times, which also
+  // removes the chance of the switch and the breathe test disagreeing.
+  static enum indicator_state prev = INDICATOR_IDLE;
+  const enum indicator_state state = indicator_state_for(&s, prev);
+  prev = state;
+
   uint8_t r, g, b;
   int ceiling;
-  switch (indicator_state_for(&s)) {
+  switch (state) {
     case INDICATOR_FAULT: {
       const uint8_t c[] = {SOL_LED_FAULT};
       r = c[0], g = c[1], b = c[2];
@@ -199,7 +206,7 @@ void indicator_tick(void) {
   // Breath. A fault does NOT breathe: something being wrong should read as
   // steady and insistent, not as a pulse you stop noticing.
   int level = ceiling;
-  if (indicator_state_for(&s) != INDICATOR_FAULT) {
+  if (state != INDICATOR_FAULT) {
     const int64_t ms = (esp_timer_get_time() / 1000) % BREATHE_PERIOD_MS;
     const int half = BREATHE_PERIOD_MS / 2;
     const int up = ms < half ? (int)ms : BREATHE_PERIOD_MS - (int)ms;

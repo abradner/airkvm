@@ -101,7 +101,9 @@ void indicator_tick(void) {
   // State comes from the shared policy in indicator.h, not from re-reading the
   // snapshot here — a single-colour LED renders it differently from the RGB
   // one, but they must not disagree about what is being rendered.
-  const enum indicator_state state = indicator_state_for(&s);
+  static enum indicator_state prev = INDICATOR_IDLE;
+  const enum indicator_state state = indicator_state_for(&s, prev);
+  prev = state;
 
   // With one channel the only vocabulary is brightness, so the mapping is
   // coarser than the RGB backend's: a fault sits steady at full, and anything

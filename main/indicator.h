@@ -41,8 +41,25 @@ enum indicator_state {
 // whether the link is weak.
 #define INDICATOR_WEAK_RSSI_DBM (-77)
 
+// ...and the level it must climb back above to stop warning. The gap is
+// hysteresis, and it is not decoration: RSSI is a noisy single sample, so a
+// bare threshold makes one unlucky reading flip the light to amber and back.
+// Observed on hardware 2026-09-07 — a link sitting around -62 dBm flashed
+// yellow at least once while being watched.
+//
+// The light's whole job is "should I be worried", and an indicator that cries
+// wolf on noise is worse than one slightly slow to notice, because people
+// learn to ignore it. Erring toward not-warning is right for this signal —
+// the opposite of principle 4's release-all bias, for the same underlying
+// reason: choose the error that does not train the operator to look away.
+#define INDICATOR_STRONG_RSSI_DBM (-72)
+
+// `prev` is the state last returned, so the weak-signal warning can have
+// hysteresis without this function holding state of its own — it stays pure
+// and host-testable, and the hysteresis cannot end up implemented differently
+// in each LED backend. Pass INDICATOR_IDLE on the first call.
 static inline enum indicator_state indicator_state_for(
-    const struct status_snapshot *s) {
+    const struct status_snapshot *s, enum indicator_state prev) {
   // Precedence is deliberate: faults and degradation outrank "someone is
   // driving it", because they are the ones you would act on. The screen still
   // says BOUND, so that information is not lost — the light is answering
@@ -59,8 +76,13 @@ static inline enum indicator_state indicator_state_for(
     return INDICATOR_SUSPENDED;
   }
   // rssi == 0 means "not measured yet", not "catastrophically weak".
-  if (s->rssi != 0 && s->rssi <= INDICATOR_WEAK_RSSI_DBM) {
-    return INDICATOR_WARN;
+  if (s->rssi != 0) {
+    const bool warning_already = prev == INDICATOR_WARN;
+    // Enter below the weak level; leave only once back above the strong one.
+    if (warning_already ? s->rssi < INDICATOR_STRONG_RSSI_DBM
+                        : s->rssi <= INDICATOR_WEAK_RSSI_DBM) {
+      return INDICATOR_WARN;
+    }
   }
   return s->client_connected ? INDICATOR_BOUND : INDICATOR_IDLE;
 }
