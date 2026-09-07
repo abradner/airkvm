@@ -202,8 +202,11 @@ class Canvas:
         self.hue = hue
 
     def mark_bands(self, y0, height):
-        if self.hue == 0:
-            return
+        # No skip for the neutral hue: display_st7789.c's mark_bands does not
+        # skip it either, precisely so a neutral draw over a coloured band wins.
+        # Returning early here would let this renderer show a stale colour where
+        # the panel shows none — a preview that hides the bug it exists to
+        # catch.
         for band in range(
             max(0, y0 // 8), min(len(self.band_hue), (y0 + height - 1) // 8 + 1)
         ):

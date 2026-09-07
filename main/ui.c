@@ -166,7 +166,7 @@ _Static_assert(UI_Y_NETWORK % DISPLAY_CELL_H == 0 &&
 _Static_assert(UI_Y_DEBUG + DISPLAY_CELL_H <= DISPLAY_HEIGHT,
                "layout runs off the bottom of the panel");
 
-static void draw(const struct status_snapshot *s) {
+static void draw(const struct status_snapshot *s, bool led_weak) {
   display_clear();
 
   // Ink is set per element rather than once, because the point of having it is
@@ -228,27 +228,21 @@ static void draw(const struct status_snapshot *s) {
     // the text beside it. The three link hues hold the SSID's colour constant
     // and move only the bar's.
     //
-    // The weak/strong question is indicator.h's, thresholds and hysteresis and
-    // all, NOT a second set of numbers here. That header promised the light
-    // and the screen would not disagree about whether the link is weak.
+    // Which link hue: the light's own answer, passed in by ui_task, not a
+    // second opinion computed here.
     //
-    // A shared THRESHOLD was not enough to deliver that, and the first version
-    // of this got it wrong. The light's hysteresis input is `prev == WARN`,
-    // where `prev` is its whole state — so a fault or a suspend displaces the
-    // warning and clears the latch as a side effect. A standalone `bool` here
-    // had no such event, so once a fault cleared the two sat either side of
-    // the hysteresis band: light green at -74 dBm, panel amber at -74 dBm,
-    // both visible, disagreeing.
+    // Two earlier attempts at this were wrong, and both failure modes are worth
+    // knowing. A private `bool` latch drifted because the light's hysteresis
+    // input is `prev == WARN` and a fault or suspend clears that as a side
+    // effect, which a bare bool has no equivalent of. Running the light's state
+    // machine a second time here drifted too — this block only executes while
+    // WiFi is up, so the copy stopped advancing during exactly the outage that
+    // moves the real one. And a divergence inside the hysteresis band does not
+    // wash out: both sides latch, so they stay split until something else
+    // moves them.
     //
-    // So this runs the light's own state machine with its own `prev` and feeds
-    // the identical `was_weak` into the identical predicate. Same pure
-    // function, same input, so the answer matches by construction rather than
-    // by two implementations happening to agree.
-    //
-    // Residual, stated rather than hidden: indicator_tick() takes its own
-    // status snapshot microseconds before this one, on this same task. A field
-    // changing between the two desyncs the latches for one 250ms frame, and
-    // the next frame re-converges.
+    // One tick, one snapshot, one answer, handed down. That is the only shape
+    // that makes indicator.h's promise true rather than nearly true.
     //
     // On the colour itself: until now the bar was deliberately never a warning
     // colour, on the argument that the LED already says "weak" from across the
@@ -257,15 +251,10 @@ static void draw(const struct status_snapshot *s) {
     // can say HOW weak, and colouring it by the quantity it already displays
     // is redundant coding of one variable, not a second claim. It stops at
     // amber: red means fault on this device, and one bar is not a fault.
-    static enum indicator_state s_led_prev = INDICATOR_IDLE;
-    const bool link_weak =
-        indicator_link_is_weak(s->rssi, s_led_prev == INDICATOR_WARN);
-    s_led_prev = indicator_state_for(s, s_led_prev);
-
     const int bars = rssi_bars(s->rssi);
-    display_set_hue(bars == 0   ? DISPLAY_HUE_LINK_NONE
-                    : link_weak ? DISPLAY_HUE_LINK_WEAK
-                                : DISPLAY_HUE_LINK);
+    display_set_hue(bars == 0  ? DISPLAY_HUE_LINK_NONE
+                    : led_weak ? DISPLAY_HUE_LINK_WEAK
+                               : DISPLAY_HUE_LINK);
 
     // The SSID, clipped so it cannot run into what sits to its right on this
     // row. display_text clips at the PANEL edge, not at a column, and
@@ -439,7 +428,9 @@ static void ui_task(void *arg) {
     const bool screensaver_active = idle_ms >= SCREENSAVER_IDLE_MS;
 
     poll_button(screensaver_active);
-    indicator_tick();
+    // One snapshot for the light and the panel, and the light's verdict is
+    // what the panel's signal bar is coloured by — see draw().
+    const enum indicator_state led = indicator_tick(&snapshot);
 
     // Let the radio follow the operator. This task already knows how long it
     // has been since input arrived, which is exactly the signal, so the tier
@@ -471,7 +462,7 @@ static void ui_task(void *arg) {
       if (screensaver_active) {
         draw_screensaver();
       } else {
-        draw(&snapshot);
+        draw(&snapshot, led == INDICATOR_WARN);
       }
     }
 

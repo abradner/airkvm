@@ -89,12 +89,11 @@ static int breathe_percent(int64_t now_us) {
   return (int)((up * BREATHE_CEILING_PCT) / half);
 }
 
-void indicator_tick(void) {
+enum indicator_state indicator_tick(const struct status_snapshot *snap) {
   if (!s_ready) {
-    return;
+    return INDICATOR_IDLE;
   }
-  struct status_snapshot s;
-  status_get(&s);
+  const struct status_snapshot s = *snap;
 
   const int64_t now = esp_timer_get_time();
 
@@ -112,17 +111,17 @@ void indicator_tick(void) {
   // life in.
   if (state == INDICATOR_FAULT) {
     set_percent(100);
-    return;
+    return state;
   }
   if (state == INDICATOR_IDLE) {
     set_percent(0);
-    return;
+    return state;
   }
   // One channel cannot say "suspended" in a colour, so it says it in a rhythm:
   // a fast blink, distinguishable from the slow breath of a bound session.
   if (state == INDICATOR_SUSPENDED) {
     set_percent(((now / 250000) % 2) ? 60 : 0);
-    return;
+    return state;
   }
 
   int percent = breathe_percent(now);
@@ -132,11 +131,15 @@ void indicator_tick(void) {
     percent += BLIP_BOOST_PCT;
   }
   set_percent(percent);
+  return state;
 }
 
 #else  // !BOARD_HAS_LED
 
 void indicator_init(void) {}
-void indicator_tick(void) {}
+enum indicator_state indicator_tick(const struct status_snapshot *snap) {
+  (void)snap;
+  return INDICATOR_IDLE;
+}
 
 #endif

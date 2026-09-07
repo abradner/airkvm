@@ -109,4 +109,13 @@ void indicator_init(void);
 
 // Call periodically; drives the LED from current status. Kept as a tick rather
 // than its own task so the UI task owns all the timing in one place.
-void indicator_tick(void);
+// Call periodically; drives the LED from `s`. Kept as a tick rather than its
+// own task so the UI task owns all the timing in one place.
+//
+// Takes the CALLER'S snapshot rather than reading its own, and returns the
+// state it just rendered, because the status panel derives the signal bar's
+// colour from the same question this answers. Two independent status_get()
+// calls microseconds apart can differ, and a difference inside the hysteresis
+// band does not wash out on the next tick — it latches, and the light and the
+// screen then disagree about the link indefinitely. One snapshot, one answer.
+enum indicator_state indicator_tick(const struct status_snapshot *s);

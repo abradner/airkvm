@@ -152,12 +152,11 @@ void indicator_init(void) {
   ESP_LOGI(TAG, "WS2812 status LED on GPIO%d", BOARD_LED_RGB_GPIO);
 }
 
-void indicator_tick(void) {
+enum indicator_state indicator_tick(const struct status_snapshot *snap) {
   if (!s_ready) {
-    return;
+    return INDICATOR_IDLE;
   }
-  struct status_snapshot s;
-  status_get(&s);
+  const struct status_snapshot s = *snap;
 
   // Held across ticks so the weak-signal warning has hysteresis; see
   // indicator.h. Evaluated once per tick rather than three times, which also
@@ -251,11 +250,15 @@ void indicator_tick(void) {
 
   scale(&r, &g, &b, level);
   emit(r, g, b);
+  return state;
 }
 
 #else
 
 void indicator_init(void) {}
-void indicator_tick(void) {}
+enum indicator_state indicator_tick(const struct status_snapshot *snap) {
+  (void)snap;
+  return INDICATOR_IDLE;
+}
 
 #endif
