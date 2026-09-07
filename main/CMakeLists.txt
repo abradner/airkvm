@@ -42,13 +42,18 @@ set(airkvm_requires
 # is only offered on targets with native USB OTG, so this never has to guard
 # against a C3 pulling in TinyUSB.
 #
-# NOTE: the `list(APPEND airkvm_requires ...)` below is dead — see the comment
-# above. TinyUSB reaches the link through main/idf_component.yml, not through
-# here. Left in place rather than removed in this change so the fix is its own
-# reviewable commit; tracked separately.
+# There is deliberately no `list(APPEND airkvm_requires esp_tinyusb)` here:
+# TinyUSB is a managed component and reaches the link through
+# main/idf_component.yml, whose `rules: if target in [esp32s3, esp32s2]` is the
+# thing that keeps it off the C3. A conditional REQUIRES in this file would not
+# fail loudly — it would do nothing at all, because CONFIG_ values are not
+# visible in the early-expansion pass that collects requirements (gotcha 7), so
+# the if() is always false. One did sit here for a while, appearing to work
+# only because the manifest was supplying the dependency the whole time.
+# Conditional SRCS are a different matter and are fine: they are consumed in
+# CMake's real pass, where CONFIG_ values are set.
 if(CONFIG_AIRKVM_HID_BACKEND_USB)
     list(APPEND airkvm_srcs "hid_out_usb.c")
-    list(APPEND airkvm_requires esp_tinyusb)
 else()
     list(APPEND airkvm_srcs "hid_out_log.c")
 endif()
