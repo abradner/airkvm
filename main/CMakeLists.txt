@@ -77,6 +77,13 @@ if(CONFIG_TINYUSB_MSC_ENABLED)
     list(APPEND airkvm_srcs "msc_lun.c" "msc_out.c" "media_proto.c" "block_cache.c"
         "block_source_browser.c" "media_ws.c")
 endif()
+# The setup-mode USB network device (main/usb_net.c) is keyed on esp_tinyusb's
+# NET choice symbol for the same reason MSC is keyed on theirs above. It is
+# only ever started by setup_mode.c; the normal image carries the class
+# driver's static NTB buffers (sized in sdkconfig.defaults) and nothing else.
+if(CONFIG_TINYUSB_NET_MODE_NCM)
+    list(APPEND airkvm_srcs "usb_net.c")
+endif()
 if(CONFIG_AIRKVM_MSC_SD)
     if(NOT CONFIG_TINYUSB_MSC_ENABLED)
         # Kconfig cannot express this dependency on a symbol the C3 lacks; say

@@ -30,6 +30,20 @@ CONFIG_TINYUSB_MSC_ENABLED=y
 # callbacks per 4 KB; this is one static DRAM buffer of this size. Tune after
 # measuring (principle 6), not before.
 CONFIG_TINYUSB_MSC_BUFSIZE=4096
+# Setup mode's USB network device (main/usb_net.c): a CDC-NCM function on an
+# NCM-only descriptor, never beside HID+MSC (the S3 has four IN endpoints).
+# The class driver's NTB buffers are static and therefore paid for in every
+# image, setup mode or not: one each way at Linux's 2048-byte minimum is
+# 4 KB, against ~19 KB at esp_tinyusb's 3/3 × 3200 defaults, on a part
+# whose free heap is the media cache's budget. Setup mode moves one form
+# post; throughput is not a goal there. NET_MODE is an EXISTING choice
+# symbol in any generated sdkconfig from before (AGENTS.md §6.1): edit it,
+# then confirm CONFIG_TINYUSB_NET_MODE_NCM in build/config/sdkconfig.h.
+CONFIG_TINYUSB_NET_MODE_NCM=y
+CONFIG_TINYUSB_NCM_OUT_NTB_BUFFS_COUNT=1
+CONFIG_TINYUSB_NCM_IN_NTB_BUFFS_COUNT=1
+CONFIG_TINYUSB_NCM_OUT_NTB_BUFF_MAX_SIZE=2048
+CONFIG_TINYUSB_NCM_IN_NTB_BUFF_MAX_SIZE=2048
 
 # The console holds one long-lived WebSocket plus three short static requests,
 # and the media server (main/media_ws.c) is a second httpd instance with two
