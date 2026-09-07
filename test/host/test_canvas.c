@@ -104,6 +104,23 @@ static bool pixel_at(const struct canvas *c, int x, int y) {
   return (c->bits[(y / 8) * c->w + x] & (1u << (y % 8))) != 0;
 }
 
+// The ink ROLE at a pixel, reassembled from the two planes the way
+// display_st7789.c's flush does. pixel_at above answers "is it lit", which is
+// the only question the monochrome board has; anything checking colour has to
+// read both planes or it cannot tell SECONDARY from ACCENT.
+static uint8_t role_at(const struct canvas *c, int x, int y) {
+  if (x < 0 || x >= c->w || y < 0 || y >= c->h) {
+    return CANVAS_INK_NONE;
+  }
+  const size_t off = (size_t)(y / 8) * (size_t)c->w + (size_t)x;
+  const uint8_t bit = (uint8_t)(1u << (y % 8));
+  uint8_t role = (c->bits[off] & bit) ? 1u : 0u;
+  if (c->bits_hi != NULL && (c->bits_hi[off] & bit)) {
+    role |= 2u;
+  }
+  return role;
+}
+
 // The only new branch the second board introduces into shared code.
 static void scaling_replicates_each_pixel_as_a_block(void) {
   static uint8_t one_bits[64 * 8];
@@ -205,6 +222,103 @@ static void bar_cells_stay_separated_on_both_fonts(void) {
   CHECK(pixel_at(&c, canvas_font8x16.advance, 0));
 }
 
+// The stepped signal gauge (canvas_bar_steps). Shape carries the reading here,
+// not just colour — which is what lets the light theme's bar lean on WCAG's 3:1
+// graphical floor instead of 4.5 — so the shape is worth pinning.
+static void bar_steps_ascend_and_sit_on_the_baseline(void) {
+  static uint8_t lo[320 * 22], hi[320 * 22];
+  struct canvas c = {.bits = lo,
+                     .bits_hi = hi,
+                     .w = 320,
+                     .h = 172,
+                     .font = &canvas_font8x16,
+                     .ink = CANVAS_INK_ACCENT};
+  canvas_clear(&c);
+  canvas_bar_steps(&c, 0, 0, 4, 4, 1, 1, CANVAS_INK_SECONDARY);
+
+  const int full = canvas_font8x16.glyph_h;  // 16
+  int height[4];
+  for (int i = 0; i < 4; i++) {
+    const int x = i * canvas_font8x16.advance;
+    height[i] = 0;
+    for (int y = 0; y < full; y++) {
+      if (role_at(&c, x, y) != CANVAS_INK_NONE) {
+        height[i]++;
+      }
+    }
+    // Bottom-aligned: the pixel directly above the row's baseline is set, the
+    // one at the top of the cell is not (for anything but a full-height step).
+    CHECK(role_at(&c, x, full - 1) != CANVAS_INK_NONE);
+  }
+  // Strictly ascending, and the last step fills the cell.
+  CHECK(height[0] < height[1]);
+  CHECK(height[1] < height[2]);
+  CHECK(height[2] < height[3]);
+  CHECK_EQ_INT(height[3], full);
+  // The shortest step is never invisible — "one bar" must not look like "none".
+  CHECK(height[0] >= 1);
+}
+
+// Filled steps take the pen; unfilled take ink_off. This is the "bold and
+// feint" that keeps the empty part of the scale visible: an unfilled step must
+// be present but quiet, never absent (absent reads as "no data") and never the
+// pen colour (which reads as reached).
+static void bar_steps_use_two_inks_and_restore_the_pen(void) {
+  static uint8_t lo[320 * 22], hi[320 * 22];
+  struct canvas c = {.bits = lo,
+                     .bits_hi = hi,
+                     .w = 320,
+                     .h = 172,
+                     .font = &canvas_font8x16,
+                     .ink = CANVAS_INK_ACCENT};
+  canvas_clear(&c);
+  canvas_bar_steps(&c, 0, 0, 4, 2, 1, 1, CANVAS_INK_SECONDARY);
+
+  const int full = canvas_font8x16.glyph_h;
+  // Steps 0 and 1 are filled: pen ink.
+  CHECK_EQ_INT(role_at(&c, 0, full - 1), CANVAS_INK_ACCENT);
+  CHECK_EQ_INT(role_at(&c, canvas_font8x16.advance, full - 1),
+               CANVAS_INK_ACCENT);
+  // Steps 2 and 3 are not: present, but in the quiet ink.
+  CHECK_EQ_INT(role_at(&c, 2 * canvas_font8x16.advance, full - 1),
+               CANVAS_INK_SECONDARY);
+  CHECK_EQ_INT(role_at(&c, 3 * canvas_font8x16.advance, full - 1),
+               CANVAS_INK_SECONDARY);
+
+  // The pen is restored, or the next draw silently changes colour — the sort
+  // of bug that shows up three call sites away from its cause.
+  CHECK_EQ_INT(c.ink, CANVAS_INK_ACCENT);
+}
+
+// Zero filled is a real state (associated, no RSSI sample yet) and must still
+// draw the whole scale, quietly. An empty gauge and a missing gauge are
+// different things.
+static void bar_steps_with_nothing_filled_still_draws_the_scale(void) {
+  static uint8_t lo[320 * 22], hi[320 * 22];
+  struct canvas c = {.bits = lo,
+                     .bits_hi = hi,
+                     .w = 320,
+                     .h = 172,
+                     .font = &canvas_font8x16,
+                     .ink = CANVAS_INK_ACCENT};
+  canvas_clear(&c);
+  canvas_bar_steps(&c, 0, 0, 4, 0, 1, 1, CANVAS_INK_SECONDARY);
+
+  const int full = canvas_font8x16.glyph_h;
+  for (int i = 0; i < 4; i++) {
+    CHECK_EQ_INT(role_at(&c, i * canvas_font8x16.advance, full - 1),
+                 CANVAS_INK_SECONDARY);
+  }
+  // Positive control: nothing was drawn in the pen ink anywhere.
+  bool any_accent = false;
+  for (int x = 0; x < 4 * canvas_font8x16.advance; x++) {
+    for (int y = 0; y < full; y++) {
+      any_accent = any_accent || role_at(&c, x, y) == CANVAS_INK_ACCENT;
+    }
+  }
+  CHECK(!any_accent);
+}
+
 // Two planes give four roles, and a canvas with no second plane must collapse
 // every ink to "lit" rather than dropping pixels — that is what keeps one
 // draw() serving a colour panel and a monochrome one.
@@ -294,6 +408,9 @@ int main(void) {
   RUN(text_clips_and_never_wraps);
   RUN(bar_keeps_an_outline_when_empty);
   RUN(bar_cells_stay_separated_on_both_fonts);
+  RUN(bar_steps_ascend_and_sit_on_the_baseline);
+  RUN(bar_steps_use_two_inks_and_restore_the_pen);
+  RUN(bar_steps_with_nothing_filled_still_draws_the_scale);
   RUN(ink_planes_encode_four_roles);
   RUN(mono_canvas_collapses_every_ink_to_lit);
   RUN(cell_grid_matches_each_board);

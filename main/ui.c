@@ -223,18 +223,54 @@ static void draw(const struct status_snapshot *s) {
 #endif
 
   if (s->wifi_connected) {
-    // SSID and signal bar share a hue because they answer one question. The
-    // bar keeps the theme's accent colour regardless (theme.h): a signal bar
-    // that changed colour for a reason unrelated to signal would be a worse
-    // instrument, and each theme's LINK hue is picked to sit beside it.
-    display_set_hue(DISPLAY_HUE_LINK);
+    // SSID and signal bar share a hue because they share a row — hue is
+    // resolved per 8-row band, so whatever colours the bar necessarily colours
+    // the text beside it. The three link hues hold the SSID's colour constant
+    // and move only the bar's.
+    //
+    // The weak/strong question is indicator.h's, thresholds and hysteresis and
+    // all, NOT a second set of numbers here. That header promised the light
+    // and the screen would not disagree about whether the link is weak; a
+    // shared predicate is what makes that true rather than merely intended.
+    // The latch is local because the LED keeps its own, and both are driven
+    // from the same snapshot on the same tick, so they move together.
+    //
+    // On the colour itself: until now the bar was deliberately never a warning
+    // colour, on the argument that the LED already says "weak" from across the
+    // room and saying it twice makes neither say it. That argument narrows
+    // rather than survives — see display_hue.h. The bar is the only place that
+    // can say HOW weak, and colouring it by the quantity it already displays
+    // is redundant coding of one variable, not a second claim. It stops at
+    // amber: red means fault on this device, and one bar is not a fault.
+    static bool s_link_weak;
+    s_link_weak = indicator_link_is_weak(s->rssi, s_link_weak);
+    const int bars = rssi_bars(s->rssi);
+    display_set_hue(bars == 0     ? DISPLAY_HUE_LINK_NONE
+                    : s_link_weak ? DISPLAY_HUE_LINK_WEAK
+                                  : DISPLAY_HUE_LINK);
     display_text(UI_X_COL, UI_Y_NETWORK / DISPLAY_CELL_H, s->ssid);
-    // The only non-text element, and the only accent on the panel. Note it is
-    // NOT a warning colour: a weak signal shows amber on the LED, which is
-    // visible from across a room. Saying it twice would make neither say it.
+
+#if BOARD_DISPLAY_ST7789
+    // The number the bar is a picture of, right up against it, because four
+    // shapes in a corner with no caption are decoration. It is also the thing
+    // you would quote to someone else — AGENTS.md §9 entry 4 was diagnosed by
+    // an RSSI reading, not by a bar count.
+    //
+    // LCD only: the 0.42" panel has 18 columns, and spending 8 of them here
+    // would leave 6 for an SSID. On that board the bar stays uncaptioned,
+    // which is the honest trade at 72x40 rather than an oversight.
+    char sig[10];
+    if (s->rssi == 0) {
+      snprintf(sig, sizeof(sig), "-- dBm");
+    } else {
+      snprintf(sig, sizeof(sig), "%d dBm", (int)s->rssi);
+    }
+    display_text(DISPLAY_COLS - 4 - (int)strlen(sig) - 1,
+                 UI_Y_NETWORK / DISPLAY_CELL_H, sig);
+#endif
+
     display_set_ink(DISPLAY_INK_ACCENT);
-    display_bar(DISPLAY_COLS - 4, UI_Y_NETWORK / DISPLAY_CELL_H, 4,
-                rssi_bars(s->rssi));
+    display_bar(DISPLAY_COLS - 4, UI_Y_NETWORK / DISPLAY_CELL_H, 4, bars);
     display_set_ink(DISPLAY_INK_SECONDARY);
   }
 

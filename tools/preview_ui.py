@@ -75,7 +75,14 @@ def q565(rgb):
 
 
 ROLE_INDEX = {"NONE": 0, "PRIMARY": 1, "SECONDARY": 2, "ACCENT": 3}
-HUE_INDEX = {"NEUTRAL": 0, "IDENTITY": 1, "ADDRESS": 2, "LINK": 3}
+HUE_INDEX = {
+    "NEUTRAL": 0,
+    "IDENTITY": 1,
+    "ADDRESS": 2,
+    "LINK": 3,
+    "LINK_WEAK": 4,
+    "LINK_NONE": 5,
+}
 
 
 def parse_themes():
@@ -90,28 +97,38 @@ def parse_themes():
         re.S,
     ):
 
-        def slots(kind, index):
-            out = [None] * len(index)
-            for key, macro, args in re.findall(
-                rf"\[{kind}_(\w+)\]\s*=\s*(RGB565_OF|RGB565)\(([^)]*)\)", body
-            ):
-                if key not in index:
-                    continue  # e.g. CANVAS_INK_COUNT-style names, if ever added
-                if macro == "RGB565_OF":
-                    if args.strip() not in triples:
-                        sys.exit(f"{name}: palette.h has no {args.strip()}")
-                    rgb = triples[args.strip()]
-                else:
-                    rgb = tuple(int(v.strip(), 16) for v in args.split(","))
-                out[index[key]] = q565(rgb)
-            if any(v is None for v in out):
-                sys.exit(f"{name}: theme is missing a {kind} entry")
-            return out
+        def colour(macro, args):
+            if macro == "RGB565_OF":
+                if args.strip() not in triples:
+                    sys.exit(f"{name}: palette.h has no {args.strip()}")
+                return q565(triples[args.strip()])
+            return q565(tuple(int(v.strip(), 16) for v in args.split(",")))
 
-        themes[name] = {
-            "ink": slots("CANVAS_INK", ROLE_INDEX),
-            "hue": slots("DISPLAY_HUE", HUE_INDEX),
-        }
+        ink = [None] * len(ROLE_INDEX)
+        for key, macro, args in re.findall(
+            r"\[CANVAS_INK_(\w+)\]\s*=\s*(RGB565_OF|RGB565)\(([^)]*)\)", body
+        ):
+            if key in ROLE_INDEX:
+                ink[ROLE_INDEX[key]] = colour(macro, args)
+
+        # Hue entries are {secondary, accent} pairs, so each one has two
+        # RGB565 calls and order within the braces is what tells them apart.
+        hue = [None] * len(HUE_INDEX)
+        for key, pair in re.findall(
+            r"\[DISPLAY_HUE_(\w+)\]\s*=\s*\{(.*?)\},\n", body, re.S
+        ):
+            if key not in HUE_INDEX:
+                continue
+            found = re.findall(r"(RGB565_OF|RGB565)\(([^)]*)\)", pair)
+            if len(found) != 2:
+                sys.exit(f"{name}: hue {key} has {len(found)} colours, expected 2")
+            hue[HUE_INDEX[key]] = tuple(colour(m, a) for m, a in found)
+
+        if any(v is None for v in ink):
+            sys.exit(f"{name}: theme is missing an ink role")
+        if any(v is None for v in hue):
+            sys.exit(f"{name}: theme is missing a DISPLAY_HUE entry")
+        themes[name] = {"ink": ink, "hue": hue}
     if not themes:
         sys.exit("no themes parsed from main/theme.h")
     return themes
@@ -220,9 +237,10 @@ class Canvas:
         self.mark_bands(y, self.font["glyph_h"] * sy)
 
     def bar(self, col, row, width, filled, sx=1, sy=1):
+        """Equal outlined boxes — canvas_bar(), which is what the OLED uses."""
         f = self.font
         x0, y0 = col * f["advance"] * sx, row * f["line_h"] * sy
-        bw, bh = f["glyph_w"] * sx, f["glyph_h"] * sy
+        bw, bh = (f["advance"] - 1) * sx, f["glyph_h"] * sy
         for i in range(width):
             on = i < filled
             for gx in range(bw):
@@ -231,8 +249,29 @@ class Canvas:
                     self.pixel(x0 + i * f["advance"] * sx + gx, y0 + gy, on or edge)
         self.mark_bands(row * f["line_h"] * sy, f["line_h"] * sy)
 
+    def bar_steps(self, col, row, width, filled, ink_off, sx=1, sy=1):
+        """Ascending steps — canvas_bar_steps(), which is what the LCD uses.
 
-def draw_status(c, y, tall, mdns, ip, ssid, rssi_bars, events, usb, bound, debug):
+        Filled steps take the pen ink, unfilled ones take `ink_off`, so the
+        empty part of the scale stays visible in the row's quiet colour.
+        """
+        f = self.font
+        x0, y0 = col * f["advance"] * sx, row * f["line_h"] * sy
+        bw, full_h = (f["advance"] - 1) * sx, f["glyph_h"] * sy
+        pen = self.ink
+        for i in range(width):
+            h = max(1, full_h * (i + 1) // width)
+            self.set_ink(pen if i < filled else ink_off)
+            for gx in range(bw):
+                for gy in range(full_h - h, full_h):
+                    self.pixel(x0 + i * f["advance"] * sx + gx, y0 + gy, True)
+        self.set_ink(pen)
+        self.mark_bands(row * f["line_h"] * sy, f["line_h"] * sy)
+
+
+def draw_status(
+    c, y, tall, mdns, ip, ssid, rssi, rssi_bars, weak, events, usb, bound, debug
+):
     """Mirrors main/ui.c draw(), hues included. Keep in step with it by hand."""
     f = c.font
     cols = c.w // f["advance"]
@@ -254,10 +293,27 @@ def draw_status(c, y, tall, mdns, ip, ssid, rssi_bars, events, usb, bound, debug
         c.set_hue(HUE_INDEX["ADDRESS"])
         c.text_row(x0, y["MDNS"], f"{mdns}.local")
 
-    c.set_hue(HUE_INDEX["LINK"])
+    # Three link hues; the SSID's colour is the same in all three, the bar's
+    # is not. Which one is chosen mirrors ui.c: no sample, weak, or healthy.
+    c.set_hue(
+        HUE_INDEX["LINK_NONE"]
+        if rssi_bars == 0
+        else HUE_INDEX["LINK_WEAK"]
+        if weak
+        else HUE_INDEX["LINK"]
+    )
     c.text_row(x0, y["NETWORK"], ssid)
+
+    # The caption, LCD only — the 0.42" panel has no columns to spare.
+    if y["MDNS"] is not None:
+        sig = "-- dBm" if rssi is None else f"{rssi} dBm"
+        c.text_row((cols - 4 - len(sig) - 1) * f["advance"], y["NETWORK"], sig)
+
     c.set_ink(3)
-    c.bar(cols - 4, y["NETWORK"] // cell_h, 4, rssi_bars)
+    if y["MDNS"] is not None:
+        c.bar_steps(cols - 4, y["NETWORK"] // cell_h, 4, rssi_bars, ink_off=2)
+    else:
+        c.bar(cols - 4, y["NETWORK"] // cell_h, 4, rssi_bars)
 
     c.set_ink(2)
     c.set_hue(HUE_INDEX["NEUTRAL"])
@@ -284,8 +340,9 @@ def render_png(c, path, theme, mono):
         # SECONDARY resolves through the band's hue; every other role is the
         # theme's, exactly as display_st7789.c builds its per-hue palettes.
         if not mono:
+            sec, acc = theme["hue"][c.band_hue[yy // 8]]
             pal = list(theme["ink"])
-            pal[2] = theme["hue"][c.band_hue[yy // 8]]
+            pal[2], pal[3] = sec, acc
         for xx in range(c.w):
             role = c.px[yy][xx]
             if not role:
@@ -339,41 +396,56 @@ def main():
         ("s3-lcd147", 320, 172, f8x16, (2, 2), parse_ui_offsets(True)),
     ]
 
-    for name, w, h, font, tall, y in boards:
-        c = Canvas(w, h, font)
-        draw_status(
-            c,
-            y,
-            tall,
-            mdns="airkvm-lcd",
-            ip="192.168.100.100",
-            ssid="asn-iot",
-            rssi_bars=3,
-            events=1234,
-            usb=True,
-            bound=True,
-            debug="KeyA down",
-        )
-        cols, rows = w // font["advance"], h // font["line_h"]
-        print(
-            f"=== {name}: {w}x{h}, {font['name']} font, {cols} cols x {rows} rows ==="
-        )
-        print(ascii_art(c))
-        print()
-        if not args.png:
-            continue
+    # Two link states, because the signal ramp is the one thing on this panel
+    # whose colour carries meaning — a preview that only ever shows a healthy
+    # link cannot show whether the ramp reads.
+    links = [("", -62, 3, False), ("-weak", -80, 1, True)]
 
-        # The 0.42" OLED is 1bpp and has no palette: every ink role is one lit
-        # pixel there, so it gets exactly one image and themes are a no-op.
-        # Rendering it five times in five colour schemes would be a picture of
-        # a feature that board does not have.
-        if font["name"] == "3x5":
-            render_png(
-                c, f"{args.png}-{name}.png", next(iter(themes.values())), mono=True
+    for name, w, h, font, tall, y in boards:
+        for suffix, rssi, bars, weak in links:
+            c = Canvas(w, h, font)
+            draw_status(
+                c,
+                y,
+                tall,
+                mdns="airkvm-lcd",
+                ip="192.168.100.100",
+                ssid="asn-iot",
+                rssi=rssi,
+                rssi_bars=bars,
+                weak=weak,
+                events=1234,
+                usb=True,
+                bound=True,
+                debug="KeyA down",
             )
-            continue
-        for theme, parsed in themes.items():
-            render_png(c, f"{args.png}-{name}-{theme}.png", parsed, mono=False)
+            if not suffix:
+                cols, rows = w // font["advance"], h // font["line_h"]
+                print(
+                    f"=== {name}: {w}x{h}, {font['name']} font, "
+                    f"{cols} cols x {rows} rows ==="
+                )
+                print(ascii_art(c))
+                print()
+            if not args.png:
+                continue
+
+            # The 0.42" OLED is 1bpp and has no palette: every ink role is one
+            # lit pixel there, so it gets one image per link state and themes
+            # are a no-op there. Rendering it five times in five colour schemes
+            # would be a picture of a feature that board does not have.
+            if font["name"] == "3x5":
+                render_png(
+                    c,
+                    f"{args.png}-{name}{suffix}.png",
+                    next(iter(themes.values())),
+                    mono=True,
+                )
+                continue
+            for theme, parsed in themes.items():
+                render_png(
+                    c, f"{args.png}-{name}-{theme}{suffix}.png", parsed, mono=False
+                )
 
 
 if __name__ == "__main__":

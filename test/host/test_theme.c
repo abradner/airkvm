@@ -50,6 +50,47 @@ static double luminance(uint16_t c) {
   return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
 }
 
+// Hue angle in degrees, or -1 for a colour too desaturated to have one.
+//
+// Needed because contrast() cannot answer "are these different colours": it is
+// a LUMINANCE ratio, and a green and an amber chosen to sit at the same
+// lightness — which is exactly what a good ramp does — measure ~1.0 against
+// each other. Using it for that is the same category error AGENTS.md §9 entry
+// 16 records, and it failed for all five themes on the first run.
+//
+// The saturation gate matters as much as the angle: monokai-light's plain grey
+// (#706b6e) quantises to (115,105,107), which has a nominal hue of 348 degrees
+// and is not remotely red. Anything under a quarter saturated has no hue worth
+// judging.
+static double hue_degrees(uint16_t c) {
+  double ch[3];
+  expand565(c, ch);
+  const double r = ch[0], g = ch[1], b = ch[2];
+  const double max = r > g ? (r > b ? r : b) : (g > b ? g : b);
+  const double min = r < g ? (r < b ? r : b) : (g < b ? g : b);
+  if (max < 1.0 || (max - min) / max < 0.25) {
+    return -1.0;
+  }
+  double deg;
+  if (max == r) {
+    deg = 60.0 * (g - b) / (max - min);
+  } else if (max == g) {
+    deg = 60.0 * (2.0 + (b - r) / (max - min));
+  } else {
+    deg = 60.0 * (4.0 + (r - g) / (max - min));
+  }
+  return deg < 0.0 ? deg + 360.0 : deg;
+}
+
+// Shortest distance between two hue angles, degrees.
+static double hue_separation(double a, double b) {
+  double d = a > b ? a - b : b - a;
+  if (d > 180.0) {
+    d = 360.0 - d;
+  }
+  return d;
+}
+
 static double contrast(uint16_t a, uint16_t b) {
   const double la = luminance(a);
   const double lb = luminance(b);
@@ -167,12 +208,98 @@ static void every_hue_clears_the_text_floor(void) {
     const struct display_theme *t = &display_themes[i];
     const uint16_t bg = t->ink[CANVAS_INK_NONE];
     for (int h = 0; h < DISPLAY_HUE_COUNT; h++) {
-      const double c = contrast(t->hue[h], bg);
+      const double c = contrast(t->hue[h].secondary, bg);
       if (c < MIN_TEXT_CONTRAST) {
-        fprintf(stderr, "  theme %s: hue %d is %.2f, under the %.1f floor\n",
+        fprintf(stderr,
+                "  theme %s: hue %d text is %.2f, under the %.1f floor\n",
                 t->name, h, c, MIN_TEXT_CONTRAST);
       }
       CHECK(c >= MIN_TEXT_CONTRAST);
+    }
+  }
+}
+
+// The signal bar is a graphical element, which WCAG holds to 3:1 rather than
+// 4.5 — and it earns that lower floor rather than merely being granted it,
+// because the bar's SHAPE carries the same information as its colour (ascending
+// steps, filled vs unfilled) so nobody depends on the hue alone.
+//
+// Held here for every hue's accent, not just the link ones, because an accent
+// nobody can see is an accent nobody can see whichever section it is in.
+static void every_accent_clears_the_graphical_floor(void) {
+  for (int i = 0; i < DISPLAY_THEME_COUNT; i++) {
+    const struct display_theme *t = &display_themes[i];
+    const uint16_t bg = t->ink[CANVAS_INK_NONE];
+    for (int h = 0; h < DISPLAY_HUE_COUNT; h++) {
+      const double c = contrast(t->hue[h].accent, bg);
+      if (c < MIN_ACCENT_CONTRAST) {
+        fprintf(stderr,
+                "  theme %s: hue %d accent is %.2f, under the %.1f floor\n",
+                t->name, h, c, MIN_ACCENT_CONTRAST);
+      }
+      CHECK(c >= MIN_ACCENT_CONTRAST);
+    }
+  }
+}
+
+// The whole point of the signal ramp is that healthy and weak look different.
+// A theme that set them to the same colour would still pass every contrast
+// assertion above and would say nothing at all.
+static void the_signal_ramp_actually_ramps(void) {
+  for (int i = 0; i < DISPLAY_THEME_COUNT; i++) {
+    const struct display_theme *t = &display_themes[i];
+    const uint16_t ok = t->hue[DISPLAY_HUE_LINK].accent;
+    const uint16_t weak = t->hue[DISPLAY_HUE_LINK_WEAK].accent;
+    if (ok == weak) {
+      fprintf(stderr,
+              "  theme %s: healthy and weak signal are the same colour\n",
+              t->name);
+    }
+    CHECK(ok != weak);
+    // ...and distinguishable, not merely unequal: two colours one RGB565 step
+    // apart would pass the check above and look identical. Separation is
+    // measured as a HUE ANGLE and not as contrast, because a well-built ramp
+    // deliberately holds lightness constant across its steps — see
+    // hue_degrees() above for how that mistake presented.
+    const double ok_deg = hue_degrees(ok);
+    const double weak_deg = hue_degrees(weak);
+    CHECK(ok_deg >= 0.0);
+    CHECK(weak_deg >= 0.0);
+    if (ok_deg >= 0.0 && weak_deg >= 0.0) {
+      const double sep = hue_separation(ok_deg, weak_deg);
+      if (sep < 30.0) {
+        fprintf(stderr, "  theme %s: signal ramp spans only %.0f degrees\n",
+                t->name, sep);
+      }
+      CHECK(sep >= 30.0);
+    }
+  }
+}
+
+// The bar must never go red, in any theme. Red means fault on this device (no
+// WiFi, no HID) and one bar is degraded, not broken — display_hue.h states
+// this as the line the ramp does not cross, and a stated line that nothing
+// checks is exactly the kind of claim AGENTS.md principle 1 calls a bug.
+//
+// "Red" here means the hue angle, so a theme cannot sneak past by picking a
+// slightly different red. Amber and orange sit above 20 degrees; the reds this
+// is guarding against (#dc322f, #ff6d7e, #e06c75, #e14775) are all below it.
+static void the_signal_ramp_never_reaches_red(void) {
+  for (int i = 0; i < DISPLAY_THEME_COUNT; i++) {
+    const struct display_theme *t = &display_themes[i];
+    const int link[] = {DISPLAY_HUE_LINK, DISPLAY_HUE_LINK_WEAK,
+                        DISPLAY_HUE_LINK_NONE};
+    for (size_t k = 0; k < sizeof(link) / sizeof(link[0]); k++) {
+      const double deg = hue_degrees(t->hue[link[k]].accent);
+      if (deg < 0.0) {
+        continue;  // desaturated: no hue to be red
+      }
+      const bool reddish = deg < 20.0 || deg > 340.0;
+      if (reddish) {
+        fprintf(stderr, "  theme %s: link hue %d is red (%.0f deg)\n", t->name,
+                link[k], deg);
+      }
+      CHECK(!reddish);
     }
   }
 }
@@ -185,7 +312,9 @@ static void every_hue_clears_the_text_floor(void) {
 static void the_neutral_hue_is_the_theme_secondary(void) {
   for (int i = 0; i < DISPLAY_THEME_COUNT; i++) {
     const struct display_theme *t = &display_themes[i];
-    CHECK(t->hue[DISPLAY_HUE_NEUTRAL] == t->ink[CANVAS_INK_SECONDARY]);
+    CHECK(t->hue[DISPLAY_HUE_NEUTRAL].secondary ==
+          t->ink[CANVAS_INK_SECONDARY]);
+    CHECK(t->hue[DISPLAY_HUE_NEUTRAL].accent == t->ink[CANVAS_INK_ACCENT]);
   }
 }
 
@@ -202,7 +331,7 @@ static void every_dark_theme_carries_at_least_one_hue(void) {
     const struct display_theme *t = &display_themes[i];
     int distinct = 0;
     for (int h = DISPLAY_HUE_NEUTRAL + 1; h < DISPLAY_HUE_COUNT; h++) {
-      if (t->hue[h] != t->ink[CANVAS_INK_SECONDARY]) {
+      if (t->hue[h].secondary != t->ink[CANVAS_INK_SECONDARY]) {
         distinct++;
       }
     }
@@ -295,6 +424,9 @@ int main(void) {
   RUN(every_theme_is_complete_and_named);
   RUN(every_theme_clears_the_contrast_floor);
   RUN(every_hue_clears_the_text_floor);
+  RUN(every_accent_clears_the_graphical_floor);
+  RUN(the_signal_ramp_actually_ramps);
+  RUN(the_signal_ramp_never_reaches_red);
   RUN(the_neutral_hue_is_the_theme_secondary);
   RUN(every_dark_theme_carries_at_least_one_hue);
   RUN(primary_outranks_secondary_in_every_theme);

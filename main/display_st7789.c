@@ -104,12 +104,14 @@ static const char *TAG = "display";
 // buys a single source of truth — and, incidentally, the whole of runtime
 // theme selection, should that ever be wanted (theme.h).
 //
-// Only SECONDARY varies across hues. Background and PRIMARY are the theme's,
-// unconditionally, because the background changing per row would be stripes
-// and the address is the one thing whose colour must not depend on which
-// section it happens to sit in. ACCENT is the theme's too: there is exactly
-// one accent element on this panel and a signal bar that changed colour for
-// reasons unrelated to signal would be a worse instrument, not a prettier one.
+// SECONDARY and ACCENT vary across hues; background and PRIMARY never do. The
+// background changing per row would be stripes, and the address is the one
+// thing whose colour must not depend on which section it happens to sit in.
+//
+// ACCENT varies only because the signal bar is the network row's accent and
+// colouring it by signal strength is the point — it is still never coloured
+// for a reason unrelated to signal, which was the original constraint and
+// remains the constraint. theme.h and display_hue.h carry the argument.
 static uint16_t s_palettes[DISPLAY_HUE_COUNT][4];
 
 // Which hue each 8-row band is drawn in. This is how the panel gets more than
@@ -135,8 +137,8 @@ static void palette_load(const struct display_theme *t) {
   for (int h = 0; h < DISPLAY_HUE_COUNT; h++) {
     s_palettes[h][CANVAS_INK_NONE] = BE16(t->ink[CANVAS_INK_NONE]);
     s_palettes[h][CANVAS_INK_PRIMARY] = BE16(t->ink[CANVAS_INK_PRIMARY]);
-    s_palettes[h][CANVAS_INK_SECONDARY] = BE16(t->hue[h]);
-    s_palettes[h][CANVAS_INK_ACCENT] = BE16(t->ink[CANVAS_INK_ACCENT]);
+    s_palettes[h][CANVAS_INK_SECONDARY] = BE16(t->hue[h].secondary);
+    s_palettes[h][CANVAS_INK_ACCENT] = BE16(t->hue[h].accent);
   }
 }
 
@@ -399,7 +401,20 @@ void display_bar(int col, int row, int width, int filled) {
   if (!s_present) {
     return;
   }
-  canvas_bar(&s_canvas, col, row, width, filled, 1, 1);
+  // Stepped bars here, equal boxes on the OLED, and that is a property of the
+  // panel rather than a preference. The 3x5 font's glyph is five pixels tall,
+  // so four ascending steps there are one-pixel increments on a 0.39 x 0.65 mm
+  // glyph — invisible — and that board is 1bpp, so the unfilled steps have no
+  // quieter ink to be drawn in. Both of the things that make this shape legible
+  // are absent on the smaller panel, so it keeps the shape that works there.
+  //
+  // CANVAS_INK_SECONDARY for the unfilled steps is what makes it read as one
+  // gauge with a full scale rather than as some boxes: the empty part of the
+  // scale stays visible in the row's quiet colour while the filled part is the
+  // signal colour. Two inks, no extra plane — the canvas already had four
+  // roles and this is the first thing to use two of them in one element.
+  canvas_bar_steps(&s_canvas, col, row, width, filled, 1, 1,
+                   CANVAS_INK_SECONDARY);
   mark_bands(row * DISPLAY_CELL_H, DISPLAY_CELL_H);
 }
 

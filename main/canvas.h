@@ -219,3 +219,52 @@ static inline void canvas_bar(struct canvas *c, int col, int row, int width,
     }
   }
 }
+
+// A signal gauge: ascending steps, left to right, bottom-aligned — the shape
+// every phone and laptop uses for exactly this quantity, which is the point.
+// canvas_bar()'s equal boxes above say "four of something"; these say "a scale,
+// and this much of it".
+//
+// Filled steps take the pen ink; unfilled ones take `ink_off`, so the empty
+// part of the scale stays visible in a quieter colour instead of vanishing.
+// That is the same reasoning as canvas_bar()'s outline — an absent step must
+// read as "not reached", never as "no data" — done with an ink rather than an
+// outline, because at these sizes a hollow four-pixel box is mush.
+//
+// The pen is restored before returning: this is the only drawing call that
+// touches two inks, and a caller that set PRIMARY and got SECONDARY back would
+// be a genuinely horrible bug to find.
+//
+// Not used by the 0.42" OLED — see the note at display_bar in
+// display_st7789.c for why the shape does not survive a 3x5 font.
+static inline void canvas_bar_steps(struct canvas *c, int col, int row,
+                                    int width, int filled, int sx, int sy,
+                                    uint8_t ink_off) {
+  const struct canvas_font *f = c->font;
+  if (f == NULL || width <= 0) {
+    return;
+  }
+  const int x0 = col * f->advance * sx;
+  const int y0 = row * f->line_h * sy;
+  // One pixel narrower than the pitch, so steps never touch — same derivation
+  // as canvas_bar(), and same reason (gotcha 14c).
+  const int bw = (f->advance - 1) * sx;
+  const int full_h = f->glyph_h * sy;
+  const uint8_t pen = c->ink;
+
+  for (int i = 0; i < width; i++) {
+    // Ascending, and never zero: the shortest step still has to be visible,
+    // or "one bar" and "no bars" look the same.
+    int h = full_h * (i + 1) / width;
+    if (h < 1) {
+      h = 1;
+    }
+    canvas_set_ink(c, (i < filled) ? pen : ink_off);
+    for (int gx = 0; gx < bw; gx++) {
+      for (int gy = full_h - h; gy < full_h; gy++) {
+        canvas_pixel(c, x0 + i * f->advance * sx + gx, y0 + gy, true);
+      }
+    }
+  }
+  canvas_set_ink(c, pen);
+}
