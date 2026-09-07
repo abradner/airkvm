@@ -13,6 +13,7 @@
 #include "net.h"
 #include "ota.h"
 #include "setup_flag.h"
+#include "setup_mode.h"
 #include "status.h"
 #include "ui.h"
 
@@ -26,10 +27,12 @@ void app_main(void) {
   ui_start();
 
   // A 5 s BOOT hold in the previous run asked for setup mode (setup_flag.h).
-  // The mode itself is the next change; until then the request is honoured
-  // by being logged, so the trigger can be exercised on a bench without it.
+  // Everything below this line is the normal dongle; setup mode is a
+  // different device (an access point serving one page) and never returns.
+  // It brings up WiFi itself and starts no USB at all, so gotcha 10's
+  // ordering does not arise there.
   if (setup_flag_take()) {
-    ESP_LOGW(TAG, "setup mode requested; not built yet — normal boot");
+    setup_mode_run();
   }
   // The missing-credentials path was verified on the C3 bench on 2026-08-10
   // against Kconfig only; it now consults the radio's NVS store first

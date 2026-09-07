@@ -54,7 +54,7 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id,
   }
 }
 
-static esp_err_t start_nvs(void) {
+esp_err_t airkvm_nvs_init(void) {
   esp_err_t err = nvs_flash_init();
   if (err == ESP_ERR_NVS_NO_FREE_PAGES ||
       err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -65,7 +65,7 @@ static esp_err_t start_nvs(void) {
 }
 
 esp_err_t wifi_start(void) {
-  ESP_RETURN_ON_ERROR(start_nvs(), TAG, "nvs init failed");
+  ESP_RETURN_ON_ERROR(airkvm_nvs_init(), TAG, "nvs init failed");
   ESP_RETURN_ON_ERROR(esp_netif_init(), TAG, "esp_netif_init failed");
   ESP_RETURN_ON_ERROR(esp_event_loop_create_default(), TAG,
                       "event loop failed");
@@ -89,9 +89,7 @@ esp_err_t wifi_start(void) {
   //      saved — or a previous boot's Kconfig values — comes back here. This
   //      is what "provisioned in the field" means: NVS wins, and a rebuilt
   //      image with a different Kconfig SSID does not silently re-point a
-  //      dongle that was set up by hand. Setup mode will (next change); until
-  //      it exists, the way to drop a stale stored network is to erase the
-  //      nvs partition (`idf.py erase-flash`, or erase_region on nvs).
+  //      dongle that was set up by hand. Setup mode (a 5 s BOOT hold) does.
   //   2. Kconfig, for a fresh flash. It is written through set_config, so it
   //      becomes case 1 from then on.
   //   3. Nothing: fail fast (AGENTS.md §8), and tell the panel so it can show
@@ -115,8 +113,8 @@ esp_err_t wifi_start(void) {
   } else {
     status_set_no_credentials();
     ESP_LOGE(TAG,
-             "no WiFi credentials — run `mise run config` (setup mode, the "
-             "BOOT hold, is the next change and not built yet)");
+             "no WiFi credentials — hold BOOT for 5 s to set up, or run "
+             "`mise run config`");
     return ESP_ERR_INVALID_STATE;
   }
 

@@ -19,6 +19,12 @@
 // (AGENTS.md §8, configuration).
 esp_err_t wifi_start(void);
 
+// NVS init with the erase-and-retry that a version bump needs. Called by
+// wifi_start() and by setup mode, which brings the radio up its own way.
+// Prefixed because `wifi_nvs_init` is a symbol inside Espressif's closed
+// libnet80211 and the link says so loudly.
+esp_err_t airkvm_nvs_init(void);
+
 // How hard the radio should be working right now.
 //
 // Power save is not a single yes/no for this device. Principle 6 says latency

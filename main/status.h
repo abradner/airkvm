@@ -14,6 +14,8 @@
 #define STATUS_SSID_LEN 33
 #define STATUS_EVENT_LEN 20
 #define STATUS_MEDIA_LEN 32
+#define STATUS_SETUP_SSID_LEN 12
+#define STATUS_SETUP_PSK_LEN 9
 
 struct status_snapshot {
   // wifi_start() found no credentials anywhere — not in the radio's NVS
@@ -37,6 +39,15 @@ struct status_snapshot {
   bool media_attached;
   char media_name[STATUS_MEDIA_LEN];
 
+  // Setup mode (main/setup_mode.c): the panel is the only place the
+  // passphrase is shown (the log deliberately omits it), which is the
+  // point — reading it is presence.
+  bool setup_active;
+  char setup_ssid[STATUS_SETUP_SSID_LEN];
+  char setup_psk[STATUS_SETUP_PSK_LEN];
+  char setup_ip[STATUS_IP_LEN];
+  uint16_t setup_remaining_s;
+
   uint32_t events;           // input events since boot
   int64_t last_activity_us;  // esp_timer_get_time() of the last input event
 
@@ -51,6 +62,8 @@ void status_init(void);
 
 void status_set_wifi(bool connected, const char *ip, const char *ssid);
 void status_set_no_credentials(void);
+void status_set_setup(const char *ssid, const char *psk, const char *ip);
+void status_set_setup_remaining(uint16_t seconds);
 void status_set_rssi(int8_t rssi);
 void status_set_client(bool connected);
 void status_set_usb_mounted(bool mounted);

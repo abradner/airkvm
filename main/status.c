@@ -56,6 +56,21 @@ void status_set_wifi(bool connected, const char *ip, const char *ssid) {
   UNLOCK();
 }
 
+void status_set_setup(const char *ssid, const char *psk, const char *ip) {
+  LOCK();
+  s_state.setup_active = true;
+  strlcpy(s_state.setup_ssid, ssid, sizeof(s_state.setup_ssid));
+  strlcpy(s_state.setup_psk, psk, sizeof(s_state.setup_psk));
+  strlcpy(s_state.setup_ip, ip, sizeof(s_state.setup_ip));
+  UNLOCK();
+}
+
+void status_set_setup_remaining(uint16_t seconds) {
+  LOCK();
+  s_state.setup_remaining_s = seconds;
+  UNLOCK();
+}
+
 void status_set_no_credentials(void) {
   LOCK();
   s_state.no_credentials = true;
