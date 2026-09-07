@@ -11,6 +11,7 @@
 #include <stdbool.h>
 
 #include "board.h"
+#include "display_hue.h"
 #include "esp_err.h"
 
 // Panel size in pixels, after any rotation the backend applies. ui.c uses
@@ -48,6 +49,26 @@ enum display_ink {
   DISPLAY_INK_ACCENT = 3,     // the signal bar; the only non-text element
 };
 void display_set_ink(enum display_ink ink);
+
+// Hue for subsequent draws: which of the theme's complementary colours the
+// SECONDARY text in this section is drawn in. `enum display_hue` and the
+// reasoning live in display_hue.h.
+//
+// A no-op on a single-colour panel, exactly like display_set_ink, so ui.c can
+// set it unconditionally and stay one draw() for both boards.
+//
+// Two things a caller must know, because both are load-bearing:
+//
+//   - It is a property of the ROW, not of the draw call. The colour panel
+//     stores one hue per 8-pixel band rather than per pixel (a third bit plane
+//     is 7KB of heap this board has already spent), so two draws landing on
+//     the same text row share a hue and the last one set wins. Every row ui.c
+//     draws is a whole number of bands, and the backend asserts that at
+//     compile time.
+//   - display_clear() resets every row to DISPLAY_HUE_NEUTRAL. A section that
+//     forgets to set a hue is quiet, never whatever the previous frame left
+//     there.
+void display_set_hue(enum display_hue hue);
 
 esp_err_t display_init(void);
 

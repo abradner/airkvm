@@ -46,6 +46,20 @@
 //   monokai-light           14.43     5.02      3.61      9.41
 //   solarized-dark           5.91     5.02      5.00      0.89   (SEC was 2.87)
 //
+// The per-section hues below are SECONDARY text in another colour, so they are
+// held to the same floor and measure:
+//
+//   theme                IDENTITY  ADDRESS   LINK
+//   tokyo-night              7.66     9.69  10.25
+//   monokai-machine          6.38     9.35   8.43
+//   one-dark-night-flat      6.17     9.01   7.57
+//   monokai-light            5.11        -      -   (only one it can carry)
+//   solarized-dark              -     4.90   5.00   (no violet that clears)
+//
+// A dash is the theme's plain secondary, i.e. that section is not coloured at
+// all. Two of the five genuinely cannot fill every slot, which is recorded per
+// theme below rather than papered over by lowering the floor for decoration.
+//
 // == Which one is the default, and why it is not the one the ranking picked ==
 //
 // The rule stated first was "highest weakest ratio", since the complaint was
@@ -72,6 +86,7 @@
 #include <stdint.h>
 
 #include "canvas.h"
+#include "display_hue.h"
 #include "palette.h"
 
 // Ordered by weakest-ratio-first, which is a computable fact about the table
@@ -96,6 +111,22 @@ struct display_theme {
   // theme says what a colour IS, a transport says how that colour is clocked
   // out. See the BE16 note in that file.
   uint16_t ink[4];
+  // Per-section hues for SECONDARY text, indexed by `enum display_hue`. This
+  // is what stops the panel being three shades of one colour: the schemes all
+  // carry six or so complementary accents and the four ink roles could only
+  // ever reach one of them.
+  //
+  // It tints the QUIET TEXT only. ACCENT keeps the theme's accent colour in
+  // every section, because there is exactly one accent element on the panel
+  // (the RSSI bar) and giving it a per-section colour would mean the bar
+  // changed colour for reasons unrelated to signal.
+  //
+  // Entry [DISPLAY_HUE_NEUTRAL] is ink[SECONDARY] by construction, so
+  // "no hue" needs no sentinel and no branch. A theme with no colour that
+  // clears the contrast floor for a given section says so by putting its plain
+  // secondary there — see monokai-light and solarized-dark, which genuinely
+  // cannot fill every slot and do not pretend to.
+  uint16_t hue[DISPLAY_HUE_COUNT];
 };
 
 // static const in a header: every translation unit that includes this gets its
@@ -120,6 +151,16 @@ static const struct display_theme display_themes[DISPLAY_THEME_COUNT] = {
              [CANVAS_INK_PRIMARY] = RGB565(0xC0, 0xCA, 0xF5),
              [CANVAS_INK_SECONDARY] = RGB565(0xA9, 0xB1, 0xD6),
              [CANVAS_INK_ACCENT] = RGB565(0x7D, 0xCF, 0xFF),
+         },
+         {
+             // Purple, green and cyan from the scheme's own accents — 7.66, 9.69
+             // and 10.25:1. The widest usable spread on this list: Tokyo
+             // Night's accents are all bright enough to clear the floor, so
+             // here the choice was aesthetic rather than forced.
+             [DISPLAY_HUE_NEUTRAL] = RGB565(0xA9, 0xB1, 0xD6),
+             [DISPLAY_HUE_IDENTITY] = RGB565(0xBB, 0x9A, 0xF7),
+             [DISPLAY_HUE_ADDRESS] = RGB565(0x9E, 0xCE, 0x6A),
+             [DISPLAY_HUE_LINK] = RGB565(0x7D, 0xCF, 0xFF),
          }},
 
     // Monokai Pro, Filter Machine. background/text/dimmed1/accent5 straight
@@ -135,6 +176,16 @@ static const struct display_theme display_themes[DISPLAY_THEME_COUNT] = {
              [CANVAS_INK_PRIMARY] = RGB565(0xF2, 0xFF, 0xFC),
              [CANVAS_INK_SECONDARY] = RGB565(0xB8, 0xC4, 0xC3),
              [CANVAS_INK_ACCENT] = RGB565(0x7C, 0xD5, 0xF1),
+         },
+         {
+             // accent6, accent4, accent5 — 6.38, 9.35 and 8.43:1. Deliberately
+             // NOT accent1-3 (red, orange, yellow): those are alarm colours,
+             // and the LED owns alarm on this board (palette.h). A panel that
+             // goes amber for decoration teaches the operator to ignore amber.
+             [DISPLAY_HUE_NEUTRAL] = RGB565(0xB8, 0xC4, 0xC3),
+             [DISPLAY_HUE_IDENTITY] = RGB565(0xBA, 0xA0, 0xF8),
+             [DISPLAY_HUE_ADDRESS] = RGB565(0xA2, 0xE5, 0x7B),
+             [DISPLAY_HUE_LINK] = RGB565(0x7C, 0xD5, 0xF1),
          }},
 
     // One Dark Pro Night Flat (zhuangtongfa.Material-theme). editor.background
@@ -151,6 +202,15 @@ static const struct display_theme display_themes[DISPLAY_THEME_COUNT] = {
              [CANVAS_INK_PRIMARY] = RGB565(0xAB, 0xB2, 0xBF),
              [CANVAS_INK_SECONDARY] = RGB565(0x7F, 0x84, 0x8E),
              [CANVAS_INK_ACCENT] = RGB565(0x61, 0xAF, 0xEF),
+         },
+         {
+             // The scheme's purple, green and blue — 6.17, 9.01 and 7.57:1. Its
+             // yellow is the brightest thing it owns (10.71:1) and is still
+             // unused, for the alarm reason above.
+             [DISPLAY_HUE_NEUTRAL] = RGB565(0x7F, 0x84, 0x8E),
+             [DISPLAY_HUE_IDENTITY] = RGB565(0xC6, 0x78, 0xDD),
+             [DISPLAY_HUE_ADDRESS] = RGB565(0x98, 0xC3, 0x79),
+             [DISPLAY_HUE_LINK] = RGB565(0x61, 0xAF, 0xEF),
          }},
 
     // Monokai Pro Light. The only light theme, and the only one where the
@@ -172,6 +232,26 @@ static const struct display_theme display_themes[DISPLAY_THEME_COUNT] = {
              [CANVAS_INK_PRIMARY] = RGB565(0x29, 0x24, 0x2A),
              [CANVAS_INK_SECONDARY] = RGB565(0x70, 0x6B, 0x6E),
              [CANVAS_INK_ACCENT] = RGB565(0x1C, 0x8C, 0xA8),
+         },
+         {
+             // This theme CANNOT carry the full set, and that is a fact about
+             // light backgrounds rather than a gap to fill. A hue has to be
+             // darker than its background to read, and saturated hues sit at
+             // mid luminance, so against #faf4f2 the scheme's own accents
+             // measure green 3.23, blue 3.61, red 3.62, orange 3.23 and
+             // yellow 3.13 — every one under the 4.5:1 floor the rest of this
+             // file exists to enforce. (Monokai Pro Light does ship those
+             // colours on that background; the editor is simply not holding
+             // itself to WCAG AA, and a 33mm panel is not an editor.)
+             //
+             // Only accent6, purple, clears it, at 5.11:1. So this theme takes
+             // the one hue it can carry and leaves the other two plain. It is
+             // the quietest of the five on purpose: lowering the floor to
+             // decorate it would invert the point of the whole change.
+             [DISPLAY_HUE_NEUTRAL] = RGB565(0x70, 0x6B, 0x6E),
+             [DISPLAY_HUE_IDENTITY] = RGB565(0x70, 0x58, 0xBE),
+             [DISPLAY_HUE_ADDRESS] = RGB565(0x70, 0x6B, 0x6E),
+             [DISPLAY_HUE_LINK] = RGB565(0x70, 0x6B, 0x6E),
          }},
 
     // Solarized Dark — what shipped, kept so the comparison is honest and so
@@ -197,6 +277,29 @@ static const struct display_theme display_themes[DISPLAY_THEME_COUNT] = {
              [CANVAS_INK_PRIMARY] = RGB565_OF(SOL_BASE1),
              [CANVAS_INK_SECONDARY] = RGB565_OF(SOL_BASE0),
              [CANVAS_INK_ACCENT] = RGB565_OF(SOL_CYAN),
+         },
+         {
+             // Two of three, for the same honest reason as monokai-light above.
+             // Solarized's green (4.90:1) and cyan (5.00:1) clear the floor;
+             // its violet is 3.56 and its magenta 3.47, so IDENTITY stays
+             // plain. Its yellow would clear at 4.90 and is not used, because
+             // amber belongs to the LED.
+             //
+             // Be warned that the green is barely green: #859900 is
+             // (133,153,0), red and green almost equal with no blue at all,
+             // which is the exact fact palette.h records about why it reads
+             // YELLOW on an LED. As text on a dark panel it reads olive, not
+             // amber, and a hostname is not a row anyone scans for alarm — so
+             // it stays, but nobody should be surprised by it, and it is not
+             // a colour to copy into a row that does carry alarm.
+             //
+             // Narrow by construction: Solarized's accents share a lightness
+             // by design, which is exactly what makes it restful in an editor
+             // and flat on a status panel.
+             [DISPLAY_HUE_NEUTRAL] = RGB565_OF(SOL_BASE0),
+             [DISPLAY_HUE_IDENTITY] = RGB565_OF(SOL_BASE0),
+             [DISPLAY_HUE_ADDRESS] = RGB565_OF(SOL_GREEN),
+             [DISPLAY_HUE_LINK] = RGB565_OF(SOL_CYAN),
          }},
 };
 

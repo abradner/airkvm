@@ -171,6 +171,13 @@ void display_set_ink(enum display_ink ink) {
   (void)ink;
 }
 
+void display_set_hue(enum display_hue hue) {
+  // Same again, one step further: this panel has no palette at all, so a hue
+  // is not merely collapsed, it is meaningless. Accepting it keeps ui.c one
+  // file, and this board's rendering byte-identical.
+  (void)hue;
+}
+
 void display_clear(void) {
   canvas_clear(&s_canvas);
 }
@@ -230,6 +237,9 @@ void display_flush(void) {
 
 void display_set_ink(enum display_ink ink) {
   (void)ink;
+}
+void display_set_hue(enum display_hue hue) {
+  (void)hue;
 }
 esp_err_t display_init(void) {
   return ESP_ERR_NOT_SUPPORTED;

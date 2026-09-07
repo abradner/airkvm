@@ -72,7 +72,12 @@ static const char *TAG = "display";
 #define BAND_ROWS 8
 #define BAND_PIXELS (DISPLAY_WIDTH * BAND_ROWS)
 
-#define PAGES (canvas_pages(DISPLAY_HEIGHT))
+// Spelled out arithmetically rather than as canvas_pages(DISPLAY_HEIGHT),
+// because this now sizes a file-scope array and a static inline call is not a
+// constant expression there — GCC rejects it as "variably modified at file
+// scope". Identical value by construction, and s_bits below already spells the
+// same expression out for the same reason.
+#define PAGES ((DISPLAY_HEIGHT + 7) / 8)
 
 // The panel's four colours, expanded from the theme selected at build time
 // (theme.h). Indexed by canvas ink role, so expansion at flush is a lookup.
@@ -90,18 +95,69 @@ static const char *TAG = "display";
 // ARE. If a future panel wants natural order, this is the one place to change.
 #define BE16(v) ((uint16_t)((((v) & 0x00FF) << 8) | (((v) & 0xFF00) >> 8)))
 
-// Filled in display_init from display_themes[], rather than being a const
-// initialiser, for one reason worth stating: a const array cannot be indexed
-// by another const array at compile time in C, and resolving that with a
-// parallel set of per-theme macros would mean the table the host contrast test
-// reads and the table the panel draws from are two things that can disagree.
-// Eight bytes of BSS buys a single source of truth — and, incidentally, the
-// whole of runtime theme selection, should that ever be wanted (theme.h).
-static uint16_t s_palette[4];
+// One four-entry palette per hue, filled in display_init from
+// display_themes[]. Built at init rather than being a const initialiser for
+// one reason worth stating: a const array cannot be indexed by another const
+// array at compile time in C, and resolving that with a parallel set of
+// per-theme macros would mean the table the host contrast test reads and the
+// table the panel draws from are two things that can disagree. 32 bytes of BSS
+// buys a single source of truth — and, incidentally, the whole of runtime
+// theme selection, should that ever be wanted (theme.h).
+//
+// Only SECONDARY varies across hues. Background and PRIMARY are the theme's,
+// unconditionally, because the background changing per row would be stripes
+// and the address is the one thing whose colour must not depend on which
+// section it happens to sit in. ACCENT is the theme's too: there is exactly
+// one accent element on this panel and a signal bar that changed colour for
+// reasons unrelated to signal would be a worse instrument, not a prettier one.
+static uint16_t s_palettes[DISPLAY_HUE_COUNT][4];
+
+// Which hue each 8-row band is drawn in. This is how the panel gets more than
+// four colours without a third bit plane: the canvas stays 2bpp and 4 roles,
+// and the meaning of role 2 is resolved per band on the way out.
+//
+// One byte per band (22 on this panel) against 6880 for a third plane, on the
+// part where a full RGB565 framebuffer is exactly what does not fit.
+static uint8_t s_band_hue[PAGES];
+
+// A text row must not straddle a band, or two sections with different hues
+// would fight over the bytes they share and the loser's colour would bleed
+// halfway into the winner's row. With a 16px cell and 8px bands every row is
+// exactly two bands; this is what makes that a fact rather than a hope, and it
+// fails at compile time the moment someone changes the font.
+_Static_assert(DISPLAY_CELL_H % 8 == 0,
+               "the ST7789 backend resolves hue per 8-row band, so the "
+               "character cell must be a whole number of bands");
+
+static uint8_t s_hue;  // pen hue, like canvas.ink is the pen colour
 
 static void palette_load(const struct display_theme *t) {
-  for (int i = 0; i < 4; i++) {
-    s_palette[i] = BE16(t->ink[i]);
+  for (int h = 0; h < DISPLAY_HUE_COUNT; h++) {
+    s_palettes[h][CANVAS_INK_NONE] = BE16(t->ink[CANVAS_INK_NONE]);
+    s_palettes[h][CANVAS_INK_PRIMARY] = BE16(t->ink[CANVAS_INK_PRIMARY]);
+    s_palettes[h][CANVAS_INK_SECONDARY] = BE16(t->hue[h]);
+    s_palettes[h][CANVAS_INK_ACCENT] = BE16(t->ink[CANVAS_INK_ACCENT]);
+  }
+}
+
+// Records the pen hue against every band a draw touches. Called by the draw
+// entry points rather than by canvas.h, deliberately: canvas.h is the shared
+// 1bpp layer and knows nothing about colour, and teaching it about hues would
+// put a colour concept in the one file the monochrome dongle also compiles.
+static void mark_bands(int y0, int height) {
+  if (s_hue == DISPLAY_HUE_NEUTRAL) {
+    return;  // the value display_clear already left there
+  }
+  int first = y0 / 8;
+  int last = (y0 + height - 1) / 8;
+  if (first < 0) {
+    first = 0;
+  }
+  if (last > PAGES - 1) {
+    last = PAGES - 1;
+  }
+  for (int p = first; p <= last; p++) {
+    s_band_hue[p] = s_hue;
   }
 }
 
@@ -127,8 +183,17 @@ static uint8_t s_bits_hi[sizeof(s_bits)];
 // different page rows hashing equal, leaving one stale until it next changes)
 // against 14KB, and at these odds on a status screen that is not a real risk.
 static uint32_t s_shadow_crc[(DISPLAY_HEIGHT + 7) / 8];
-static uint32_t page_crc(const uint8_t *lo, const uint8_t *hi, int n) {
+static uint32_t page_crc(const uint8_t *lo, const uint8_t *hi, int n,
+                         uint8_t hue) {
   uint32_t h = 2166136261u;  // FNV-1a
+  // The hue is part of what a band LOOKS like, so it has to be part of what
+  // decides the band is dirty. Without it, a section that changes colour with
+  // its pixels unchanged — a row switching hue while showing the same text —
+  // hashes identically, the band is skipped, and the panel keeps the old
+  // colour until something else happens to disturb those bytes. That is the
+  // stale-patch failure this dirty check was written to avoid, arriving by a
+  // route the original had no way to see.
+  h = (h ^ hue) * 16777619u;
   for (int i = 0; i < n; i++) {
     h = (h ^ lo[i]) * 16777619u;
     h = (h ^ hi[i]) * 16777619u;
@@ -286,16 +351,29 @@ bool display_present(void) {
 
 void display_clear(void) {
   canvas_clear(&s_canvas);
+  // Both the pen and every band go back to neutral. A frame that forgets to
+  // set a hue for some section then draws it quiet, rather than inheriting
+  // whatever the previous frame happened to leave in that band — which would
+  // be a colour that depends on draw history, i.e. a colour nobody can reason
+  // about from reading draw().
+  memset(s_band_hue, DISPLAY_HUE_NEUTRAL, sizeof(s_band_hue));
+  s_hue = DISPLAY_HUE_NEUTRAL;
 }
 
 void display_set_ink(enum display_ink ink) {
   canvas_set_ink(&s_canvas, (uint8_t)ink);
 }
 
+void display_set_hue(enum display_hue hue) {
+  s_hue = (uint8_t)(hue < DISPLAY_HUE_COUNT ? hue : DISPLAY_HUE_NEUTRAL);
+}
+
 void display_pixel(int x, int y, bool on) {
   if (!s_present) {
     return;
   }
+  // Deliberately does not mark a band. Its only caller is the screensaver,
+  // which owns the whole panel and has no sections to colour.
   canvas_pixel(&s_canvas, x, y, on);
 }
 
@@ -305,6 +383,7 @@ void display_text(int col, int row, const char *text) {
   }
   canvas_text(&s_canvas, col * DISPLAY_CELL_W, row * DISPLAY_CELL_H, text, 1,
               1);
+  mark_bands(row * DISPLAY_CELL_H, DISPLAY_CELL_H);
 }
 
 void display_text_tall(int col, int y_px, const char *text) {
@@ -313,6 +392,7 @@ void display_text_tall(int col, int y_px, const char *text) {
   }
   canvas_text(&s_canvas, col * DISPLAY_CELL_W, y_px, text, BOARD_TALL_SX,
               BOARD_TALL_SY);
+  mark_bands(y_px, s_canvas.font->glyph_h * BOARD_TALL_SY);
 }
 
 void display_bar(int col, int row, int width, int filled) {
@@ -320,6 +400,7 @@ void display_bar(int col, int row, int width, int filled) {
     return;
   }
   canvas_bar(&s_canvas, col, row, width, filled, 1, 1);
+  mark_bands(row * DISPLAY_CELL_H, DISPLAY_CELL_H);
 }
 
 void display_flush(void) {
@@ -329,7 +410,7 @@ void display_flush(void) {
   for (int page = 0; page < PAGES; page++) {
     const uint8_t *lo = &s_bits[page * DISPLAY_WIDTH];
     const uint8_t *hi = &s_bits_hi[page * DISPLAY_WIDTH];
-    const uint32_t crc = page_crc(lo, hi, DISPLAY_WIDTH);
+    const uint32_t crc = page_crc(lo, hi, DISPLAY_WIDTH, s_band_hue[page]);
     if (!s_never_flushed && crc == s_shadow_crc[page]) {
       continue;
     }
@@ -343,13 +424,15 @@ void display_flush(void) {
     // Wait for the previous band before overwriting the buffer it is still
     // being read from.
     xSemaphoreTake(s_band_free, portMAX_DELAY);
+    // One indirection per band, not per pixel: the inner loop is unchanged.
+    const uint16_t *pal = s_palettes[s_band_hue[page]];
     for (int r = 0; r < rows; r++) {
       uint16_t *out = &s_band[r * DISPLAY_WIDTH];
       const uint8_t mask = (uint8_t)(1u << r);
       for (int x = 0; x < DISPLAY_WIDTH; x++) {
         const uint8_t ink =
             (uint8_t)(((lo[x] & mask) ? 1u : 0u) | ((hi[x] & mask) ? 2u : 0u));
-        out[x] = s_palette[ink];
+        out[x] = pal[ink];
       }
     }
     if (esp_lcd_panel_draw_bitmap(s_panel, 0, y0, DISPLAY_WIDTH, y0 + rows,
@@ -373,6 +456,9 @@ bool display_present(void) {
 void display_clear(void) {}
 void display_set_ink(enum display_ink ink) {
   canvas_set_ink(&s_canvas, (uint8_t)ink);
+}
+void display_set_hue(enum display_hue hue) {
+  (void)hue;
 }
 
 void display_pixel(int x, int y, bool on) {

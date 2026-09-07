@@ -158,6 +158,62 @@ static void every_theme_clears_the_contrast_floor(void) {
 // address is the thing read first. A theme whose secondary out-contrasts its
 // primary inverts that, still clears every floor above, and looks merely
 // "wrong" on hardware in a way nobody would trace back to a colour table.
+// A hue is SECONDARY text in a different colour, so it is text, so it is held
+// to the text floor. This is the assertion that stops "a little more
+// personality" from quietly undoing the change this whole file exists for: it
+// is exactly the pressure that produced the 2.87:1 row in the first place.
+static void every_hue_clears_the_text_floor(void) {
+  for (int i = 0; i < DISPLAY_THEME_COUNT; i++) {
+    const struct display_theme *t = &display_themes[i];
+    const uint16_t bg = t->ink[CANVAS_INK_NONE];
+    for (int h = 0; h < DISPLAY_HUE_COUNT; h++) {
+      const double c = contrast(t->hue[h], bg);
+      if (c < MIN_TEXT_CONTRAST) {
+        fprintf(stderr, "  theme %s: hue %d is %.2f, under the %.1f floor\n",
+                t->name, h, c, MIN_TEXT_CONTRAST);
+      }
+      CHECK(c >= MIN_TEXT_CONTRAST);
+    }
+  }
+}
+
+// NEUTRAL is not a colour a theme chooses, it is the theme's own SECONDARY.
+// Holding that structurally is what lets "this theme has no hue it can carry
+// for this section" be expressed by assignment rather than by a sentinel the
+// backend would have to branch on — and monokai-light and solarized-dark both
+// genuinely need to express it.
+static void the_neutral_hue_is_the_theme_secondary(void) {
+  for (int i = 0; i < DISPLAY_THEME_COUNT; i++) {
+    const struct display_theme *t = &display_themes[i];
+    CHECK(t->hue[DISPLAY_HUE_NEUTRAL] == t->ink[CANVAS_INK_SECONDARY]);
+  }
+}
+
+// A theme that declines a hue is fine; a theme that declines all of them is a
+// theme with no personality, which is what this change exists to fix. Checked
+// per theme so the failure names the one that went flat — with monokai-light
+// exempt, because a near-white background genuinely cannot carry a second
+// legible hue and pretending otherwise is how the floor gets lowered.
+static void every_dark_theme_carries_at_least_one_hue(void) {
+  for (int i = 0; i < DISPLAY_THEME_COUNT; i++) {
+    if (i == DISPLAY_THEME_MONOKAI_LIGHT) {
+      continue;
+    }
+    const struct display_theme *t = &display_themes[i];
+    int distinct = 0;
+    for (int h = DISPLAY_HUE_NEUTRAL + 1; h < DISPLAY_HUE_COUNT; h++) {
+      if (t->hue[h] != t->ink[CANVAS_INK_SECONDARY]) {
+        distinct++;
+      }
+    }
+    if (distinct == 0) {
+      fprintf(stderr, "  theme %s has no hue distinct from its secondary\n",
+              t->name);
+    }
+    CHECK(distinct > 0);
+  }
+}
+
 static void primary_outranks_secondary_in_every_theme(void) {
   for (int i = 0; i < DISPLAY_THEME_COUNT; i++) {
     const struct display_theme *t = &display_themes[i];
@@ -238,6 +294,9 @@ int main(void) {
   RUN(the_original_solarized_secondary_would_fail);
   RUN(every_theme_is_complete_and_named);
   RUN(every_theme_clears_the_contrast_floor);
+  RUN(every_hue_clears_the_text_floor);
+  RUN(the_neutral_hue_is_the_theme_secondary);
+  RUN(every_dark_theme_carries_at_least_one_hue);
   RUN(primary_outranks_secondary_in_every_theme);
   RUN(every_role_in_a_theme_is_distinct);
   RUN(the_selected_theme_is_in_range);

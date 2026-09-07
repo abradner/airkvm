@@ -2,7 +2,7 @@
 
 Host renders of `main/ui.c`'s status screen in each theme, produced by
 `tools/preview_ui.py` from the real font tables, the real layout offsets, and
-the real `main/theme.h` colour table — quantised to RGB565, so these show what
+the real `main/theme.h` colour table, including the per-section hues, resolved per 8-row band exactly as `display_st7789.c` resolves them — quantised to RGB565, so these show what
 the panel can produce rather than what each source scheme asked for.
 
 **These are renders, not photographs (R-005).** They are proof that the layout

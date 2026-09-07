@@ -175,6 +175,17 @@ static void draw(const struct status_snapshot *s) {
   // stays one draw() for both boards.
   display_set_ink(DISPLAY_INK_SECONDARY);
 
+  // Hue is set alongside ink, and the two are orthogonal: ink is the hierarchy
+  // (what you read first), hue is which of the theme's complementary colours
+  // this section belongs to. Sections read as sections rather than as six
+  // lines of the same grey. Also a no-op on the single-colour panel, so this
+  // stays one draw() for both boards.
+  //
+  // Deliberately restrained to three coloured sections plus neutral. A screen
+  // where everything is a different colour has no hierarchy either — it has
+  // just moved the problem.
+  display_set_hue(DISPLAY_HUE_IDENTITY);
+
   // Identity, and who holds the keyboard — the thing you check first when the
   // console feels unresponsive, so it sits top-right.
   display_text(UI_X_COL, UI_Y_HEADER / DISPLAY_CELL_H, "AIRKVM");
@@ -188,7 +199,13 @@ static void draw(const struct status_snapshot *s) {
   // The address is the only PRIMARY thing on the screen. Everything else is
   // context for it, and dimming the context is what makes it stand out —
   // cheaper and calmer than making the address itself louder.
+  //
+  // Its hue is NEUTRAL and that is not an oversight: PRIMARY does not take a
+  // hue at all (see theme.h), so the address is the same colour in every
+  // section and in every frame. The one thing on the panel that must never
+  // look like it changed meaning is the number you type into a browser.
   display_set_ink(DISPLAY_INK_PRIMARY);
+  display_set_hue(DISPLAY_HUE_NEUTRAL);
   display_text_tall(UI_X_COL, UI_Y_ADDRESS,
                     s->wifi_connected ? s->ip : "NO WIFI");
   display_set_ink(DISPLAY_INK_SECONDARY);
@@ -200,11 +217,17 @@ static void draw(const struct status_snapshot *s) {
   if (s->wifi_connected) {
     char host[DISPLAY_COLS + 1];
     snprintf(host, sizeof(host), "%s.local", CONFIG_AIRKVM_MDNS_HOSTNAME);
+    display_set_hue(DISPLAY_HUE_ADDRESS);
     display_text(UI_X_COL, UI_Y_MDNS / DISPLAY_CELL_H, host);
   }
 #endif
 
   if (s->wifi_connected) {
+    // SSID and signal bar share a hue because they answer one question. The
+    // bar keeps the theme's accent colour regardless (theme.h): a signal bar
+    // that changed colour for a reason unrelated to signal would be a worse
+    // instrument, and each theme's LINK hue is picked to sit beside it.
+    display_set_hue(DISPLAY_HUE_LINK);
     display_text(UI_X_COL, UI_Y_NETWORK / DISPLAY_CELL_H, s->ssid);
     // The only non-text element, and the only accent on the panel. Note it is
     // NOT a warning colour: a weak signal shows amber on the LED, which is
@@ -218,6 +241,13 @@ static void draw(const struct status_snapshot *s) {
   // Whether a target is actually listening, and proof that input is arriving —
   // together these separate "my input isn't getting there" from "the target is
   // ignoring me", which is the question this device gets used to answer.
+  //
+  // Neutral, and the last coloured section is above this one. The USB row is
+  // the one that gets read when something is wrong, and a colour of its own
+  // would either compete with the LED (which already says fault) or have to
+  // mean nothing, which is worse on a row that looks like it means something.
+  display_set_hue(DISPLAY_HUE_NEUTRAL);
+
   char line[DISPLAY_COLS + 1];
   if (s->usb_mounted && s->usb_suspended) {
     // Enumerated, but the target has parked the bus: nothing typed now will
@@ -256,6 +286,12 @@ static void draw(const struct status_snapshot *s) {
   // board does not have, and drawing the row in a deliberately illegible
   // colour would be security by squinting.
   if (s->debug) {
+    // NEUTRAL, explicitly, and this one is a security parameter like the cell
+    // size above it (R-006). It is already neutral by inheritance from the
+    // target row; saying it here means a future reordering of draw() cannot
+    // quietly hand the keystroke row a colour, and a reviewer sees the intent
+    // rather than having to trace the pen back through the function.
+    display_set_hue(DISPLAY_HUE_NEUTRAL);
     display_text(UI_X_COL, UI_Y_DEBUG / DISPLAY_CELL_H,
                  s->last_event[0] ? s->last_event : "DEBUG ON");
   }

@@ -75,6 +75,7 @@ def q565(rgb):
 
 
 ROLE_INDEX = {"NONE": 0, "PRIMARY": 1, "SECONDARY": 2, "ACCENT": 3}
+HUE_INDEX = {"NEUTRAL": 0, "IDENTITY": 1, "ADDRESS": 2, "LINK": 3}
 
 
 def parse_themes():
@@ -88,21 +89,29 @@ def parse_themes():
         src,
         re.S,
     ):
-        roles = [None] * 4
-        for role, macro, args in re.findall(
-            r"\[CANVAS_INK_(\w+)\]\s*=\s*(RGB565_OF|RGB565)\(([^)]*)\)", body
-        ):
-            if macro == "RGB565_OF":
-                key = args.strip()
-                if key not in triples:
-                    sys.exit(f"{name}: palette.h has no {key}")
-                rgb = triples[key]
-            else:
-                rgb = tuple(int(v.strip(), 16) for v in args.split(","))
-            roles[ROLE_INDEX[role]] = q565(rgb)
-        if any(r is None for r in roles):
-            sys.exit(f"{name}: theme is missing an ink role")
-        themes[name] = roles
+
+        def slots(kind, index):
+            out = [None] * len(index)
+            for key, macro, args in re.findall(
+                rf"\[{kind}_(\w+)\]\s*=\s*(RGB565_OF|RGB565)\(([^)]*)\)", body
+            ):
+                if key not in index:
+                    continue  # e.g. CANVAS_INK_COUNT-style names, if ever added
+                if macro == "RGB565_OF":
+                    if args.strip() not in triples:
+                        sys.exit(f"{name}: palette.h has no {args.strip()}")
+                    rgb = triples[args.strip()]
+                else:
+                    rgb = tuple(int(v.strip(), 16) for v in args.split(","))
+                out[index[key]] = q565(rgb)
+            if any(v is None for v in out):
+                sys.exit(f"{name}: theme is missing a {kind} entry")
+            return out
+
+        themes[name] = {
+            "ink": slots("CANVAS_INK", ROLE_INDEX),
+            "hue": slots("DISPLAY_HUE", HUE_INDEX),
+        }
     if not themes:
         sys.exit("no themes parsed from main/theme.h")
     return themes
@@ -161,9 +170,27 @@ class Canvas:
         # Stores the ink ROLE per pixel (0..3), matching canvas.h's two planes.
         self.px = [[0] * w for _ in range(h)]
         self.ink = 1
+        # Hue per 8-row band, matching display_st7789.c exactly — the panel
+        # resolves SECONDARY per band rather than per pixel, because a third
+        # bit plane is 7KB of heap it does not have. Mirrored at the same
+        # granularity so this preview shows the real mechanism, including its
+        # limits, rather than an idealised version of it.
+        self.hue = 0
+        self.band_hue = [0] * ((h + 7) // 8)
 
     def set_ink(self, ink):
         self.ink = ink
+
+    def set_hue(self, hue):
+        self.hue = hue
+
+    def mark_bands(self, y0, height):
+        if self.hue == 0:
+            return
+        for band in range(
+            max(0, y0 // 8), min(len(self.band_hue), (y0 + height - 1) // 8 + 1)
+        ):
+            self.band_hue[band] = self.hue
 
     def pixel(self, x, y, on=True):
         if 0 <= x < self.w and 0 <= y < self.h:
@@ -187,6 +214,11 @@ class Canvas:
                                 self.pixel(x + gx * sx + rx, y + gy * sy + ry)
             x += f["advance"] * sx
 
+    def text_row(self, x, y, s, sx=1, sy=1):
+        """text() plus the band marking the firmware's display_text does."""
+        self.text(x, y, s, sx, sy)
+        self.mark_bands(y, self.font["glyph_h"] * sy)
+
     def bar(self, col, row, width, filled, sx=1, sy=1):
         f = self.font
         x0, y0 = col * f["advance"] * sx, row * f["line_h"] * sy
@@ -197,49 +229,68 @@ class Canvas:
                 for gy in range(bh):
                     edge = gy in (0, bh - 1) or gx in (0, bw - 1)
                     self.pixel(x0 + i * f["advance"] * sx + gx, y0 + gy, on or edge)
+        self.mark_bands(row * f["line_h"] * sy, f["line_h"] * sy)
 
 
 def draw_status(c, y, tall, mdns, ip, ssid, rssi_bars, events, usb, bound, debug):
-    """Mirrors main/ui.c draw(). Keep in step with it by hand."""
+    """Mirrors main/ui.c draw(), hues included. Keep in step with it by hand."""
     f = c.font
     cols = c.w // f["advance"]
     cell_h = f["line_h"]
     x0 = y["X_COL"] * f["advance"]
+
     c.set_ink(2)
-    c.text(x0, y["HEADER"], "AIRKVM")
-    c.text((cols - 7) * f["advance"], y["HEADER"], "BOUND" if bound else "IDLE")
+    c.set_hue(HUE_INDEX["IDENTITY"])
+    c.text_row(x0, y["HEADER"], "AIRKVM")
+    c.text_row((cols - 7) * f["advance"], y["HEADER"], "BOUND" if bound else "IDLE")
+
+    # PRIMARY takes no hue: the address is the same colour in every frame.
     c.set_ink(1)
-    c.text(x0, y["ADDRESS"], ip or "NO WIFI", *tall)
+    c.set_hue(HUE_INDEX["NEUTRAL"])
+    c.text_row(x0, y["ADDRESS"], ip or "NO WIFI", *tall)
+
     c.set_ink(2)
     if y["MDNS"] is not None:
-        c.text(x0, y["MDNS"], f"{mdns}.local")
-    c.text(x0, y["NETWORK"], ssid)
+        c.set_hue(HUE_INDEX["ADDRESS"])
+        c.text_row(x0, y["MDNS"], f"{mdns}.local")
+
+    c.set_hue(HUE_INDEX["LINK"])
+    c.text_row(x0, y["NETWORK"], ssid)
     c.set_ink(3)
     c.bar(cols - 4, y["NETWORK"] // cell_h, 4, rssi_bars)
+
     c.set_ink(2)
-    c.text(x0, y["TARGET"], f"{'USB OK' if usb else 'NO HID'}  {events}")
+    c.set_hue(HUE_INDEX["NEUTRAL"])
+    c.text_row(x0, y["TARGET"], f"{'USB OK' if usb else 'NO HID'}  {events}")
     if debug:
-        c.text(x0, y["DEBUG"], debug)
+        # Neutral, and that is R-006 rather than taste — see main/ui.c.
+        c.set_hue(HUE_INDEX["NEUTRAL"])
+        c.text_row(x0, y["DEBUG"], debug)
 
 
 def ascii_art(c):
     return "\n".join("".join("#" if v else "." for v in row) for row in c.px)
 
 
-def render_png(c, path, colours, mono):
-    """One PNG. `colours` is a role->rgb list; `mono` renders every role lit."""
+def render_png(c, path, theme, mono):
+    """One PNG. `theme` is a parsed theme dict; `mono` renders every role lit."""
     from PIL import Image
 
     scale = 2 if c.w > 200 else 6
-    bg = (0, 0, 0) if mono else colours[0]
+    bg = (0, 0, 0) if mono else theme["ink"][0]
     img = Image.new("RGB", (c.w * scale, c.h * scale), bg)
     px = img.load()
     for yy in range(c.h):
+        # SECONDARY resolves through the band's hue; every other role is the
+        # theme's, exactly as display_st7789.c builds its per-hue palettes.
+        if not mono:
+            pal = list(theme["ink"])
+            pal[2] = theme["hue"][c.band_hue[yy // 8]]
         for xx in range(c.w):
             role = c.px[yy][xx]
             if not role:
                 continue
-            col = (230, 230, 230) if mono else colours[role]
+            col = (230, 230, 230) if mono else pal[role]
             for dy in range(scale):
                 for dx in range(scale):
                     px[xx * scale + dx, yy * scale + dy] = col
@@ -254,13 +305,16 @@ def print_contrast(themes):
     when a theme drops below the floor. Deleting this function would cost a
     convenient table and nothing else.
     """
-    print(f"{'theme':22} {'PRIMARY':>8} {'SECONDARY':>10} {'ACCENT':>8}")
-    for name, roles in themes.items():
-        bg = roles[0]
-        print(
-            f"{name:22} {contrast(roles[1], bg):8.2f} "
-            f"{contrast(roles[2], bg):10.2f} {contrast(roles[3], bg):8.2f}"
+    hue_names = [n for n, _ in sorted(HUE_INDEX.items(), key=lambda kv: kv[1])]
+    head = f"{'theme':22} {'PRIMARY':>8} {'SECONDARY':>10} {'ACCENT':>8}"
+    print(head + "".join(f"{n:>10}" for n in hue_names[1:]))
+    for name, t in themes.items():
+        bg = t["ink"][0]
+        row = (
+            f"{name:22} {contrast(t['ink'][1], bg):8.2f} "
+            f"{contrast(t['ink'][2], bg):10.2f} {contrast(t['ink'][3], bg):8.2f}"
         )
+        print(row + "".join(f"{contrast(h, bg):10.2f}" for h in t["hue"][1:]))
     print("\n(WCAG ratios on the RGB565-quantised colours — what the panel shows.)")
 
 
@@ -314,10 +368,12 @@ def main():
         # Rendering it five times in five colour schemes would be a picture of
         # a feature that board does not have.
         if font["name"] == "3x5":
-            render_png(c, f"{args.png}-{name}.png", None, mono=True)
+            render_png(
+                c, f"{args.png}-{name}.png", next(iter(themes.values())), mono=True
+            )
             continue
-        for theme, colours in themes.items():
-            render_png(c, f"{args.png}-{name}-{theme}.png", colours, mono=False)
+        for theme, parsed in themes.items():
+            render_png(c, f"{args.png}-{name}-{theme}.png", parsed, mono=False)
 
 
 if __name__ == "__main__":
