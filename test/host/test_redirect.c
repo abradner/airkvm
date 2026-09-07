@@ -98,6 +98,17 @@ static void header_injection_is_refused(void) {
   CHECK(!build("evil?query", "/"));
   CHECK(!build("user@evil", "/"));
 
+  // Bytes AFTER the port colon are validated too, even though they are
+  // discarded rather than echoed. Stopping validation at the colon accepted
+  // these, which made "we refuse anything we do not recognise" untrue.
+  CHECK(!build("safe.example:bad suffix", "/"));
+  CHECK(!build("safe.example:\r\nX: y", "/"));
+  CHECK(!build("safe.example:80junk\n", "/"));
+  // ...and a well-formed port still passes, so the check is not just refusing
+  // everything with a colon in it.
+  CHECK(build("safe.example:8443", "/"));
+  CHECK_EQ_STR(g_out, "https://safe.example/");
+
   // And a newline arriving via the request target is refused too, even though
   // the server's own parser should never produce one.
   CHECK(!build("airkvm-lcd.local", "/a\r\nX: y"));

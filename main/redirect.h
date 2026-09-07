@@ -9,10 +9,13 @@
 // What this is NOT worried about: someone setting `Host: evil.example` and
 // being redirected there. They would only be redirecting themselves — an open
 // redirect is a phishing tool because it borrows a *trusted* domain's
-// reputation, and a LAN dongle with an operator-run CA has none to borrow. The
-// header-injection risk is real and is what the charset check exists for; the
-// open-redirect risk is noted, judged not to apply, and the strict charset
-// happens to close it anyway.
+// reputation, and a LAN dongle with an operator-run CA has none to borrow.
+//
+// Note the allowlist does NOT prevent that: `evil.example` is entirely legal
+// characters and produces `Location: https://evil.example/`. The behaviour is
+// accepted on the argument above, not blocked — an earlier version of this
+// comment claimed the charset closed it, which was simply false. The charset
+// exists for header injection, which is a different risk and is closed.
 #pragma once
 
 #include <stdbool.h>
@@ -55,20 +58,30 @@ static inline bool redirect_location(const char *host, const char *uri,
     return false;
   }
 
-  // Find the end of the host, excluding any ":port". Scanning for the LAST
-  // colon would be wrong for an IPv6 literal, whose address is full of them,
-  // so the port is only recognised after a closing bracket or when there is no
-  // bracket at all.
+  // Validate the ENTIRE value first, including whatever follows the port
+  // colon. Stopping at the colon would accept `example.com:bad suffix` and
+  // silently drop the tail — the tail never reaches Location, so nothing is
+  // forged, but "we refuse anything we do not recognise" then would not be
+  // true, and a fail-closed validator that quietly tolerates garbage is a
+  // validator nobody can reason about.
+  size_t total = 0;
+  for (; host[total] != '\0'; total++) {
+    if (total >= REDIRECT_MAX_HOST) {
+      return false;
+    }
+    if (!redirect_host_char_ok(host[total])) {
+      return false;
+    }
+  }
+
+  // Now find the end of the host proper, excluding any ":port". Scanning for
+  // the LAST colon would be wrong for an IPv6 literal, whose address is full
+  // of them, so the port is only recognised after a closing bracket or when
+  // there is no bracket at all.
   size_t host_len = 0;
-  bool bracketed = host[0] == '[';
+  const bool bracketed = host[0] == '[';
   bool closed = false;
-  for (size_t i = 0; host[i] != '\0'; i++) {
-    if (i >= REDIRECT_MAX_HOST) {
-      return false;
-    }
-    if (!redirect_host_char_ok(host[i])) {
-      return false;
-    }
+  for (size_t i = 0; i < total; i++) {
     if (host[i] == ']') {
       closed = true;
     }

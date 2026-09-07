@@ -42,7 +42,7 @@ CONFIG_TINYUSB_MSC_BUFSIZE=4096
 # them at runtime; the check cannot catch an over-subscribed sum. If you add a
 # fourth listener, do this arithmetic again. This is an EXISTING symbol
 # in any generated sdkconfig from before: a defaults file cannot change it
-# (AGENTS.md §6.1). Delete or edit your sdkconfig and confirm 16 in
+# (AGENTS.md §6.1). Delete or edit your sdkconfig and confirm 20 in
 # build/config/sdkconfig.h, or the failure is a runtime accept()/socket()
 # ENFILE on whichever of TLS accept and mDNS loses.
 CONFIG_LWIP_MAX_SOCKETS=20
