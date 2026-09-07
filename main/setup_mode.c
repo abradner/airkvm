@@ -235,6 +235,22 @@ static esp_err_t start_ap(char *ssid, char *psk) {
     ESP_LOGW(TAG, "captive-portal DHCP option not set (%s)",
              esp_err_to_name(opt));
   }
+  // The DNS option names this address — explicitly. It used to arrive by
+  // accident: with CONFIG_LWIP_DHCPS_ADD_DNS the server offered itself
+  // whenever the flag was off, which is off in sdkconfig.defaults now
+  // because the USB link must offer nothing (usb_net.h). Not best effort:
+  // the captive pop-up on a phone depends on this, and a silent miss would
+  // present as "the portal works if you type the address", which is
+  // exactly the report nobody files.
+  esp_netif_dns_info_t dns = {.ip = {.type = ESP_IPADDR_TYPE_V4}};
+  dns.ip.u_addr.ip4 = ip_info.ip;
+  ESP_RETURN_ON_ERROR(esp_netif_set_dns_info(s_ap, ESP_NETIF_DNS_MAIN, &dns),
+                      TAG, "ap dns address");
+  uint8_t on = 1;
+  ESP_RETURN_ON_ERROR(
+      esp_netif_dhcps_option(s_ap, ESP_NETIF_OP_SET,
+                             ESP_NETIF_DOMAIN_NAME_SERVER, &on, sizeof(on)),
+      TAG, "ap dns option");
   (void)esp_netif_dhcps_start(s_ap);
 
   BaseType_t ok = xTaskCreate(dns_task, "captive_dns", 3072,

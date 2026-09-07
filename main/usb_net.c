@@ -76,11 +76,13 @@ static const tusb_desc_device_t s_device_desc = {
     .bDeviceProtocol = MISC_PROTOCOL_IAD,
     .bMaxPacketSize0 = CFG_TUD_ENDPOINT0_SIZE,
     .idVendor = 0x303A,
-    // Espressif's PID map has no bit for the network class, so 0x4000 —
-    // their value for "no mapped class" — is the one their own descriptor
-    // would produce for this interface set. It is distinct from the normal
-    // image's 0x4006 (HID + MSC) on purpose: hosts cache descriptors per
-    // VID/PID, and this device has a completely different shape.
+    // Espressif's PID map has no bit for the network class; 0x4000 is its
+    // value for a device presenting none of the mapped classes, which is
+    // what this descriptor does. (Their own descriptor for this *build*
+    // would say 0x400A, because the map reads what is compiled in, not
+    // what is presented — HID and MSC are compiled in and absent here.)
+    // Distinct from the normal image's 0x4006 on purpose: hosts cache
+    // descriptors per VID/PID, and this device has a different shape.
     .idProduct = 0x4000,
     .bcdDevice = 0x0100,
     .iManufacturer = 0x01,
@@ -170,8 +172,20 @@ static esp_err_t start_netif(const uint8_t lwip_mac[6]) {
     esp_netif_destroy(netif);  // never started; nothing else holds it
     return err;
   }
-  s_netif = netif;
+  // esp_netif_action_start is a void wrapper that discards esp_netif_start's
+  // result, and esp_netif_start itself has no public header — so the DHCP
+  // server's status is read back instead, because a link whose server
+  // failed to start must not be reported as working (the panel would show
+  // an address nobody can obtain).
   esp_netif_action_start(netif, NULL, 0, NULL);
+  esp_netif_dhcp_status_t dhcps = ESP_NETIF_DHCP_INIT;
+  if (esp_netif_dhcps_get_status(netif, &dhcps) != ESP_OK ||
+      dhcps != ESP_NETIF_DHCP_STARTED) {
+    ESP_LOGE(TAG, "DHCP server did not start (status %d)", (int)dhcps);
+    esp_netif_destroy(netif);
+    return ESP_FAIL;
+  }
+  s_netif = netif;
   return ESP_OK;
 }
 
@@ -181,9 +195,11 @@ static esp_err_t configure_netif(esp_netif_t *netif,
                       "set mac");
 
   // DHCP shape, set while the server is still stopped (AUTOUP starts it in
-  // esp_netif_action_start below). Router and DNS options OFF is the whole
-  // point of this module (usb_net.h): the host gets an address on this link
-  // and no reason to send anything else through it. Option 114 is the
+  // esp_netif_start below). Router and DNS options OFF is the whole point
+  // of this module (usb_net.h): the host gets an address on this link and
+  // no reason to send anything else through it. DNS off only means "no
+  // option" because CONFIG_LWIP_DHCPS_ADD_DNS is off (sdkconfig.defaults
+  // says why; CI checks the header). Option 114 is the
   // captive-portal hint, harmless where ignored.
   uint32_t lease_min = 1;
   uint8_t off = 0;
@@ -246,10 +262,18 @@ esp_err_t usb_net_start(void) {
       .on_recv_callback = on_usb_recv,
   };
   memcpy(net.mac_addr, dev_mac, sizeof(net.mac_addr));
-  ESP_RETURN_ON_ERROR(tinyusb_net_init(TINYUSB_USBDEV_0, &net), TAG,
-                      "tinyusb_net_init failed");
-
-  ESP_RETURN_ON_ERROR(start_netif(lwip_mac), TAG, "netif");
+  esp_err_t err = tinyusb_net_init(TINYUSB_USBDEV_0, &net);
+  if (err == ESP_OK) {
+    err = start_netif(lwip_mac);
+  }
+  if (err != ESP_OK) {
+    // Not half a device: an adapter that enumerates and never gets an
+    // address is worse than none, and the header promises none.
+    ESP_LOGE(TAG, "USB link failed (%s); uninstalling USB",
+             esp_err_to_name(err));
+    (void)tinyusb_driver_uninstall();
+    return err;
+  }
   ESP_LOGI(TAG, "USB network device up at %s (PID 0x4000, %d itfs)",
            USB_NET_IP_STR, ITF_COUNT);
   return ESP_OK;
