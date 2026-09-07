@@ -111,9 +111,16 @@ config AIRKVM_WIFI_SSID
     string "WiFi SSID"
     default ""
     help
-        Network the dongle joins. Required — there is deliberately no default,
-        because a plausible-looking wrong value fails as a radio problem rather
-        than as a config problem (AGENTS.md §8).
+        Network the dongle joins on a fresh flash. Once the radio has a stored
+        configuration (this value after first boot, or whatever setup mode
+        saves once it exists — the 5 s BOOT hold is landed, the mode is the
+        next change), the stored one wins and this is ignored. Until setup
+        mode lands, a stale stored network is dropped by erasing the nvs
+        partition (`idf.py erase-flash`).
+
+        No default: a plausible-looking wrong value fails as a radio problem
+        rather than as a config problem (AGENTS.md §8). With neither source
+        the dongle boots without WiFi and the panel says how to set it up.
 
 config AIRKVM_WIFI_PASSWORD
     string "WiFi password"

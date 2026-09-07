@@ -56,6 +56,12 @@ void status_set_wifi(bool connected, const char *ip, const char *ssid) {
   UNLOCK();
 }
 
+void status_set_no_credentials(void) {
+  LOCK();
+  s_state.no_credentials = true;
+  UNLOCK();
+}
+
 void status_set_rssi(int8_t rssi) {
   LOCK();
   s_state.rssi = rssi;
