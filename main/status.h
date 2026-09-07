@@ -16,6 +16,11 @@
 #define STATUS_MEDIA_LEN 32
 
 struct status_snapshot {
+  // wifi_start() found no credentials anywhere — not in the radio's NVS
+  // store and not in Kconfig — so the radio was never started and the panel
+  // should say how to fix that. Nothing else sets it: an NVS or driver init
+  // failure is a different problem, and must not read as "run setup".
+  bool no_credentials;
   bool wifi_connected;
   char ip[STATUS_IP_LEN];
   char ssid[STATUS_SSID_LEN];
@@ -45,6 +50,7 @@ struct status_snapshot {
 void status_init(void);
 
 void status_set_wifi(bool connected, const char *ip, const char *ssid);
+void status_set_no_credentials(void);
 void status_set_rssi(int8_t rssi);
 void status_set_client(bool connected);
 void status_set_usb_mounted(bool mounted);

@@ -9,6 +9,8 @@ set(airkvm_srcs
     "keymap.c"
     "protocol.c"
     "wake_policy.c"
+    "hold_button.c"
+    "setup_flag.c"
     "ota.c"
     "logtap.c")
 

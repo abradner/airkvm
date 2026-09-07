@@ -1,8 +1,9 @@
 // Moved verbatim out of net.c; see wifi.h for why the split exists.
 //
 // Verified on hardware as part of net.c (ESP32-C3 bench board, 2026-08-10):
-// association, the retry path, and the missing-credentials failure. This file
-// changed no behavior when it was extracted.
+// association, the retry path, and the missing-credentials failure. The
+// extraction changed no behaviour; the credential source did change later
+// (NVS first, Kconfig as fallback, 2026-09-08) and that path is unverified.
 
 #include "wifi.h"
 
@@ -17,6 +18,11 @@
 #include "status.h"
 
 static const char *TAG = "wifi";
+
+// The SSID actually in use, whichever source it came from, so the panel and
+// the log describe the network the radio is on rather than the one Kconfig
+// names (they differ once a dongle has been provisioned in the field).
+static char s_ssid[33];
 
 static void wifi_event(void *arg, esp_event_base_t base, int32_t id,
                        void *data) {
@@ -35,7 +41,7 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id,
     const ip_event_got_ip_t *event = (const ip_event_got_ip_t *)data;
     char ip[16];
     snprintf(ip, sizeof(ip), IPSTR, IP2STR(&event->ip_info.ip));
-    status_set_wifi(true, ip, CONFIG_AIRKVM_WIFI_SSID);
+    status_set_wifi(true, ip, s_ssid);
 #if CONFIG_AIRKVM_TLS
     // Advertised by name, not address: the certificate is issued for the mDNS
     // name, so browsing to the bare IP is a certificate error every time.
@@ -75,22 +81,44 @@ esp_err_t wifi_start(void) {
                                           wifi_event, NULL, NULL),
       TAG, "ip handler failed");
 
-  // Required config, no fallback default (AGENTS.md §8, fail fast on boot).
-  // Checked at runtime rather than with _Static_assert: the firmware must still
-  // compile with no SSID configured, because CI builds a fresh checkout that has
-  // no sdkconfig and never will have credentials in it.
-  if (CONFIG_AIRKVM_WIFI_SSID[0] == '\0') {
-    ESP_LOGE(TAG, "no WiFi SSID configured — run `mise run config`");
+  ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "set_mode failed");
+
+  // Credentials, in order of preference:
+  //   1. What the radio already holds. esp_wifi_set_config() persists to NVS
+  //      (CONFIG_ESP_WIFI_NVS_ENABLED, on by default), so anything setup mode
+  //      saved — or a previous boot's Kconfig values — comes back here. This
+  //      is what "provisioned in the field" means: NVS wins, and a rebuilt
+  //      image with a different Kconfig SSID does not silently re-point a
+  //      dongle that was set up by hand. Setup mode will (next change); until
+  //      it exists, the way to drop a stale stored network is to erase the
+  //      nvs partition (`idf.py erase-flash`, or erase_region on nvs).
+  //   2. Kconfig, for a fresh flash. It is written through set_config, so it
+  //      becomes case 1 from then on.
+  //   3. Nothing: fail fast (AGENTS.md §8), and tell the panel so it can show
+  //      how to fix it. Checked at runtime rather than with _Static_assert
+  //      because CI builds a fresh checkout with no credentials.
+  wifi_config_t wifi_config = {0};
+  const bool from_nvs =
+      esp_wifi_get_config(WIFI_IF_STA, &wifi_config) == ESP_OK &&
+      wifi_config.sta.ssid[0] != '\0';
+  if (from_nvs) {
+    strlcpy(s_ssid, (const char *)wifi_config.sta.ssid, sizeof(s_ssid));
+    ESP_LOGI(TAG, "credentials: stored (\"%s\")", s_ssid);
+  } else if (CONFIG_AIRKVM_WIFI_SSID[0] != '\0') {
+    memset(&wifi_config, 0, sizeof(wifi_config));
+    strlcpy((char *)wifi_config.sta.ssid, CONFIG_AIRKVM_WIFI_SSID,
+            sizeof(wifi_config.sta.ssid));
+    strlcpy((char *)wifi_config.sta.password, CONFIG_AIRKVM_WIFI_PASSWORD,
+            sizeof(wifi_config.sta.password));
+    strlcpy(s_ssid, CONFIG_AIRKVM_WIFI_SSID, sizeof(s_ssid));
+    ESP_LOGI(TAG, "credentials: build config (\"%s\")", s_ssid);
+  } else {
+    status_set_no_credentials();
+    ESP_LOGE(TAG,
+             "no WiFi credentials — run `mise run config` (setup mode, the "
+             "BOOT hold, is the next change and not built yet)");
     return ESP_ERR_INVALID_STATE;
   }
-
-  wifi_config_t wifi_config = {0};
-  strlcpy((char *)wifi_config.sta.ssid, CONFIG_AIRKVM_WIFI_SSID,
-          sizeof(wifi_config.sta.ssid));
-  strlcpy((char *)wifi_config.sta.password, CONFIG_AIRKVM_WIFI_PASSWORD,
-          sizeof(wifi_config.sta.password));
-
-  ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "set_mode failed");
 
   // Start at full speed. From here the tier follows the operator — see
   // wifi_set_activity() below and AGENTS.md §9 entry 5, which this refines:
@@ -99,8 +127,12 @@ esp_err_t wifi_start(void) {
   // The mistake was concluding that power save is therefore always wrong,
   // rather than that it is wrong while someone is at the keyboard.
   ESP_RETURN_ON_ERROR(esp_wifi_set_ps(WIFI_PS_NONE), TAG, "set_ps failed");
-  ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &wifi_config), TAG,
-                      "set_config failed");
+  if (!from_nvs) {
+    // Only when we brought the values: setting an identical config back is
+    // harmless, but it is also a flash write for nothing.
+    ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &wifi_config), TAG,
+                        "set_config failed");
+  }
   ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "esp_wifi_start failed");
   return ESP_OK;
 }

@@ -12,7 +12,9 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "hold_button.h"
 #include "indicator.h"
+#include "setup_flag.h"
 #include "status.h"
 #include "wifi.h"
 
@@ -47,6 +49,14 @@ static const char *TAG = "ui";
 // Long enough to reject contact bounce, short enough that a deliberate press
 // always registers.
 #define DEBOUNCE_MS 40
+
+// The long-hold gesture (hold_button.h). While feedback is showing the panel
+// is the progress bar and nothing else; a release cancels, 5 s reboots into
+// setup mode.
+static struct hold_button s_hold;
+static bool s_hold_showing;
+static bool s_hold_armed;
+static uint8_t s_hold_fraction;
 
 // The screensaver's motion is a passive "still alive" signal for the 0.42"
 // dongle, which has no LED at all (BOARD_HAS_LED 0). On boards that do drive
@@ -204,6 +214,11 @@ static void draw(const struct status_snapshot *s) {
   }
 #endif
 
+  if (!s->wifi_connected && s->no_credentials) {
+    // Nothing to join and no way to say so otherwise: the one line the panel
+    // has for "what do I do now". 18 columns exactly on the 0.42" panel.
+    display_text(UI_X_COL, UI_Y_NETWORK / DISPLAY_CELL_H, "HOLD BOOT 5S:SETUP");
+  }
   if (s->wifi_connected) {
     display_text(UI_X_COL, UI_Y_NETWORK / DISPLAY_CELL_H, s->ssid);
     // The only non-text element, and the only accent on the panel. Note it is
@@ -254,6 +269,22 @@ static void draw(const struct status_snapshot *s) {
   display_flush();
 }
 
+// The hold-progress page. Rows 1/3/5 exist on both panels (6 rows on the
+// OLED, 10 on the LCD); the bar is the width of the panel less the safe inset.
+// Once armed the bar is full and the instruction flips: the restart happens
+// on release, never while the strap pin is still held (hold_button.h).
+static void draw_hold(uint8_t fraction, bool armed) {
+  display_clear();
+  display_text(UI_X_COL, 1, "HOLD FOR SETUP");
+  const int width = DISPLAY_COLS - 2 * UI_X_COL;
+  const int filled = armed ? width : (fraction * width + 254) / 255;
+  display_set_ink(DISPLAY_INK_ACCENT);
+  display_bar(UI_X_COL, 3, width, filled);
+  display_set_ink(DISPLAY_INK_SECONDARY);
+  display_text(UI_X_COL, 5, armed ? "RELEASE TO RESTART" : "RELEASE = CANCEL");
+  display_flush();
+}
+
 static void poll_button(bool screensaver_active) {
 #if defined(BOARD_BUTTON)
   static bool was_pressed;
@@ -274,38 +305,76 @@ static void poll_button(bool screensaver_active) {
   const bool pressed = level != 0;
 #endif
 
+  // Debounce: a level change within DEBOUNCE_MS of the last accepted change
+  // is bounce and the accepted level stands.
   const int64_t now = esp_timer_get_time();
-  if (pressed == was_pressed) {
-    return;
-  }
-  if ((now - last_change_us) / 1000 < DEBOUNCE_MS) {
-    return;
-  }
-  last_change_us = now;
-  was_pressed = pressed;
-
-  if (pressed) {
-    screensaver_active_at_press = screensaver_active;
-  }
-
-  // Act on release, not press: it makes an accidental brush less likely to
-  // toggle a mode that puts keystrokes on a screen.
-  if (!pressed) {
-    // Any physical interaction with the button counts as recent activity,
-    // not just a dismiss — otherwise an operator standing right there who
-    // just toggled debug mode (screensaver wasn't active at press) could see
-    // it kick in moments later because this press never refreshed the idle
-    // clock.
-    s_local_wake_us = now;
-    if (screensaver_active_at_press) {
-      // Dismiss only. Toggling debug mode here too would mean walking up to
-      // wake the screen silently turns on keystroke display (R-006) as a side
-      // effect of a press that was never meant as a debug toggle.
-      ESP_LOGI(TAG, "screensaver dismissed (button)");
-    } else {
-      const bool on = status_toggle_debug();
-      ESP_LOGW(TAG, "debug display %s (physical button)", on ? "ON" : "OFF");
+  if (pressed != was_pressed && (now - last_change_us) / 1000 >= DEBOUNCE_MS) {
+    last_change_us = now;
+    was_pressed = pressed;
+    if (pressed) {
+      screensaver_active_at_press = screensaver_active;
     }
+  }
+
+  // The debounced level goes to the hold machine every tick, not only on
+  // edges: the 1 s and 5 s thresholds are crossed while nothing changes.
+  uint8_t fraction = 0;
+  switch (hold_button_step(&s_hold, was_pressed, (uint32_t)(now / 1000),
+                           &fraction)) {
+    case HOLD_BUTTON_NONE:
+      break;
+
+    case HOLD_BUTTON_SHORT_RELEASE:
+      // Act on release, not press: it makes an accidental brush less likely
+      // to toggle a mode that puts keystrokes on a screen.
+      //
+      // Any physical interaction with the button counts as recent activity,
+      // not just a dismiss — otherwise an operator standing right there who
+      // just toggled debug mode (screensaver wasn't active at press) could
+      // see it kick in moments later because this press never refreshed the
+      // idle clock.
+      s_local_wake_us = now;
+      if (screensaver_active_at_press) {
+        // Dismiss only. Toggling debug mode here too would mean walking up
+        // to wake the screen silently turns on keystroke display (R-006) as
+        // a side effect of a press that was never meant as a debug toggle.
+        ESP_LOGI(TAG, "screensaver dismissed (button)");
+      } else {
+        const bool on = status_toggle_debug();
+        ESP_LOGW(TAG, "debug display %s (physical button)", on ? "ON" : "OFF");
+      }
+      break;
+
+    case HOLD_BUTTON_FEEDBACK:
+      s_hold_showing = true;
+      s_hold_armed = false;
+      s_hold_fraction = fraction;
+      s_local_wake_us = now;
+      break;
+
+    case HOLD_BUTTON_ARMED:
+      s_hold_showing = true;
+      s_hold_armed = true;
+      s_local_wake_us = now;
+      break;
+
+    case HOLD_BUTTON_CANCEL:
+      // Released between 1 s and 5 s: not a press, not a hold. Nothing
+      // toggles — the person changed their mind, and that must cost nothing.
+      s_hold_showing = false;
+      s_hold_armed = false;
+      s_local_wake_us = now;
+      ESP_LOGI(TAG, "setup hold cancelled");
+      break;
+
+    case HOLD_BUTTON_FIRE:
+      // On the release edge, so BOOT is high when the ROM samples it.
+      s_hold_showing = false;
+      display_clear();
+      display_text(UI_X_COL, 3, "SETUP: RESTARTING");
+      display_flush();
+      setup_flag_request_and_restart();  // does not return
+      break;
   }
 #endif
 }
@@ -353,7 +422,9 @@ static void ui_task(void *arg) {
     }
 
     if (tick % DISPLAY_EVERY_TICKS == 0 && display_present()) {
-      if (screensaver_active) {
+      if (s_hold_showing) {
+        draw_hold(s_hold_fraction, s_hold_armed);
+      } else if (screensaver_active) {
         draw_screensaver();
       } else {
         draw(&snapshot);

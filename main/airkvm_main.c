@@ -12,6 +12,7 @@
 #endif
 #include "net.h"
 #include "ota.h"
+#include "setup_flag.h"
 #include "status.h"
 #include "ui.h"
 
@@ -23,6 +24,16 @@ void app_main(void) {
   // network happens to come up.
   status_init();
   ui_start();
+
+  // A 5 s BOOT hold in the previous run asked for setup mode (setup_flag.h).
+  // The mode itself is the next change; until then the request is honoured
+  // by being logged, so the trigger can be exercised on a bench without it.
+  if (setup_flag_take()) {
+    ESP_LOGW(TAG, "setup mode requested; not built yet — normal boot");
+  }
+  // The missing-credentials path was verified on the C3 bench on 2026-08-10
+  // against Kconfig only; it now consults the radio's NVS store first
+  // (wifi.c), which that run predates.
 
   // Diagnostic builds only; an inline no-op stub otherwise (logtap.h). Started
   // before net_start() so a failure *inside* net_start — which is what issue
