@@ -3,7 +3,7 @@
 [tools]
 python = "3.14"
 cmake = "3.31"
-ninja = "1.12"
+ninja = "1.13.2"
 ruff = "0.9"
 clang-format = "19"
 
