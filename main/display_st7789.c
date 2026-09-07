@@ -5,6 +5,12 @@
 // Verified on hardware 2026-09-06: pins (from the vendor schematic, see
 // board.h), orientation, gap, and the banded flush all render correctly.
 //
+// The flush has since gained a per-band palette (a theme's colours, resolved
+// per 8-row band). That code has RUN on hardware — 2026-09-07, flashed over
+// OTA, console and log tap both reachable afterwards — but nobody has yet
+// looked at the panel to confirm the colours and the signal gauge render as
+// intended. Treat the rendering as unverified until someone does (R-005).
+//
 // == Why there is no framebuffer ==
 //
 // 320x172 at RGB565 is 110KB. Usable internal heap on this part is ~190KB, and
@@ -100,9 +106,12 @@ static const char *TAG = "display";
 // one reason worth stating: a const array cannot be indexed by another const
 // array at compile time in C, and resolving that with a parallel set of
 // per-theme macros would mean the table the host contrast test reads and the
-// table the panel draws from are two things that can disagree. 32 bytes of BSS
+// table the panel draws from are two things that can disagree. 48 bytes of BSS
 // buys a single source of truth — and, incidentally, the whole of runtime
 // theme selection, should that ever be wanted (theme.h).
+//
+// DISPLAY_HUE_COUNT * 4 entries of 2 bytes: 48, not the 32 an earlier version
+// of this comment claimed, which was written when there were four hues.
 //
 // SECONDARY and ACCENT vary across hues; background and PRIMARY never do. The
 // background changing per row would be stripes, and the address is the one
@@ -118,8 +127,9 @@ static uint16_t s_palettes[DISPLAY_HUE_COUNT][4];
 // four colours without a third bit plane: the canvas stays 2bpp and 4 roles,
 // and the meaning of role 2 is resolved per band on the way out.
 //
-// One byte per band (22 on this panel) against 6880 for a third plane, on the
-// part where a full RGB565 framebuffer is exactly what does not fit.
+// One byte per band (22 on this panel) against 7040 for a third plane (320 x
+// 22 pages, the same size as each existing plane), on the part where a full
+// RGB565 framebuffer is exactly what does not fit.
 static uint8_t s_band_hue[PAGES];
 
 // A text row must not straddle a band, or two sections with different hues
@@ -147,9 +157,14 @@ static void palette_load(const struct display_theme *t) {
 // 1bpp layer and knows nothing about colour, and teaching it about hues would
 // put a colour concept in the one file the monochrome dongle also compiles.
 static void mark_bands(int y0, int height) {
-  if (s_hue == DISPLAY_HUE_NEUTRAL) {
-    return;  // the value display_clear already left there
-  }
+  // No early return for NEUTRAL, deliberately. Skipping it as "the value
+  // display_clear already left there" is true only until something colours a
+  // band and a later draw on that same band wants it plain again — then the
+  // skip means NEUTRAL cannot win, and display.h's "the last one set wins" is
+  // false. Nothing in today's draw() hits that, which is exactly why it would
+  // have gone unnoticed until a row moved; and ui.c leans on the guarantee for
+  // the debug row (R-006), where the promise has to be a mechanism rather than
+  // a coincidence of layout.
   int first = y0 / 8;
   int last = (y0 + height - 1) / 8;
   if (first < 0) {
@@ -367,7 +382,11 @@ void display_set_ink(enum display_ink ink) {
 }
 
 void display_set_hue(enum display_hue hue) {
-  s_hue = (uint8_t)(hue < DISPLAY_HUE_COUNT ? hue : DISPLAY_HUE_NEUTRAL);
+  // Cast before comparing: an enum's underlying type is implementation-defined
+  // and a signed one would let a negative value past the bound and index
+  // s_palettes out of range at flush.
+  s_hue =
+      (uint8_t)((unsigned)hue < DISPLAY_HUE_COUNT ? hue : DISPLAY_HUE_NEUTRAL);
 }
 
 void display_pixel(int x, int y, bool on) {

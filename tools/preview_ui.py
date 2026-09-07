@@ -261,10 +261,17 @@ class Canvas:
         pen = self.ink
         for i in range(width):
             h = max(1, full_h * (i + 1) // width)
-            self.set_ink(pen if i < filled else ink_off)
+            lit = i < filled
+            self.set_ink(pen if lit else ink_off)
+            top = full_h - h
             for gx in range(bw):
-                for gy in range(full_h - h, full_h):
-                    self.pixel(x0 + i * f["advance"] * sx + gx, y0 + gy, True)
+                for gy in range(top, full_h):
+                    # Filled steps solid, unfilled ones a hollow outline, so
+                    # the reading does not depend on telling the two inks
+                    # apart. Mirrors canvas_bar_steps exactly.
+                    edge = gx in (0, bw - 1) or gy in (top, full_h - 1)
+                    if lit or edge:
+                        self.pixel(x0 + i * f["advance"] * sx + gx, y0 + gy, True)
         self.set_ink(pen)
         self.mark_bands(row * f["line_h"] * sy, f["line_h"] * sy)
 

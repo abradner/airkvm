@@ -230,10 +230,25 @@ static void draw(const struct status_snapshot *s) {
     //
     // The weak/strong question is indicator.h's, thresholds and hysteresis and
     // all, NOT a second set of numbers here. That header promised the light
-    // and the screen would not disagree about whether the link is weak; a
-    // shared predicate is what makes that true rather than merely intended.
-    // The latch is local because the LED keeps its own, and both are driven
-    // from the same snapshot on the same tick, so they move together.
+    // and the screen would not disagree about whether the link is weak.
+    //
+    // A shared THRESHOLD was not enough to deliver that, and the first version
+    // of this got it wrong. The light's hysteresis input is `prev == WARN`,
+    // where `prev` is its whole state — so a fault or a suspend displaces the
+    // warning and clears the latch as a side effect. A standalone `bool` here
+    // had no such event, so once a fault cleared the two sat either side of
+    // the hysteresis band: light green at -74 dBm, panel amber at -74 dBm,
+    // both visible, disagreeing.
+    //
+    // So this runs the light's own state machine with its own `prev` and feeds
+    // the identical `was_weak` into the identical predicate. Same pure
+    // function, same input, so the answer matches by construction rather than
+    // by two implementations happening to agree.
+    //
+    // Residual, stated rather than hidden: indicator_tick() takes its own
+    // status snapshot microseconds before this one, on this same task. A field
+    // changing between the two desyncs the latches for one 250ms frame, and
+    // the next frame re-converges.
     //
     // On the colour itself: until now the bar was deliberately never a warning
     // colour, on the argument that the LED already says "weak" from across the
@@ -242,13 +257,24 @@ static void draw(const struct status_snapshot *s) {
     // can say HOW weak, and colouring it by the quantity it already displays
     // is redundant coding of one variable, not a second claim. It stops at
     // amber: red means fault on this device, and one bar is not a fault.
-    static bool s_link_weak;
-    s_link_weak = indicator_link_is_weak(s->rssi, s_link_weak);
+    static enum indicator_state s_led_prev = INDICATOR_IDLE;
+    const bool link_weak =
+        indicator_link_is_weak(s->rssi, s_led_prev == INDICATOR_WARN);
+    s_led_prev = indicator_state_for(s, s_led_prev);
+
     const int bars = rssi_bars(s->rssi);
-    display_set_hue(bars == 0     ? DISPLAY_HUE_LINK_NONE
-                    : s_link_weak ? DISPLAY_HUE_LINK_WEAK
-                                  : DISPLAY_HUE_LINK);
-    display_text(UI_X_COL, UI_Y_NETWORK / DISPLAY_CELL_H, s->ssid);
+    display_set_hue(bars == 0   ? DISPLAY_HUE_LINK_NONE
+                    : link_weak ? DISPLAY_HUE_LINK_WEAK
+                                : DISPLAY_HUE_LINK);
+
+    // The SSID, clipped so it cannot run into what sits to its right on this
+    // row. display_text clips at the PANEL edge, not at a column, and
+    // canvas_text only ORs pixels in — so an over-long SSID does not push the
+    // caption aside, it draws through it and both become unreadable. A 32-char
+    // SSID is legal (STATUS_SSID_LEN) and reaches column 32; the caption
+    // starts at column 27.
+    char ssid[STATUS_SSID_LEN];
+    snprintf(ssid, sizeof(ssid), "%s", s->ssid);
 
 #if BOARD_DISPLAY_ST7789
     // The number the bar is a picture of, right up against it, because four
@@ -265,9 +291,17 @@ static void draw(const struct status_snapshot *s) {
     } else {
       snprintf(sig, sizeof(sig), "%d dBm", (int)s->rssi);
     }
-    display_text(DISPLAY_COLS - 4 - (int)strlen(sig) - 1,
-                 UI_Y_NETWORK / DISPLAY_CELL_H, sig);
+    const int cap_col = DISPLAY_COLS - 4 - (int)strlen(sig) - 1;
+    // One blank column between the SSID and the caption, so they read as two
+    // things rather than one run-on string.
+    const int ssid_max = cap_col - UI_X_COL - 1;
+    if (ssid_max > 0 && (int)strlen(ssid) > ssid_max) {
+      ssid[ssid_max] = '\0';
+    }
+    display_text(cap_col, UI_Y_NETWORK / DISPLAY_CELL_H, sig);
 #endif
+
+    display_text(UI_X_COL, UI_Y_NETWORK / DISPLAY_CELL_H, ssid);
 
     display_set_ink(DISPLAY_INK_ACCENT);
     display_bar(DISPLAY_COLS - 4, UI_Y_NETWORK / DISPLAY_CELL_H, 4, bars);

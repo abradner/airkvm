@@ -86,46 +86,49 @@ choice AIRKVM_THEME
     depends on AIRKVM_BOARD_S3_LCD147
     default AIRKVM_THEME_MONOKAI_MACHINE
     help
-        Which four colours main/ui.c's ink roles are drawn in.
+        Which colours main/ui.c draws in: four ink roles, plus a per-section
+        hue for the quiet text and the signal bar (main/display_hue.h).
 
         Build-time rather than runtime, and that is a proposal rather than a
         settled convention — main/theme.h states the argument, the short form
         being that the BOOT button's two meanings are already load-bearing for
         risk R-006 and a console control costs a protocol frame plus NVS.
 
-        Themes are ordered by their WEAKEST contrast ratio, best first. The
-        ratios are in main/theme.h and are asserted, not asserted-in-prose, by
-        test/host/test_theme.c.
+        The full set of ratios is in main/theme.h, and every one of them is
+        asserted by test/host/test_theme.c rather than asserted in prose. The
+        order of this menu carries no meaning.
 
 config AIRKVM_THEME_TOKYO_NIGHT
     bool "Tokyo Night"
     help
-        Dark blue-violet. 11.2:1 / 8.5:1 / 10.3:1 (primary / secondary /
-        accent). The highest floor of the five — but only 2.7 between primary
-        and secondary, so the address does not visibly outrank the context
-        around it. Pick this if you want everything maximally legible and do
-        not care which line you read first.
+        Dark blue-violet. 11.2:1 address / 8.5:1 body text. The highest
+        floor of the five — but only 2.7 between the two, so the address does
+        not visibly outrank the context around it. Pick this if you want
+        everything maximally legible and do not care which line you read
+        first.
 
 config AIRKVM_THEME_MONOKAI_MACHINE
     bool "Monokai Pro (Filter Machine)"
     help
-        Dark desaturated teal. 13.5:1 / 7.9:1 / 8.4:1, and the default. Its
-        floor is slightly below Tokyo Night's, but it has more than twice the
-        separation between primary and secondary, so the IP address reads as
+        Dark desaturated teal. 13.5:1 address / 7.9:1 body text, and the
+        default. Its floor is slightly below Tokyo Night's, but it has more
+        than twice the separation between the two, so the IP address reads as
         the thing to read. See main/theme.h for why the rendered preview was
         allowed to overrule the ranking.
 
 config AIRKVM_THEME_ONE_DARK_NIGHT_FLAT
     bool "One Dark Pro Night Flat"
     help
-        Near-black neutral. 8.5:1 / 4.8:1 / 7.6:1. The lowest secondary of the
-        dark themes — over the 4.5:1 floor, but with the least margin.
+        Near-black neutral. 8.5:1 address / 4.8:1 body text. The lowest
+        body text of the dark themes — over the 4.5:1 floor, but with the
+        least margin.
 
 config AIRKVM_THEME_MONOKAI_LIGHT
     bool "Monokai Pro (light)"
     help
-        The only light theme. 14.4:1 / 5.0:1 / 3.6:1, and the most readable of
-        the five in daylight.
+        The only light theme. 14.4:1 address / 5.0:1 body text, and the most
+        readable of the five in daylight. Its signal bar is the lowest-contrast
+        on this list (3.2:1) — see main/theme.h.
 
         Note what light means on this panel: every undrawn pixel is ink role 0,
         so this puts a lit 172x320 rectangle on the desk. Excellent on a bench,
@@ -135,8 +138,8 @@ config AIRKVM_THEME_SOLARIZED_DARK
     bool "Solarized Dark"
     help
         What the first coloured build shipped, kept for anyone who liked it.
-        5.9:1 / 5.0:1 / 5.0:1 — the flattest theme here, with only 0.9 between
-        primary and secondary, which is a property of Solarized rather than
+        5.9:1 address / 5.0:1 body text — the flattest theme here, with only
+        0.9 between the two, which is a property of Solarized rather than
         something this project can tune out.
 
         Its secondary role is base0 (body text) and not base01 (comments),

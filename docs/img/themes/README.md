@@ -14,5 +14,7 @@ Regenerate after any change to the fonts, the layout, or the theme table:
 
     python3 tools/preview_ui.py --png docs/img/themes/ui
 
-The 0.42" OLED gets one image and no themes: that panel is 1bpp, so every ink
-role renders as a lit pixel and a theme is a genuine no-op there.
+The 0.42" OLED gets no themes: that panel is 1bpp, so every ink role renders as
+a lit pixel and a theme is a genuine no-op there. It still gets one image per
+link state, because the signal gauge's SHAPE differs between them even where
+its colour cannot.

@@ -46,19 +46,32 @@
 //   monokai-light           14.43     5.02      3.61      9.41
 //   solarized-dark           5.91     5.02      5.00      0.89   (SEC was 2.87)
 //
-// The per-section hues below are SECONDARY text in another colour, so they are
-// held to the same floor and measure:
+// One caveat on the ACCENT column. ink[ACCENT] is the theme's nominal accent
+// and the value hue[NEUTRAL] inherits — but NOTHING ON THE PANEL IS DRAWN IN
+// IT. The only ACCENT-ink element is the signal bar, and the bar is always
+// drawn under one of the three LINK hues, so what you see is hue[LINK*].accent
+// from the table below. That column is the definition, not the rendering.
 //
-//   theme                IDENTITY  ADDRESS   LINK
-//   tokyo-night              7.66     9.69  10.25
-//   monokai-machine          6.38     9.35   8.43
-//   one-dark-night-flat      6.17     9.01   7.57
-//   monokai-light            5.11        -      -   (only one it can carry)
-//   solarized-dark              -     4.90   5.00   (no violet that clears)
+// The per-section colours below are the ones that reach the panel. The first
+// two are SECONDARY text, held to the 4.5:1 text floor; the last two are the
+// signal bar, a graphical element, held to 3:1:
+//
+//   theme                IDENTITY  ADDRESS   bar ok  bar weak
+//   tokyo-night              7.66     9.69     9.69      8.95
+//   monokai-machine          6.38     9.35     9.35      7.75
+//   one-dark-night-flat      6.17     9.01     9.01     10.71
+//   monokai-light            5.11        -     3.23      3.13
+//   solarized-dark              -     4.90     5.00      4.90
 //
 // A dash is the theme's plain secondary, i.e. that section is not coloured at
 // all. Two of the five genuinely cannot fill every slot, which is recorded per
 // theme below rather than papered over by lowering the floor for decoration.
+// The LINK hues' TEXT is the plain secondary in every theme and so has no
+// column — display_hue.h says why that is a rendering constraint.
+//
+// Every number in BOTH tables is pinned by test/host/test_theme.c. An earlier
+// version pinned only the first, and this one went stale the moment the signal
+// gauge changed what the LINK hues hold.
 //
 // == Which one is the default, and why it is not the one the ranking picked ==
 //
@@ -89,10 +102,12 @@
 #include "display_hue.h"
 #include "palette.h"
 
-// Ordered by weakest-ratio-first, which is a computable fact about the table
-// and so cannot go stale in the way a taste ordering would. Note the default
-// is deliberately NOT the head of this list — see above. Not load-bearing
-// either way: the Kconfig choice names a theme, it does not index this.
+// The order here is the order the Kconfig menu offers, and nothing more. It
+// was once described as "weakest ratio first", which was never quite true —
+// solarized-dark's weakest is 5.00, above one-dark-night-flat's 4.83, yet it
+// sits last — and which would need re-sorting every time a colour moved. The
+// ranking that matters is the table above. Not load-bearing either way: the
+// Kconfig choice names a theme, it does not index this.
 enum display_theme_id {
   DISPLAY_THEME_TOKYO_NIGHT,
   DISPLAY_THEME_MONOKAI_MACHINE,
@@ -145,7 +160,9 @@ static const struct display_theme display_themes[DISPLAY_THEME_COUNT] = {
     // comment greys are exactly what failed. Tokyo Night's own comment
     // (#51597d) is 2.6:1 — Solarized's mistake in a different hue, and
     // deliberately unused.
-    // ACCENT is the scheme's cyan rather than its blue: on a 4-cell bar the
+    // ACCENT is the scheme's cyan rather than its blue, the brighter of
+    // the two — though see the caveat above: this is the nominal accent and
+    // the bar does not draw in it. On a 4-cell bar the
     // brighter of the two is the one that still reads at a glance.
     [DISPLAY_THEME_TOKYO_NIGHT] =
         {"tokyo-night",
@@ -156,13 +173,13 @@ static const struct display_theme display_themes[DISPLAY_THEME_COUNT] = {
              [CANVAS_INK_ACCENT] = RGB565(0x7D, 0xCF, 0xFF),
          },
          {
-             // Purple, green and cyan from the scheme's own accents — 7.66, 9.69
-             // and 10.25:1. The widest usable spread on this list: Tokyo
-             // Night's accents are all bright enough to clear the floor, so
-             // here the choice was aesthetic rather than forced.
+             // Purple and green from the scheme's own accents — 7.66 and 9.69:1.
+             // The widest usable spread on this list: Tokyo Night's accents
+             // are all bright enough to clear the floor, so here the choice
+             // was aesthetic rather than forced.
              //
-             // Signal ramp: the scheme's green, then its amber. No red — see
-             // display_hue.h for where the ramp stops and why.
+             // Signal ramp: that same green (9.69), then its amber (8.95). No
+             // red — display_hue.h says where the ramp stops and why.
              [DISPLAY_HUE_NEUTRAL] = {RGB565(0xA9, 0xB1, 0xD6),
                                       RGB565(0x7D, 0xCF, 0xFF)},
              [DISPLAY_HUE_IDENTITY] = {RGB565(0xBB, 0x9A, 0xF7),
@@ -192,12 +209,13 @@ static const struct display_theme display_themes[DISPLAY_THEME_COUNT] = {
              [CANVAS_INK_ACCENT] = RGB565(0x7C, 0xD5, 0xF1),
          },
          {
-             // accent6, accent4, accent5 — 6.38, 9.35 and 8.43:1. Deliberately
-             // NOT accent1 (red) anywhere: red is fault on this device, and no
-             // section of a working panel should borrow it.
+             // accent6 and accent4 — 6.38 and 9.35:1. Deliberately NOT accent1
+             // (red) anywhere: red is fault on this device, and no section of
+             // a working panel should borrow it.
              //
-             // Signal ramp: accent4 green, then accent2 orange for weak. It
-             // stops there rather than reaching accent1 — see display_hue.h.
+             // Signal ramp: accent4 green (9.35), then accent2 orange (7.75)
+             // for weak. It stops there rather than reaching accent1 — see
+             // display_hue.h.
              [DISPLAY_HUE_NEUTRAL] = {RGB565(0xB8, 0xC4, 0xC3),
                                       RGB565(0x7C, 0xD5, 0xF1)},
              [DISPLAY_HUE_IDENTITY] = {RGB565(0xBA, 0xA0, 0xF8),
@@ -228,11 +246,11 @@ static const struct display_theme display_themes[DISPLAY_THEME_COUNT] = {
              [CANVAS_INK_ACCENT] = RGB565(0x61, 0xAF, 0xEF),
          },
          {
-             // The scheme's purple, green and blue — 6.17, 9.01 and 7.57:1.
+             // The scheme's purple and green — 6.17 and 9.01:1.
              //
-             // Signal ramp: its green, then its yellow. That yellow is the
-             // brightest colour the scheme owns (10.71:1) and went unused
-             // until there was something for it to actually mean.
+             // Signal ramp: that same green (9.01), then its yellow (10.71).
+             // The yellow is the brightest colour the scheme owns and went
+             // unused until there was something for it to actually mean.
              [DISPLAY_HUE_NEUTRAL] = {RGB565(0x7F, 0x84, 0x8E),
                                       RGB565(0x61, 0xAF, 0xEF)},
              [DISPLAY_HUE_IDENTITY] = {RGB565(0xC6, 0x78, 0xDD),
@@ -254,11 +272,14 @@ static const struct display_theme display_themes[DISPLAY_THEME_COUNT] = {
     // theme here in daylight and the worst one in a dark rack.
     //
     // ACCENT is the scheme's blue (#1c8ca8) at 3.61:1, the lowest ACCENT on
-    // this list. That is inherent: an accent has to be darker than a light
-    // background to show at all, and the saturated blues that read as "signal"
-    // are mid-luminance. It clears the 3:1 that WCAG asks of a non-text
-    // element, which the bar is, and it is the only role here that leans on
-    // that lower floor.
+    // this list — the nominal one; the bar itself draws green 3.23 / yellow
+    // 3.13 from the LINK hues. All three are low for the same inherent reason:
+    // an accent has to be darker than a light background to show at all, and
+    // the saturated hues that read as "signal" are mid-luminance. They clear
+    // the 3:1 WCAG asks of a non-text element, which the bar is, and this is
+    // the only theme leaning on that lower floor — which is defensible only
+    // because canvas_bar_steps draws filled steps solid and unfilled ones
+    // hollow, so the reading does not depend on seeing the colour at all.
     [DISPLAY_THEME_MONOKAI_LIGHT] =
         {"monokai-light",
          {

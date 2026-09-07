@@ -246,8 +246,7 @@ static void bar_steps_ascend_and_sit_on_the_baseline(void) {
         height[i]++;
       }
     }
-    // Bottom-aligned: the pixel directly above the row's baseline is set, the
-    // one at the top of the cell is not (for anything but a full-height step).
+    // Bottom-aligned: the pixel on the row's baseline is set.
     CHECK(role_at(&c, x, full - 1) != CANVAS_INK_NONE);
   }
   // Strictly ascending, and the last step fills the cell.
@@ -257,6 +256,94 @@ static void bar_steps_ascend_and_sit_on_the_baseline(void) {
   CHECK_EQ_INT(height[3], full);
   // The shortest step is never invisible — "one bar" must not look like "none".
   CHECK(height[0] >= 1);
+}
+
+// The shortest step is bottom-aligned, so the top of its CELL stays clear —
+// the claim the previous comment here made without checking it.
+static void bar_steps_leave_the_top_of_a_short_cell_clear(void) {
+  static uint8_t lo[320 * 22], hi[320 * 22];
+  struct canvas c = {.bits = lo,
+                     .bits_hi = hi,
+                     .w = 320,
+                     .h = 172,
+                     .font = &canvas_font8x16,
+                     .ink = CANVAS_INK_ACCENT};
+  canvas_clear(&c);
+  canvas_bar_steps(&c, 0, 0, 4, 4, 1, 1, CANVAS_INK_SECONDARY);
+  // Step 0 is a quarter height, so rows 0..11 of its cell are untouched.
+  CHECK_EQ_INT(role_at(&c, 0, 0), CANVAS_INK_NONE);
+  CHECK_EQ_INT(role_at(&c, 1, 11), CANVAS_INK_NONE);
+  // Positive control: row 12 is where it starts.
+  CHECK(role_at(&c, 0, 12) != CANVAS_INK_NONE);
+}
+
+// gotcha 14(c): the bar has to read as separate steps. canvas_bar has a test
+// for this; canvas_bar_steps did not, so using glyph_w instead of advance-1
+// here — the exact regression that entry records — passed everything.
+static void bar_steps_stay_separated(void) {
+  static uint8_t lo[320 * 22], hi[320 * 22];
+  struct canvas c = {.bits = lo,
+                     .bits_hi = hi,
+                     .w = 320,
+                     .h = 172,
+                     .font = &canvas_font8x16,
+                     .ink = CANVAS_INK_ACCENT};
+  canvas_clear(&c);
+  canvas_bar_steps(&c, 0, 0, 4, 4, 1, 1, CANVAS_INK_SECONDARY);
+  const int adv = canvas_font8x16.advance;
+  for (int y = 0; y < canvas_font8x16.glyph_h; y++) {
+    CHECK_EQ_INT(role_at(&c, adv - 1, y), CANVAS_INK_NONE);
+  }
+  // Positive control: the cells either side of that gap are drawn.
+  CHECK(role_at(&c, adv - 2, canvas_font8x16.glyph_h - 1) != CANVAS_INK_NONE);
+  CHECK(role_at(&c, adv, canvas_font8x16.glyph_h - 1) != CANVAS_INK_NONE);
+}
+
+// The reading must survive someone who cannot separate the two hues, because
+// the ramp colours are chosen to share a lightness — measured, an unfilled step
+// against a filled one is 1.02:1 on the default theme. So filled is SOLID and
+// unfilled is a HOLLOW outline, and that difference is the thing asserted here:
+// without it the gauge is one block of colour and the theme's accent contrast
+// floor is leaning on a property the renderer does not provide.
+static void bar_steps_distinguish_fill_by_shape_not_only_ink(void) {
+  static uint8_t lo[320 * 22], hi[320 * 22];
+  struct canvas c = {.bits = lo,
+                     .bits_hi = hi,
+                     .w = 320,
+                     .h = 172,
+                     .font = &canvas_font8x16,
+                     .ink = CANVAS_INK_ACCENT};
+  canvas_clear(&c);
+  canvas_bar_steps(&c, 0, 0, 4, 2, 1, 1, CANVAS_INK_SECONDARY);
+  const int adv = canvas_font8x16.advance;
+  const int full = canvas_font8x16.glyph_h;
+
+  // Step 1 is filled: its interior is inked.
+  CHECK_EQ_INT(role_at(&c, adv + 1, full - 2), CANVAS_INK_ACCENT);
+  // Step 2 is not: hollow interior...
+  CHECK_EQ_INT(role_at(&c, 2 * adv + 1, full - 2), CANVAS_INK_NONE);
+  // ...with a border that is still there, so the scale stays readable.
+  CHECK_EQ_INT(role_at(&c, 2 * adv, full - 2), CANVAS_INK_SECONDARY);
+  CHECK_EQ_INT(role_at(&c, 2 * adv + 1, full - 1), CANVAS_INK_SECONDARY);
+}
+
+// The h < 1 clamp exists for a bar with more steps than the cell has rows.
+// Nothing exercised it — 16*1/4 is 4, so the clamp never fired and deleting it
+// changed no test.
+static void a_step_shorter_than_one_pixel_is_still_drawn(void) {
+  static uint8_t lo[320 * 22], hi[320 * 22];
+  struct canvas c = {.bits = lo,
+                     .bits_hi = hi,
+                     .w = 320,
+                     .h = 172,
+                     .font = &canvas_font8x16,
+                     .ink = CANVAS_INK_ACCENT};
+  canvas_clear(&c);
+  // 20 steps over a 16px cell: the first would be 16*1/20 = 0 rows tall.
+  canvas_bar_steps(&c, 0, 0, 20, 20, 1, 1, CANVAS_INK_SECONDARY);
+  const int full = canvas_font8x16.glyph_h;
+  CHECK_EQ_INT(role_at(&c, 0, full - 1), CANVAS_INK_ACCENT);
+  CHECK_EQ_INT(role_at(&c, 0, full - 2), CANVAS_INK_NONE);
 }
 
 // Filled steps take the pen; unfilled take ink_off. This is the "bold and
@@ -410,6 +497,10 @@ int main(void) {
   RUN(bar_cells_stay_separated_on_both_fonts);
   RUN(bar_steps_ascend_and_sit_on_the_baseline);
   RUN(bar_steps_use_two_inks_and_restore_the_pen);
+  RUN(bar_steps_leave_the_top_of_a_short_cell_clear);
+  RUN(bar_steps_stay_separated);
+  RUN(bar_steps_distinguish_fill_by_shape_not_only_ink);
+  RUN(a_step_shorter_than_one_pixel_is_still_drawn);
   RUN(bar_steps_with_nothing_filled_still_draws_the_scale);
   RUN(ink_planes_encode_four_roles);
   RUN(mono_canvas_collapses_every_ink_to_lit);

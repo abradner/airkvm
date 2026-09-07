@@ -418,6 +418,81 @@ static void the_documented_ratios_are_the_real_ones(void) {
   }
 }
 
+// theme.h quotes a SECOND table — the per-section colours that actually reach
+// the panel — and that one went stale exactly once already: the signal gauge
+// changed what the LINK hues hold and the table kept describing the old
+// values. Pinning only the ink table was what let that happen, so both are
+// pinned now.
+//
+// bar_ok / bar_weak are the LINK and LINK_WEAK accents, which is what the
+// panel draws; a dash in the comment table means "the theme's plain
+// secondary", asserted here as equality rather than as a ratio.
+static void the_documented_hue_ratios_are_the_real_ones(void) {
+  static const struct {
+    int id;
+    double identity, address, bar_ok, bar_weak;
+    bool identity_plain, address_plain;
+  } documented[] = {
+      {DISPLAY_THEME_TOKYO_NIGHT, 7.66, 9.69, 9.69, 8.95, false, false},
+      {DISPLAY_THEME_MONOKAI_MACHINE, 6.38, 9.35, 9.35, 7.75, false, false},
+      {DISPLAY_THEME_ONE_DARK_NIGHT_FLAT, 6.17, 9.01, 9.01, 10.71, false,
+       false},
+      {DISPLAY_THEME_MONOKAI_LIGHT, 5.11, 5.02, 3.23, 3.13, false, true},
+      {DISPLAY_THEME_SOLARIZED_DARK, 5.02, 4.90, 5.00, 4.90, true, false},
+  };
+  CHECK_EQ_INT(sizeof(documented) / sizeof(documented[0]), DISPLAY_THEME_COUNT);
+
+  for (size_t i = 0; i < sizeof(documented) / sizeof(documented[0]); i++) {
+    const struct display_theme *t = &display_themes[documented[i].id];
+    const uint16_t bg = t->ink[CANVAS_INK_NONE];
+    const double ident = contrast(t->hue[DISPLAY_HUE_IDENTITY].secondary, bg);
+    const double addr = contrast(t->hue[DISPLAY_HUE_ADDRESS].secondary, bg);
+    const double ok = contrast(t->hue[DISPLAY_HUE_LINK].accent, bg);
+    const double weak = contrast(t->hue[DISPLAY_HUE_LINK_WEAK].accent, bg);
+    if (fabs(ident - documented[i].identity) > 0.005 ||
+        fabs(addr - documented[i].address) > 0.005 ||
+        fabs(ok - documented[i].bar_ok) > 0.005 ||
+        fabs(weak - documented[i].bar_weak) > 0.005) {
+      fprintf(stderr,
+              "  theme %s: measured %.2f/%.2f/%.2f/%.2f, theme.h says "
+              "%.2f/%.2f/%.2f/%.2f\n",
+              t->name, ident, addr, ok, weak, documented[i].identity,
+              documented[i].address, documented[i].bar_ok,
+              documented[i].bar_weak);
+    }
+    CHECK(fabs(ident - documented[i].identity) <= 0.005);
+    CHECK(fabs(addr - documented[i].address) <= 0.005);
+    CHECK(fabs(ok - documented[i].bar_ok) <= 0.005);
+    CHECK(fabs(weak - documented[i].bar_weak) <= 0.005);
+
+    // The dashes in the table mean "not coloured", which is a stronger claim
+    // than "happens to measure the same": assert the identity, not the ratio.
+    CHECK((t->hue[DISPLAY_HUE_IDENTITY].secondary ==
+           t->ink[CANVAS_INK_SECONDARY]) == documented[i].identity_plain);
+    CHECK((t->hue[DISPLAY_HUE_ADDRESS].secondary ==
+           t->ink[CANVAS_INK_SECONDARY]) == documented[i].address_plain);
+  }
+}
+
+// display_hue.h states this as a RENDERING CONSTRAINT, not a preference: the
+// unfilled steps of the signal gauge are drawn in the row's SECONDARY, so a
+// LINK hue carrying a bright tint would make an empty step read as a full one.
+// It was true in all five themes and asserted nowhere.
+static void the_link_hues_keep_the_plain_secondary(void) {
+  for (int i = 0; i < DISPLAY_THEME_COUNT; i++) {
+    const struct display_theme *t = &display_themes[i];
+    const int link[] = {DISPLAY_HUE_LINK, DISPLAY_HUE_LINK_WEAK,
+                        DISPLAY_HUE_LINK_NONE};
+    for (size_t k = 0; k < sizeof(link) / sizeof(link[0]); k++) {
+      if (t->hue[link[k]].secondary != t->ink[CANVAS_INK_SECONDARY]) {
+        fprintf(stderr, "  theme %s: link hue %d tints its text\n", t->name,
+                link[k]);
+      }
+      CHECK(t->hue[link[k]].secondary == t->ink[CANVAS_INK_SECONDARY]);
+    }
+  }
+}
+
 int main(void) {
   RUN(contrast_metric_is_sane);
   RUN(the_original_solarized_secondary_would_fail);
@@ -433,5 +508,7 @@ int main(void) {
   RUN(every_role_in_a_theme_is_distinct);
   RUN(the_selected_theme_is_in_range);
   RUN(the_documented_ratios_are_the_real_ones);
+  RUN(the_documented_hue_ratios_are_the_real_ones);
+  RUN(the_link_hues_keep_the_plain_secondary);
   return test_summary("theme");
 }
