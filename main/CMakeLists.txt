@@ -41,13 +41,24 @@ set(airkvm_requires
 # is only offered on targets with native USB OTG, so this never has to guard
 # against a C3 pulling in TinyUSB.
 #
-# NOTE: the `list(APPEND airkvm_requires ...)` below is dead — see the comment
-# above. TinyUSB reaches the link through main/idf_component.yml, not through
-# here. Left in place rather than removed in this change so the fix is its own
-# reviewable commit; tracked separately.
+# There is deliberately no `list(APPEND airkvm_requires esp_tinyusb)` here:
+# TinyUSB is a managed component and reaches the link through
+# main/idf_component.yml, whose `rules: if target in [esp32s3, esp32s2]` keeps
+# it off the C3. One did sit here from the first commit and never had any
+# effect, appearing to work only because the manifest was supplying the
+# dependency the whole time.
+#
+# The reason is not that this if() fails to run — it plainly runs, which is how
+# hid_out_usb.c gets selected below. It is that idf_component_register never
+# reads its REQUIRES argument for dependencies: those come from the __REQUIRES
+# property (component.cmake, __component_set_all_dependencies), filled by a
+# separate early-expansion pass that includes no sdkconfig, so CONFIG_ is
+# undefined there and the branch is skipped in the only pass that is read.
+# Appending here writes to a list nothing looks at again. SRCS have no such
+# split — idf_component_register consumes them in the real pass — which is why
+# the conditional below works. AGENTS.md §9 gotcha 7.
 if(CONFIG_AIRKVM_HID_BACKEND_USB)
     list(APPEND airkvm_srcs "hid_out_usb.c")
-    list(APPEND airkvm_requires esp_tinyusb)
 else()
     list(APPEND airkvm_srcs "hid_out_log.c")
 endif()

@@ -605,11 +605,28 @@ code is written.*
    length to paper over the difference.
 
 7. **Component `REQUIRES` cannot be made conditional on `CONFIG_` values.** Requirements are
-   resolved in CMake's early-expansion pass, where those values are not reliably visible, so
+   resolved in CMake's early-expansion pass, where those values are never visible, so
    `if(CONFIG_X) list(APPEND ... )` silently fails to add the include path and the build dies on a
    missing header with the option plainly enabled in `sdkconfig`. Require unconditionally and
    guard the code with `#if` instead. (Conditional `EMBED_*` lists are fine — those are consumed
    in the real pass.)
+   **Added 2026-09-07.** "Never visible" above was originally hedged as "not reliably visible";
+   it was measured on v5.5 and it is never — the early pass is a bare `cmake -P` that includes no
+   sdkconfig, on incremental configures with a populated `sdkconfig` on disk as much as on clean
+   ones.
+   The loud failure is also the *lucky* case: when something else already supplies the dependency,
+   a dead conditional REQUIRES links fine and looks load-bearing indefinitely.
+   `list(APPEND airkvm_requires esp_tinyusb)` sat inside the USB-backend `if()` from the first
+   commit and never had an effect, because `main/idf_component.yml` had been supplying TinyUSB the
+   whole time. Two things are needed to see it. **State the mechanism precisely:** the `if()` does
+   run in the real pass — it also picks the backend's source file — and what is dead is the
+   append, because `REQUIRES` is read only from the early pass. **Use the right instrument:**
+   `build_component_info.<component>.reqs` in `build/project_description.json` is what the
+   component was actually given, but compare against the *registry* name rather than the one in
+   `CMakeLists.txt` — the component manager rewrites managed short names, so a live `mdns`
+   requirement appears there as `espressif__mdns`, and a live `esp_tinyusb` one would appear as
+   `espressif__esp_tinyusb`. `reqs` holds direct requirements only (common and transitive ones are
+   not in it), so it answers "was this line added", not "what does this component link against".
 
 8. **Bench hardware that cannot do the headline feature still finds the headline bugs.** Entries
    1-3 above were found on an ESP32-C3, a board that physically cannot be a USB keyboard, via
