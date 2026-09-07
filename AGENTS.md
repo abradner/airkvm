@@ -597,6 +597,16 @@ code is written.*
    missing header with the option plainly enabled in `sdkconfig`. Require unconditionally and
    guard the code with `#if` instead. (Conditional `EMBED_*` lists are fine — those are consumed
    in the real pass.)
+   **Added 2026-09-07:** the loud failure above is the *lucky* case. When something else already
+   supplies the dependency, a dead conditional REQUIRES links fine and stays in the file looking
+   load-bearing — `list(APPEND airkvm_requires esp_tinyusb)` sat inside the USB-backend `if()`
+   from the start and never once ran, because `main/idf_component.yml` had been providing TinyUSB
+   the whole time. Nothing in a green build distinguishes "this line works" from "this line does
+   nothing and a manifest is covering for it". The instrument is `build/project_description.json`:
+   `build_component_info.<component>` is the *resolved* graph, so a requirement named in a
+   `CMakeLists.txt` but absent from `reqs` was never added, and a managed component shows up under
+   `managed_priv_reqs` under its registry name (`espressif__esp_tinyusb`) instead. Read that file
+   rather than the CMake source when asking what a component actually requires.
 
 8. **Bench hardware that cannot do the headline feature still finds the headline bugs.** Entries
    1-3 above were found on an ESP32-C3, a board that physically cannot be a USB keyboard, via
