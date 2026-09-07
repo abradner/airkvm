@@ -163,6 +163,14 @@ bool display_present(void) {
   return s_present;
 }
 
+void display_set_ink(enum display_ink ink) {
+  // Single-colour panel: every ink is the same lit pixel. Accepted rather than
+  // rejected so ui.c can set it unconditionally and stay one file for both
+  // boards; the canvas has no second plane here, so this genuinely costs
+  // nothing and cannot change what is drawn.
+  (void)ink;
+}
+
 void display_clear(void) {
   canvas_clear(&s_canvas);
 }
@@ -220,6 +228,9 @@ void display_flush(void) {
 
 #else  // !BOARD_HAS_DISPLAY
 
+void display_set_ink(enum display_ink ink) {
+  (void)ink;
+}
 esp_err_t display_init(void) {
   return ESP_ERR_NOT_SUPPORTED;
 }

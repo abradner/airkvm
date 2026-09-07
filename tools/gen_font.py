@@ -21,7 +21,16 @@ from PIL import Image, ImageDraw, ImageFont
 TTF = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 PT = 14  # largest size whose every glyph fits an 8x16 cell (see fit check below)
 Y_OFFSET = -1
-THRESHOLD = 110
+# No threshold: glyphs are rendered through FreeType's HINTED MONOCHROME
+# rasteriser (a mode "1" image), not antialiased-then-thresholded.
+#
+# That distinction is the whole difference between a readable font and a
+# muddy one at this size, and getting it wrong is what the first version did.
+# Antialiasing plus a threshold puts half-lit pixels on one side of a stem and
+# not the other, so vertical strokes come out one pixel wide in places and two
+# in others — "M" rendered as ##..### / #.##.## rather than ##...## / #.#.#.#.
+# Hinting instead snaps stems to the pixel grid before there is any grey to
+# throw away, which is exactly what a bitmap font at 8x16 needs.
 CELL_W, CELL_H = 8, 16
 FIRST, LAST = 32, 126  # space..'~', including real lowercase
 
@@ -32,16 +41,13 @@ def glyph_columns(font, ch):
     # detected rather than silently clipped, and so each glyph can be centred on
     # its own ink rather than on the font's advance width.
     pad = 8
-    img = Image.new("L", (CELL_W + 2 * pad, CELL_H), 0)
-    ImageDraw.Draw(img).text((pad, Y_OFFSET), ch, fill=255, font=font)
+    # Mode "1" selects the hinted monochrome rasteriser; drawing (rather than
+    # font.getmask) keeps each glyph's bearings, which the mask loses.
+    img = Image.new("1", (CELL_W + 2 * pad, CELL_H), 0)
+    ImageDraw.Draw(img).text((pad, Y_OFFSET), ch, fill=1, font=font)
     px = img.load()
 
-    on = [
-        (x, y)
-        for y in range(CELL_H)
-        for x in range(CELL_W + 2 * pad)
-        if px[x, y] > THRESHOLD
-    ]
+    on = [(x, y) for y in range(CELL_H) for x in range(CELL_W + 2 * pad) if px[x, y]]
     if not on:
         return [0] * CELL_W  # space and friends
 
@@ -55,7 +61,7 @@ def glyph_columns(font, ch):
     for cx in range(CELL_W):
         bits = 0
         for y in range(CELL_H):
-            if px[cx + shift, y] > THRESHOLD:
+            if px[cx + shift, y]:
                 bits |= 1 << y
         cols.append(bits)
     return cols

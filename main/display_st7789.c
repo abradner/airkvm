@@ -40,6 +40,7 @@
 #include "esp_lcd_panel_st7789.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "palette.h"
 
 static const char *TAG = "display";
 
@@ -81,8 +82,33 @@ static const char *TAG = "display";
 // Convenient side effect while it lasts: 0xFFFF and 0x0000 are byte-order
 // agnostic, so nothing here depends on getting RGB565 endianness right. The
 // first coloured pixel is where that stops being true.
-#define INK_ON 0xFFFF
-#define INK_OFF 0x0000
+// Solarized Dark, from palette.h so the panel and the LED cannot drift into
+// two different reds. Indexed by canvas ink role, so expansion is a lookup.
+//
+// NOTE the byte-order caveat that palette.h raises: pure black and white were
+// order-agnostic, which is why the monochrome build never had to care. These
+// are the first real colours on this panel, so if they come out with red and
+// blue transposed, esp_lcd_panel_dev_config_t.data_endian is the flag — not
+// the palette. UNVERIFIED until someone looks at the panel.
+// Byte-swapped, and that is the fix rather than a quirk. The panel takes RGB565
+// most-significant byte first; this chip is little-endian, so a uint16_t handed
+// to DMA arrives with its bytes reversed. Black and white are palindromic in
+// RGB565, which is why the monochrome build never noticed and why this could
+// not be caught until there were real colours: the first coloured frame came
+// out with base03 as vivid green and the text blue (hardware, 2026-09-07),
+// which is exactly what swapping the bytes of 0x0146 predicts.
+//
+// Done here rather than by asking esp_lcd to do it, because the swap is a
+// property of this transport and palette.h should keep saying what the colours
+// ARE. If a future panel wants natural order, this is the one place to change.
+#define BE16(v) ((uint16_t)((((v) & 0x00FF) << 8) | (((v) & 0xFF00) >> 8)))
+
+static const uint16_t k_palette[4] = {
+    [CANVAS_INK_NONE] = BE16(SOL_SCREEN_BG),
+    [CANVAS_INK_PRIMARY] = BE16(SOL_SCREEN_PRIMARY),
+    [CANVAS_INK_SECONDARY] = BE16(SOL_SCREEN_SECONDARY),
+    [CANVAS_INK_ACCENT] = BE16(SOL_SCREEN_ACCENT),
+};
 
 static esp_lcd_panel_handle_t s_panel;
 static esp_lcd_panel_io_handle_t s_io;
@@ -90,24 +116,41 @@ static SemaphoreHandle_t s_band_free;
 static bool s_present;
 
 static uint8_t s_bits[DISPLAY_WIDTH * ((DISPLAY_HEIGHT + 7) / 8)];
-// What the panel is currently showing. Flush sends only the page rows that
-// differ, which is what keeps a 22ms full-frame repaint off a 250ms redraw
-// cadence: the status screen changes a couple of rows a second.
+// Second ink plane. Two planes give four roles while leaving plane 0 packed
+// exactly as before, so nothing about the existing pixel path changes.
+static uint8_t s_bits_hi[sizeof(s_bits)];
+// A checksum per page row of what the panel is currently showing, so flush
+// sends only the rows that changed. Still compared rather than dirty-flagged
+// on write: a flag set at every mutation site is a flag that eventually gets
+// missed, and a missed one shows as a stale patch of screen that looks like a
+// panel fault.
 //
-// Compared rather than dirty-flagged on write, deliberately — a flag set at
-// every mutation site is a flag that eventually gets missed, and a missed one
-// shows as a stale patch of screen that looks like a panel fault. memcmp of
-// 320 bytes cannot be wrong.
-static uint8_t s_shadow[sizeof(s_bits)];
+// A checksum rather than a full copy because a second ink plane doubled the
+// canvas, and 88 bytes of CRC pays for that entirely — the whole colour
+// feature costs +88 bytes of RAM against the previous shadow, on a board where
+// heap is the binding constraint. The trade is a theoretical collision (two
+// different page rows hashing equal, leaving one stale until it next changes)
+// against 14KB, and at these odds on a status screen that is not a real risk.
+static uint32_t s_shadow_crc[(DISPLAY_HEIGHT + 7) / 8];
+static uint32_t page_crc(const uint8_t *lo, const uint8_t *hi, int n) {
+  uint32_t h = 2166136261u;  // FNV-1a
+  for (int i = 0; i < n; i++) {
+    h = (h ^ lo[i]) * 16777619u;
+    h = (h ^ hi[i]) * 16777619u;
+  }
+  return h;
+}
 static bool s_never_flushed = true;
 
 static uint16_t *s_band;  // BAND_PIXELS entries, DMA-capable
 
 static struct canvas s_canvas = {
     .bits = s_bits,
+    .bits_hi = s_bits_hi,
     .w = DISPLAY_WIDTH,
     .h = DISPLAY_HEIGHT,
     .font = NULL,  // bound in display_init
+    .ink = CANVAS_INK_PRIMARY,
 };
 
 static bool band_done(esp_lcd_panel_io_handle_t io,
@@ -243,6 +286,10 @@ void display_clear(void) {
   canvas_clear(&s_canvas);
 }
 
+void display_set_ink(enum display_ink ink) {
+  canvas_set_ink(&s_canvas, (uint8_t)ink);
+}
+
 void display_pixel(int x, int y, bool on) {
   if (!s_present) {
     return;
@@ -278,9 +325,10 @@ void display_flush(void) {
     return;
   }
   for (int page = 0; page < PAGES; page++) {
-    uint8_t *src = &s_bits[page * DISPLAY_WIDTH];
-    uint8_t *shadow = &s_shadow[page * DISPLAY_WIDTH];
-    if (!s_never_flushed && memcmp(src, shadow, DISPLAY_WIDTH) == 0) {
+    const uint8_t *lo = &s_bits[page * DISPLAY_WIDTH];
+    const uint8_t *hi = &s_bits_hi[page * DISPLAY_WIDTH];
+    const uint32_t crc = page_crc(lo, hi, DISPLAY_WIDTH);
+    if (!s_never_flushed && crc == s_shadow_crc[page]) {
       continue;
     }
 
@@ -297,7 +345,9 @@ void display_flush(void) {
       uint16_t *out = &s_band[r * DISPLAY_WIDTH];
       const uint8_t mask = (uint8_t)(1u << r);
       for (int x = 0; x < DISPLAY_WIDTH; x++) {
-        out[x] = (src[x] & mask) ? INK_ON : INK_OFF;
+        const uint8_t ink =
+            (uint8_t)(((lo[x] & mask) ? 1u : 0u) | ((hi[x] & mask) ? 2u : 0u));
+        out[x] = k_palette[ink];
       }
     }
     if (esp_lcd_panel_draw_bitmap(s_panel, 0, y0, DISPLAY_WIDTH, y0 + rows,
@@ -305,7 +355,7 @@ void display_flush(void) {
       xSemaphoreGive(s_band_free);
       return;
     }
-    memcpy(shadow, src, DISPLAY_WIDTH);
+    s_shadow_crc[page] = crc;
   }
   s_never_flushed = false;
 }
@@ -319,6 +369,10 @@ bool display_present(void) {
   return false;
 }
 void display_clear(void) {}
+void display_set_ink(enum display_ink ink) {
+  canvas_set_ink(&s_canvas, (uint8_t)ink);
+}
+
 void display_pixel(int x, int y, bool on) {
   (void)x;
   (void)y;

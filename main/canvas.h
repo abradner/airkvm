@@ -41,11 +41,30 @@ extern const struct canvas_font canvas_font8x16;
 // A panel that wants a different layout expands at flush time; at these sizes
 // (320x172 is 7040 bytes) that is far cheaper than the alternative, which is a
 // 110KB RGB565 framebuffer competing with mbedTLS for the same heap.
+// Ink roles. Four, because two 1bpp planes give four combinations and that is
+// exactly the vocabulary a status screen needs — see display.h for what each
+// one means. Role 0 is "no ink" and is how a pixel is cleared.
+//
+// Two planes rather than a repacked 2bpp buffer, deliberately. The packing
+// stays byte-for-byte what the SSD1306 wants, so that backend hands plane 0
+// to the panel unmodified and its rendering is provably unchanged — the golden
+// test in test_canvas.c holds that to account. A repack would have made every
+// existing pixel path suspect for a feature only one board uses.
+#define CANVAS_INK_NONE 0
+#define CANVAS_INK_PRIMARY 1
+#define CANVAS_INK_SECONDARY 2
+#define CANVAS_INK_ACCENT 3
+
 struct canvas {
-  uint8_t *bits;
+  uint8_t *bits;  // plane 0
+  // Plane 1. NULL on a single-colour panel, which is not an error: with no
+  // second plane every non-zero ink collapses to "on", which is the honest
+  // rendering of colour on a monochrome display and costs that board nothing.
+  uint8_t *bits_hi;
   int w;
   int h;
   const struct canvas_font *font;
+  uint8_t ink;  // role applied by subsequent draws; 0 means "use PRIMARY"
 };
 
 static inline int canvas_pages(int h) {
@@ -57,7 +76,19 @@ static inline int canvas_bytes(int w, int h) {
 }
 
 static inline void canvas_clear(struct canvas *c) {
-  memset(c->bits, 0, (size_t)canvas_bytes(c->w, c->h));
+  const size_t n = (size_t)canvas_bytes(c->w, c->h);
+  memset(c->bits, 0, n);
+  if (c->bits_hi != NULL) {
+    memset(c->bits_hi, 0, n);
+  }
+}
+
+// Sets the role for subsequent draws. Stateful, like a pen colour, because the
+// alternative is threading an ink argument through every call site including
+// the ones that have no opinion — and the callers that do care set it for one
+// line and put it back.
+static inline void canvas_set_ink(struct canvas *c, uint8_t ink) {
+  c->ink = ink;
 }
 
 // Out-of-bounds writes are silently clipped, same as every other draw call —
@@ -67,13 +98,46 @@ static inline void canvas_pixel(struct canvas *c, int x, int y, bool on) {
   if (x < 0 || x >= c->w || y < 0 || y >= c->h) {
     return;
   }
-  uint8_t *cell = &c->bits[(y / 8) * c->w + x];
+  const size_t off = (size_t)(y / 8) * (size_t)c->w + (size_t)x;
   const uint8_t bit = (uint8_t)(1u << (y % 8));
-  if (on) {
-    *cell |= bit;
+  // Ink 0 from a caller that never set one means PRIMARY, so every existing
+  // call site keeps working untouched and a zeroed struct is not a trap.
+  const uint8_t ink = c->ink == CANVAS_INK_NONE ? CANVAS_INK_PRIMARY : c->ink;
+
+  // On a single-plane canvas, plane 0 means "lit", not "bit 0 of the role" —
+  // otherwise SECONDARY (role 2, bit 0 clear) writes nothing and the text
+  // silently disappears on the monochrome board. That is not hypothetical: it
+  // is what this did when first written, and since ui.c draws almost
+  // everything SECONDARY it would have blanked the shipping dongle's screen
+  // while the colour board looked perfect.
+  const bool lit = on && (c->bits_hi != NULL ? (ink & 1u) != 0 : ink != 0);
+  if (lit) {
+    c->bits[off] |= bit;
   } else {
-    *cell &= (uint8_t)~bit;
+    c->bits[off] &= (uint8_t)~bit;
   }
+  if (c->bits_hi != NULL) {
+    if (on && (ink & 2u)) {
+      c->bits_hi[off] |= bit;
+    } else {
+      c->bits_hi[off] &= (uint8_t)~bit;
+    }
+  }
+}
+
+// The role at a pixel, 0..3. Used by a colour backend at flush time; a
+// monochrome one just reads plane 0.
+static inline uint8_t canvas_ink_at(const struct canvas *c, int x, int y) {
+  if (x < 0 || x >= c->w || y < 0 || y >= c->h) {
+    return CANVAS_INK_NONE;
+  }
+  const size_t off = (size_t)(y / 8) * (size_t)c->w + (size_t)x;
+  const uint8_t bit = (uint8_t)(1u << (y % 8));
+  uint8_t ink = (c->bits[off] & bit) ? 1u : 0u;
+  if (c->bits_hi != NULL && (c->bits_hi[off] & bit)) {
+    ink |= 2u;
+  }
+  return ink;
 }
 
 // Draws text at a pixel position, scaled independently in each axis. Text is
