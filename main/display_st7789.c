@@ -40,7 +40,7 @@
 #include "esp_lcd_panel_st7789.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include "palette.h"
+#include "theme.h"
 
 static const char *TAG = "display";
 
@@ -74,22 +74,9 @@ static const char *TAG = "display";
 
 #define PAGES (canvas_pages(DISPLAY_HEIGHT))
 
-// Monochrome, pass 1. Deliberately not parameterised yet: adding colour means
-// either a second bit plane or a stateful ink mode on a stateless drawing API,
-// and that is a decision to take with the panel in front of you rather than
-// ahead of it.
+// The panel's four colours, expanded from the theme selected at build time
+// (theme.h). Indexed by canvas ink role, so expansion at flush is a lookup.
 //
-// Convenient side effect while it lasts: 0xFFFF and 0x0000 are byte-order
-// agnostic, so nothing here depends on getting RGB565 endianness right. The
-// first coloured pixel is where that stops being true.
-// Solarized Dark, from palette.h so the panel and the LED cannot drift into
-// two different reds. Indexed by canvas ink role, so expansion is a lookup.
-//
-// NOTE the byte-order caveat that palette.h raises: pure black and white were
-// order-agnostic, which is why the monochrome build never had to care. These
-// are the first real colours on this panel, so if they come out with red and
-// blue transposed, esp_lcd_panel_dev_config_t.data_endian is the flag — not
-// the palette. UNVERIFIED until someone looks at the panel.
 // Byte-swapped, and that is the fix rather than a quirk. The panel takes RGB565
 // most-significant byte first; this chip is little-endian, so a uint16_t handed
 // to DMA arrives with its bytes reversed. Black and white are palindromic in
@@ -99,16 +86,24 @@ static const char *TAG = "display";
 // which is exactly what swapping the bytes of 0x0146 predicts.
 //
 // Done here rather than by asking esp_lcd to do it, because the swap is a
-// property of this transport and palette.h should keep saying what the colours
+// property of this transport and theme.h should keep saying what the colours
 // ARE. If a future panel wants natural order, this is the one place to change.
 #define BE16(v) ((uint16_t)((((v) & 0x00FF) << 8) | (((v) & 0xFF00) >> 8)))
 
-static const uint16_t k_palette[4] = {
-    [CANVAS_INK_NONE] = BE16(SOL_SCREEN_BG),
-    [CANVAS_INK_PRIMARY] = BE16(SOL_SCREEN_PRIMARY),
-    [CANVAS_INK_SECONDARY] = BE16(SOL_SCREEN_SECONDARY),
-    [CANVAS_INK_ACCENT] = BE16(SOL_SCREEN_ACCENT),
-};
+// Filled in display_init from display_themes[], rather than being a const
+// initialiser, for one reason worth stating: a const array cannot be indexed
+// by another const array at compile time in C, and resolving that with a
+// parallel set of per-theme macros would mean the table the host contrast test
+// reads and the table the panel draws from are two things that can disagree.
+// Eight bytes of BSS buys a single source of truth — and, incidentally, the
+// whole of runtime theme selection, should that ever be wanted (theme.h).
+static uint16_t s_palette[4];
+
+static void palette_load(const struct display_theme *t) {
+  for (int i = 0; i < 4; i++) {
+    s_palette[i] = BE16(t->ink[i]);
+  }
+}
 
 static esp_lcd_panel_handle_t s_panel;
 static esp_lcd_panel_io_handle_t s_io;
@@ -181,6 +176,13 @@ static esp_err_t backlight_init(void) {
 }
 
 esp_err_t display_init(void) {
+  // First, and unconditionally: every early return below leaves s_present
+  // false so draws no-op, but a half-initialised palette would be a table of
+  // zeroes, and zero is a valid colour rather than an obviously-broken one.
+  const struct display_theme *theme = &display_themes[DISPLAY_THEME_SELECTED];
+  palette_load(theme);
+  ESP_LOGI(TAG, "theme: %s", theme->name);
+
   s_band_free = xSemaphoreCreateBinary();
   if (s_band_free == NULL) {
     return ESP_ERR_NO_MEM;
@@ -347,7 +349,7 @@ void display_flush(void) {
       for (int x = 0; x < DISPLAY_WIDTH; x++) {
         const uint8_t ink =
             (uint8_t)(((lo[x] & mask) ? 1u : 0u) | ((hi[x] & mask) ? 2u : 0u));
-        out[x] = k_palette[ink];
+        out[x] = s_palette[ink];
       }
     }
     if (esp_lcd_panel_draw_bitmap(s_panel, 0, y0, DISPLAY_WIDTH, y0 + rows,

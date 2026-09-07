@@ -48,3 +48,11 @@ add_test(NAME status_debug COMMAND test_status_debug)
 # and is now shared by two backends, so it is exactly the part worth pinning.
 add_executable(test_indicator test_indicator.c)
 add_test(NAME indicator COMMAND test_indicator)
+
+# theme.h is header-only data, for the same reason canvas.h is header-only
+# code: so the thing that cannot be checked without a panel — is this legible —
+# becomes a number that can. Links libm for pow(), which the WCAG luminance
+# curve needs and which nothing else in this suite does.
+add_executable(test_theme test_theme.c)
+target_link_libraries(test_theme m)
+add_test(NAME theme COMMAND test_theme)

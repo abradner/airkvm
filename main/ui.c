@@ -246,6 +246,15 @@ static void draw(const struct status_snapshot *s) {
   // smallest renderable glyph is already 2.5x the OLED's linear size, so the
   // assumption is weaker here and must not be weakened further. Do not "fix"
   // this to match the other rows.
+  //
+  // It also inherits SECONDARY ink, which the themeable palette (theme.h) took
+  // from 2.9:1 to 7.9:1 of contrast in the default theme. That is the whole
+  // point of the theme change and this row rides along with it: legibility at
+  // distance went up for every SECONDARY element, including this one. Recorded
+  // in R-006 rather than worked around, because the honest options are all
+  // worse — a fifth ink role means a third bit plane and 7KB of heap this
+  // board does not have, and drawing the row in a deliberately illegible
+  // colour would be security by squinting.
   if (s->debug) {
     display_text(UI_X_COL, UI_Y_DEBUG / DISPLAY_CELL_H,
                  s->last_event[0] ? s->last_event : "DEBUG ON");
