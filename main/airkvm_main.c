@@ -6,6 +6,7 @@
 
 #include "esp_log.h"
 #include "hid_out.h"
+#include "http80.h"
 #include "logtap.h"
 #if CONFIG_AIRKVM_MSC_SD
 #include "msc_src_sd.h"
@@ -81,10 +82,18 @@ void app_main(void) {
 #endif
 
   // Only now is there a network stack to bind to (esp_netif_init happens
-  // inside net_start). No-op unless AIRKVM_LOG_TAP is set.
-  if (logtap_serve() != ESP_OK) {
-    ESP_LOGW(TAG, "log tap failed to serve");
+  // inside net_start). This is the plain-HTTP server on port 80: the redirect
+  // to HTTPS, and the log tap's route if that build enabled it. Compiled out
+  // entirely on a non-TLS build, where the console itself is on port 80 and
+  // there is nothing to redirect to.
+  //
+  // Never fatal. Port 80 carries a convenience and a diagnostic; the console
+  // is on 443 and has already started.
+#if CONFIG_AIRKVM_TLS
+  if (http80_start() != ESP_OK) {
+    ESP_LOGW(TAG, "port 80 not served — console is still on https://");
   }
+#endif
 
   if (err == ESP_OK) {
     ESP_LOGI(TAG, "airkvm ready");

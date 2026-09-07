@@ -53,7 +53,7 @@ static int logtap_vprintf(const char *fmt, va_list args) {
   return r;
 }
 
-static esp_err_t log_get(httpd_req_t *req) {
+esp_err_t logtap_http_get(httpd_req_t *req) {
   httpd_resp_set_type(req, "text/plain");
   if (s_lock != NULL) {
     xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -77,28 +77,6 @@ esp_err_t logtap_capture(void) {
   }
   s_previous = esp_log_set_vprintf(logtap_vprintf);
   return ESP_OK;
-}
-
-esp_err_t logtap_serve(void) {
-  // Its own server on port 80, separate from the console's on 443, so that
-  // this says nothing about whether the console works — the instrument must
-  // not perturb the thing under investigation.
-  httpd_handle_t server = NULL;
-  httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-  config.server_port = 80;
-  config.ctrl_port = 32001;  // must not collide with the console's
-  config.lru_purge_enable = true;
-  esp_err_t err = httpd_start(&server, &config);
-  if (err != ESP_OK) {
-    return err;
-  }
-  const httpd_uri_t route = {
-      .uri = "/log", .method = HTTP_GET, .handler = log_get};
-  err = httpd_register_uri_handler(server, &route);
-  if (err == ESP_OK) {
-    ESP_LOGW(TAG_LOGTAP, "log tap on http://<ip>/log — DIAGNOSTIC BUILD ONLY");
-  }
-  return err;
 }
 
 #endif  // CONFIG_AIRKVM_LOG_TAP
