@@ -11,8 +11,9 @@
 
 static const char *TAG = "http80";
 
-// Verified on hardware 2026-09-07 (ESP32-S3-LCD-1.47B, over OTA). What was
-// actually checked, because "it built" says nothing about a URI matcher:
+// Verified on hardware (ESP32-S3-LCD-1.47B, over OTA), re-run 2026-09-08 after
+// the socket caps and the text/plain body landed. What was actually checked,
+// because "it built" says nothing about a URI matcher:
 //
 //   http://airkvm-lcd.local/          -> 302, Location https://airkvm-lcd.local/
 //   http://airkvm-lcd.local/app.js?v=2 -> path AND query preserved
@@ -20,8 +21,14 @@ static const char *TAG = "http80";
 //   http://10.10.40.240/log           -> 200 and the log, NOT the redirect
 //   following the redirect            -> the real console, 200 over TLS
 //   Host: "evil host with spaces"     -> 400, no Location emitted
-//   Host: "evil/../etc"               -> 400
+//   Host: 120 bytes of 'a'            -> 400, not a silent mDNS fallback
 //   HTTP/1.0 with no Host at all      -> 302 to the configured mDNS name
+//
+// And the one this port's socket budget exists for: with EIGHT idle
+// connections held open on port 80 — more than the seven-client default this
+// server used to take — the console still answered on 443 in about a second,
+// the log tap still served, and the redirect still replied. That is the
+// starvation this instance was capable of causing before it was capped.
 //
 // The fourth line is the one worth having run: /log winning over the catch-all
 // depends on esp_http_server returning the FIRST matching handler in
