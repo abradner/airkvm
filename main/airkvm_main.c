@@ -89,8 +89,15 @@ void app_main(void) {
   //
   // Never fatal. Port 80 carries a convenience and a diagnostic; the console
   // is on 443 and has already started.
+  //
+  // Gated on net_start() having succeeded, for two reasons. If the TLS console
+  // failed to start (fatal by design, R-007 — a cert that will not parse has
+  // done this before, gotcha 6), a redirect to 443 sends the browser to the
+  // same refused connection this feature exists to remove, one hop later. And
+  // if net_start() failed before esp_netif_init(), httpd_start would run with
+  // no TCP/IP stack at all — logtap.h records that shape as a reboot loop.
 #if CONFIG_AIRKVM_TLS
-  if (http80_start() != ESP_OK) {
+  if (err == ESP_OK && http80_start() != ESP_OK) {
     ESP_LOGW(TAG, "port 80 not served — console is still on https://");
   }
 #endif

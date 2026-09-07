@@ -57,39 +57,55 @@ static esp_err_t redirect_get(httpd_req_t *req) {
   char location[LOCATION_MAX];
 
   // A Host header is mandatory in HTTP/1.1 and absent in some HTTP/1.0
-  // clients. Falling back to the configured mDNS name rather than failing
-  // keeps `curl -0` and the odd embedded client working, and that name is
-  // ours rather than the caller's — it cannot carry an injection.
-  size_t host_len = httpd_req_get_hdr_value_len(req, "Host");
-  if (host_len == 0 || host_len > REDIRECT_MAX_HOST) {
+  // clients. ABSENT falls back to the configured mDNS name, which is ours
+  // rather than the caller's and so cannot carry an injection; that keeps
+  // `curl -0` and the odd embedded client working.
+  //
+  // PRESENT BUT UNUSABLE is a different case and must not take that path. An
+  // over-long Host used to fall back too, which sent a client that asked for
+  // one host to a different one — quietly, and contradicting redirect.h's
+  // "refuse rather than guess". It is a 400 now, like every other Host the
+  // validator rejects.
+  const size_t host_len = httpd_req_get_hdr_value_len(req, "Host");
+  bool have_host = false;
+  if (host_len == 0) {
     snprintf(host, sizeof(host), "%s.local", CONFIG_AIRKVM_MDNS_HOSTNAME);
-  } else if (httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) !=
-             ESP_OK) {
-    snprintf(host, sizeof(host), "%s.local", CONFIG_AIRKVM_MDNS_HOSTNAME);
+    have_host = true;
+  } else if (host_len <= REDIRECT_MAX_HOST &&
+             httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) ==
+                 ESP_OK) {
+    have_host = true;
   }
 
-  if (!redirect_location(host, req->uri, location, sizeof(location))) {
-    // The host did not validate. Say so plainly rather than redirecting
-    // somewhere invented: a Location built from input we could not check is
-    // worse than no Location at all (redirect.h).
-    ESP_LOGW(TAG, "refusing to redirect: unusable Host header");
+  if (!have_host ||
+      !redirect_location(host, req->uri, location, sizeof(location))) {
+    // Say so plainly rather than redirecting somewhere invented: a Location
+    // built from input we could not check is worse than no Location at all
+    // (redirect.h). The message does not name the Host specifically, because
+    // an over-long request target lands here too — HTTPD_MAX_URI_LEN is 512
+    // and LOCATION_MAX is 256 — and blaming the wrong header is a worse
+    // diagnostic than blaming neither.
+    ESP_LOGW(TAG, "refusing to redirect: unusable Host or target");
     httpd_resp_set_status(req, "400 Bad Request");
     httpd_resp_set_type(req, "text/plain");
-    return httpd_resp_sendstr(req, "bad Host header\n");
+    return httpd_resp_sendstr(req,
+                              "cannot build a redirect for this request\n");
   }
 
   httpd_resp_set_status(req, REDIRECT_STATUS);
   httpd_resp_set_hdr(req, "Location", location);
-  httpd_resp_set_type(req, "text/html");
-  // A body, because a client that does not follow redirects — curl without
-  // -L, a service browser, someone telnetting the port to see what is there —
-  // should still be told where the console is rather than shown a blank page.
-  char body[LOCATION_MAX + 96];
-  const int n = snprintf(body, sizeof(body),
-                         "<!doctype html><meta charset=utf-8>"
-                         "<title>airkvm</title>"
-                         "<p>The console is at <a href=\"%s\">%s</a>",
-                         location, location);
+  // text/plain, and that is a decision. The body echoes the location, which
+  // contains the request target, which is caller-controlled: http_parser
+  // permits quotes and angle brackets in a request target, so an HTML body
+  // would be reflecting unescaped input into markup. Nothing renders a 3xx
+  // body, so it was not exploitable — but "not exploitable today" is a poor
+  // reason to keep reflected HTML on an unauthenticated port, and a link adds
+  // nothing for the clients that actually read this (curl without -L, a
+  // service browser, someone telnetting the port to see what answers).
+  httpd_resp_set_type(req, "text/plain");
+  char body[LOCATION_MAX + 32];
+  const int n =
+      snprintf(body, sizeof(body), "The console is at %s\n", location);
   if (n < 0 || (size_t)n >= sizeof(body)) {
     return httpd_resp_sendstr(req, "");
   }
@@ -105,6 +121,22 @@ esp_err_t http80_start(void) {
   // that had the log tap enabled does not change which ports it opens.
   config.ctrl_port = 32001;
   config.lru_purge_enable = true;
+  // Two clients, not the default seven, and this is a budget rather than a
+  // preference. esp_http_server checks max_open_sockets + 3 against
+  // CONFIG_LWIP_MAX_SOCKETS for ITS OWN instance only (httpd_main.c), so three
+  // servers each pass their own check and then exhaust the pool between them
+  // at runtime — an accept() or socket() failing with ENFILE on whichever of
+  // the console, the media server and mDNS loses, on a device that looks
+  // healthy. sdkconfig.defaults does that arithmetic; this port is in it.
+  //
+  // Two is enough for what this port does: a browser opens one connection and
+  // often a speculative second, and every request here is answered and closed.
+  config.max_open_sockets = 2;
+  // A client that connects and then says nothing must not hold a slot. These
+  // are read/write deadlines, not keepalive; with lru_purge_enable above, a
+  // port scanner or a half-open connection cannot camp on the budget.
+  config.recv_wait_timeout = 4;
+  config.send_wait_timeout = 4;
   // The catch-all below is a wildcard, which esp_http_server only honours with
   // this matcher. Without it "/*" is a literal path and nothing matches it —
   // the redirect would appear to be registered and would never fire.

@@ -14,6 +14,21 @@ static bool build(const char *host, const char *uri) {
   return redirect_location(host, uri, g_out, sizeof(g_out));
 }
 
+// A refused call must not have written anything. The poison above was being
+// laid down and never checked, so a version that assembled half a URL and then
+// bailed would have passed every test in this file.
+static bool refused_and_wrote_nothing(const char *host, const char *uri) {
+  if (build(host, uri)) {
+    return false;
+  }
+  for (size_t i = 0; i < sizeof(g_out); i++) {
+    if ((unsigned char)g_out[i] != 0xAA) {
+      return false;
+    }
+  }
+  return true;
+}
+
 static void the_ordinary_case(void) {
   CHECK(build("airkvm-lcd.local", "/"));
   CHECK_EQ_STR(g_out, "https://airkvm-lcd.local/");
@@ -61,6 +76,11 @@ static void header_injection_is_refused(void) {
   CHECK(!build("evil\r\nX-Injected: yes", "/"));
   CHECK(!build("evil\nX-Injected: yes", "/"));
   CHECK(!build("evil\rX", "/"));
+  // LF on its own, with nothing after it that would be rejected anyway. The
+  // two cases above both contain a space and a colon, so they would still be
+  // refused with the newline check removed — this one would not, and mutating
+  // the allowlist to permit \n survived until it existed.
+  CHECK(!build("evil\nX", "/"));
   // Not merely CR/LF: the allowlist refuses anything it does not recognise, so
   // the next header-splitting trick does not need a new rule here.
   //
@@ -84,6 +104,14 @@ static void header_injection_is_refused(void) {
   CHECK(!build("airkvm-lcd.local", "/a\nX: y"));
 }
 
+// The poison check, applied to one refusal of each kind.
+static void a_refused_build_leaves_the_output_untouched(void) {
+  CHECK(refused_and_wrote_nothing("evil\r\nX: y", "/"));
+  CHECK(refused_and_wrote_nothing("", "/"));
+  CHECK(refused_and_wrote_nothing("[fe80::1", "/"));
+  CHECK(refused_and_wrote_nothing("airkvm-lcd.local", "/a\nX: y"));
+}
+
 static void empty_and_missing_inputs_are_refused(void) {
   CHECK(!build("", "/"));
   CHECK(!redirect_location(NULL, "/", g_out, sizeof(g_out)));
@@ -102,6 +130,14 @@ static void oversized_input_fails_closed(void) {
   memset(big, 'a', sizeof(big) - 1);
   big[sizeof(big) - 1] = '\0';
   CHECK(!build(big, "/"));
+
+  // Exactly one over the cap. Without this, relaxing the bound from >= to >
+  // passes every other length case — the cap and cap+31 are both still
+  // rejected — so this is the only assertion that pins the boundary itself.
+  char over_by_one[REDIRECT_MAX_HOST + 2];
+  memset(over_by_one, 'a', REDIRECT_MAX_HOST + 1);
+  over_by_one[REDIRECT_MAX_HOST + 1] = '\0';
+  CHECK(!build(over_by_one, "/"));
 
   // Exactly at the cap is still fine, so the check is a cap and not an
   // off-by-one that rejects the longest legal name.
@@ -139,6 +175,7 @@ int main(void) {
   RUN(the_port_is_stripped);
   RUN(ipv6_literals_keep_their_address);
   RUN(header_injection_is_refused);
+  RUN(a_refused_build_leaves_the_output_untouched);
   RUN(empty_and_missing_inputs_are_refused);
   RUN(oversized_input_fails_closed);
   RUN(a_relative_target_still_produces_an_absolute_path);

@@ -2,11 +2,12 @@
 //
 // Port 80 has two jobs on a TLS build and neither can have its own server,
 // because two servers cannot bind one port. main/Kconfig.projbuild already
-// warned about this — the log tap "requires AIRKVM_TLS, because it serves on
-// port 80 and a non-TLS console is already there... without this dependency
-// the two race for the same port and which one you get is a coin toss". Adding
-// the HTTPS redirect makes that a three-way problem, so ownership moves here
-// rather than being negotiated between modules.
+// warned about the shape — the log tap "requires AIRKVM_TLS, because it serves
+// on port 80 and a non-TLS console is already there... without this dependency
+// the two race for the same port and which one you get is a coin toss". That
+// dependency held, so no race ever shipped; the redirect is simply the second
+// occupant that makes a written-down rule insufficient, so ownership moves
+// here rather than being negotiated between modules.
 //
 // This is the same shape as hid_state.c owning HID reports and msc_lun.c
 // owning the LUN: one module answers "what is on port 80", and the alternative

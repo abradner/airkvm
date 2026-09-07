@@ -31,15 +31,21 @@ CONFIG_TINYUSB_MSC_ENABLED=y
 # measuring (principle 6), not before.
 CONFIG_TINYUSB_MSC_BUFSIZE=4096
 
-# The console holds one long-lived WebSocket plus three short static requests,
-# and the media server (main/media_ws.c) is a second httpd instance with two
-# client slots. Each instance also reserves three internal sockets, plus mDNS,
-# which the old value of 10 did not leave room for. This is an EXISTING symbol
+# Three httpd instances now, and this number is the sum of them: the console
+# (4 client slots), the media server (1, main/media_ws.c) and the port-80
+# redirect (2, main/http80.c). Each ALSO reserves three internal sockets — a
+# listener and two control-UDP — and mDNS wants one or two more, so the floor
+# is 4+1+2 clients plus 9 internal plus mDNS.
+#
+# esp_http_server checks max_open_sockets + 3 against this value for its OWN
+# instance only, so three servers each pass and then exhaust the pool between
+# them at runtime; the check cannot catch an over-subscribed sum. If you add a
+# fourth listener, do this arithmetic again. This is an EXISTING symbol
 # in any generated sdkconfig from before: a defaults file cannot change it
 # (AGENTS.md §6.1). Delete or edit your sdkconfig and confirm 16 in
 # build/config/sdkconfig.h, or the failure is a runtime accept()/socket()
 # ENFILE on whichever of TLS accept and mDNS loses.
-CONFIG_LWIP_MAX_SOCKETS=16
+CONFIG_LWIP_MAX_SOCKETS=20
 CONFIG_HTTPD_WS_SUPPORT=y
 # IDF's default, pinned because main/media_proto.h sizes a media piece to fit
 # one inbound record payload (MEDIA_DATA_MAX). If this changes, that must too.
