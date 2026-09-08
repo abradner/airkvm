@@ -155,9 +155,17 @@ and will send the wrong key on any non-US layout.
 No CDN links, no npm, no build step, no framework. The dongle serves everything the console
 needs, because a machine you walked up to may be on a network with no internet at all — and
 because the console must not phone anywhere (§2, principle 5). It is embedded in the firmware
-image (`EMBED_FILES` in `main/CMakeLists.txt`) and served straight from flash — uncompressed
-today; gzipping is worth doing once the page stops changing shape every session. If a dependency
-seems necessary, that is a proposal for review (§8, no-stated-convention rule), not a default.
+image (`EMBED_FILES` in `main/CMakeLists.txt`), gzipped at build time and served straight from
+flash. If a dependency seems necessary, that is a proposal for review (§8, no-stated-convention
+rule), not a default.
+
+**The console has one input mode per page load.** `direct` is pointer lock plus
+`KeyboardEvent.code`; `soft` is a touch surface plus characters through `CHAR_MAP`
+(`docs/design/mobile-console.md`). The mode is chosen once, and only that mode's listeners are
+registered — the exclusion is structural, so the two paths cannot both forward a keystroke, and
+no flag has to be remembered. A new input source (a gamepad, a second kind of keyboard) picks one
+of these modes or proposes a third; it does not add another gate in front of the existing
+handlers.
 
 ### Never claim latency, safety, or hardware behavior that hasn't been observed on real hardware
 
@@ -383,6 +391,22 @@ add rather than rewrite.
   the boot-mode line on USB-Serial/JTAG parts, and the board lands in download mode the moment
   you attach. Construct with `port=None`, set `dtr = rts = False`, assign `.port`, then `.open()`
   — or just use `idf.py monitor`.
+- **Checking the console without a phone: Firefox headless on the Pi works, Chromium headless
+  hangs.** Both are installed. `chromium --headless=new` (and `=old`, with or without
+  `--no-zygote`) never returns from `--dump-dom` or `--screenshot` here, and its
+  `--enable-logging=stderr` never surfaced a thrown JS error even when one was planted — a probe
+  page with `throw` was the positive control that showed the instrument was blind, before it was
+  trusted for an absence claim (§8). `firefox --headless --screenshot out.png URL` renders in
+  ~2.5 s, **but only on a fresh profile**: reusing `--profile` silently produces no file, so
+  `rm -rf` the profile dir before every run. Errors have to be made visible to be seen:
+  inject a `window.onerror` that writes into a fixed banner *synchronously* (a `setTimeout`
+  after `load` is too late — the screenshot is taken at `load`), then read the PNG. With a
+  stubbed `WebSocket` and fake timers injected the same way, the soft-mode gesture/latch/
+  keyboard state machines run as a synchronous test in a real engine (2026-09-08, 32 checks).
+  Two engine facts that surfaced there and matter in the code: `setPointerCapture` throws
+  `NotFoundError` for a pointer the browser does not consider active, and Firefox draws the
+  scrollbars that iOS overlays, so a horizontally scrolling row needs `scrollbar-width: none`
+  or it renders as a white stripe.
 - **`tools/serial_bridge.py` goes stale every time the board changes USB mode — restart it.**
   Seen ~8 times in one evening: after any flash whose image moved the board between USB HID
   (TinyUSB) and USB-Serial/JTAG, in either direction, the next esptool connect failed with
@@ -878,6 +902,25 @@ code is written.*
     the question "what does this value MEAN to the caller", separately from "is it a legal value".
     (a) and (b) were both found by adversarial review, not by tests; (c) by a human reading a
     rebase. No test in this repo would have failed for any of them.
+
+19. **A state-coalescing drain is only safe for states that carry no information — and gotcha 11
+    had only been applied to the keyboard.** The report task drains every queued intent before
+    emitting (`main/hid_out_usb.c`), and #25 guarded keyboard intents against being applied on
+    top of a state whose report has not gone out, because a down and its up applied together
+    leave the bitmap untouched and the keypress lost. `MOUSE_BUTTON` got no such guard: two
+    button frames applied before a report goes out collapse into one report with nothing
+    pressed, and the click is gone. The window is not the 2 ms pass — the blocking peek wakes the
+    task on the first frame, so two frames in one pass is a race — it is the mouse endpoint's
+    busy interval: `pump_mouse()` cannot emit until `tud_hid_n_ready()` is true, up to the
+    10 ms bInterval after the previous mouse report (a tap right after a move), and any second
+    button frame inside that overwrites the first. Nothing ever noticed because a human click
+    outlasts it by orders of magnitude — until the phone console synthesised a click from a tap.
+    Found by reading, while planning that work (2026-09-08); the window was pinned down by the
+    review of it; not observed on hardware. The console dwells `TAP_CLICK_HOLD_MS` between the two frames, and the firmware fix
+    (the keyboard guard, applied to buttons) is issue #58.
+    **General rule: when a guard is added for one instance of a shape, list the other instances
+    of the shape in the same file and say why each does or does not need it.** Entry 11 named the
+    rule and fixed one arm of a five-arm switch.
 
 ## 10. Maintaining This Document
 

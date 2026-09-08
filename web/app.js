@@ -78,10 +78,42 @@ const el = {
   releaseAll: document.getElementById("release-all"),
   wakeTarget: document.getElementById("wake-target"),
   target: document.getElementById("target-state"),
+  mode: document.getElementById("mode"),
+  touchpad: document.getElementById("touchpad"),
+  keyrows: document.getElementById("keyrows"),
+  macros: document.getElementById("macros"),
+  release: document.getElementById("release"),
+  softKbd: document.getElementById("soft-kbd"),
+  softInput: document.getElementById("soft-input"),
+  more: document.getElementById("more"),
 };
+
+// --- input mode -------------------------------------------------------------
+//
+// One mode per page load, chosen here and never changed. `direct` is pointer
+// lock plus KeyboardEvent.code — the path verified on hardware. `soft` is a
+// touch surface plus characters through CHAR_MAP (docs/design/mobile-console.md).
+// The inactive mode's listeners are never registered, so the two cannot both
+// forward the same keystroke; that exclusion is structural, not a flag.
+//
+// Feature detection first: iOS and iPadOS Safari have no Pointer Lock at all,
+// so `direct` could never capture there. The coarse-pointer clause catches
+// Android Chrome, which exposes requestPointerLock on a touchscreen. A
+// touchscreen laptop with a mouse primary stays `direct`. `?mode=` overrides
+// for testing either UI on the other kind of device.
+const MODE = (() => {
+  const forced = new URLSearchParams(location.search).get("mode");
+  if (forced === "direct" || forced === "soft") return forced;
+  const hasLock = "requestPointerLock" in Element.prototype;
+  const coarse = matchMedia("(pointer: coarse)").matches;
+  return hasLock && !coarse ? "direct" : "soft";
+})();
+document.body.classList.toggle("soft", MODE === "soft");
+el.mode.textContent = MODE === "soft" ? "touch" : "pointer lock";
 
 let socket = null;
 let reconnectDelay = 500;
+let reconnectTimer = null;
 
 function setStatus(text, kind) {
   el.status.textContent = text;
@@ -139,7 +171,7 @@ function connect() {
     stopPinging();
     exitCapture();
     socket = null;
-    setTimeout(connect, reconnectDelay);
+    reconnectTimer = setTimeout(connect, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 10000);
   };
 
@@ -188,7 +220,90 @@ function sendKey(type, code) {
 }
 
 function sendReleaseAll() {
+  cancelTyping();
+  clearLatch();
   send([FRAME.RELEASE_ALL]);
+}
+
+// --- latched modifiers ------------------------------------------------------
+//
+// A finger cannot hold Ctrl while it taps C, so on-screen modifiers latch: tap
+// one and it goes down and stays down until the next non-modifier key has been
+// pressed, or until it is tapped again. A long press locks it until tapped.
+//
+// This is a view of what the page believes the dongle holds, and there is no
+// way to read that back, so every release-all — the button, a socket close, the
+// page going hidden — is authoritative and clears it without sending anything
+// (docs/design/mobile-console.md). Nothing here is ever restored across a
+// reconnect: that would re-press keys the dongle deliberately released.
+//
+// Always empty in direct mode; the calls below are no-ops there.
+const LATCH_LOCK_MS = 500; // NOT measured (principle 6)
+const latch = { held: [], locked: new Set() }; // held: codes in press order
+
+function repaintLatch() {
+  document.querySelectorAll("[data-mod]").forEach((b) => {
+    b.classList.toggle("latched", latch.held.includes(b.dataset.mod));
+    b.classList.toggle("locked", latch.locked.has(b.dataset.mod));
+  });
+}
+
+// Forget, without sending: the dongle has already released, or is about to.
+function clearLatch() {
+  if (latch.held.length === 0 && latch.locked.size === 0) return;
+  latch.held = [];
+  latch.locked.clear();
+  repaintLatch();
+}
+
+// After a non-modifier key: every latched-but-not-locked modifier comes up, in
+// reverse order, the way a hand lets go.
+function releaseLatched() {
+  if (latch.held.length === 0) return;
+  const keep = [];
+  latch.held
+    .slice()
+    .reverse()
+    .forEach((code) => {
+      if (latch.locked.has(code)) keep.unshift(code);
+      else sendKey(FRAME.KEY_UP, code);
+    });
+  latch.held = keep;
+  repaintLatch();
+}
+
+// The latch records what was sent, not what was asked for: a tap while the
+// socket is down highlights nothing, because the dongle holds nothing.
+function toggleLatch(code) {
+  const i = latch.held.indexOf(code);
+  if (i >= 0) {
+    sendKey(FRAME.KEY_UP, code);
+    latch.held.splice(i, 1);
+    latch.locked.delete(code);
+  } else if (sendKey(FRAME.KEY_DOWN, code)) {
+    latch.held.push(code);
+  }
+  repaintLatch();
+}
+
+function lockLatch(code) {
+  if (!latch.held.includes(code)) {
+    if (!sendKey(FRAME.KEY_DOWN, code)) return;
+    latch.held.push(code);
+  }
+  latch.locked.add(code);
+  repaintLatch();
+}
+
+// A combo that released a key the latch was holding (a locked Ctrl under
+// Ctrl+Alt+Del) has un-held it; the latch must say so.
+function forgetReleased(codes) {
+  codes.forEach((code) => {
+    const i = latch.held.indexOf(code);
+    if (i >= 0) latch.held.splice(i, 1);
+    latch.locked.delete(code);
+  });
+  repaintLatch();
 }
 
 // --- capture ---------------------------------------------------------------
@@ -206,6 +321,8 @@ function enterCapture() {
 }
 
 function exitCapture() {
+  cancelTyping();
+  clearLatch();
   if (document.pointerLockElement) document.exitPointerLock();
   if (captured) {
     captured = false;
@@ -214,16 +331,6 @@ function exitCapture() {
   }
 }
 
-document.addEventListener("pointerlockchange", () => {
-  captured = document.pointerLockElement === el.stage;
-  el.overlay.hidden = captured;
-  if (!captured) sendReleaseAll();
-});
-
-el.stage.addEventListener("click", () => {
-  if (!captured) enterCapture();
-});
-
 // Leaving the tab with keys held would leave them held on the target, because
 // the browser stops delivering keyup once the page is hidden.
 document.addEventListener("visibilitychange", () => {
@@ -231,28 +338,6 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("blur", exitCapture);
 window.addEventListener("pagehide", sendReleaseAll);
-
-document.addEventListener("keydown", (e) => {
-  if (!captured) return;
-  e.preventDefault();
-  // Esc is the release gesture and is not forwarded; the sidebar button sends it
-  // to the target when that is what you actually want.
-  if (e.code === "Escape") {
-    exitCapture();
-    return;
-  }
-  // `code` is the physical key position, which is what HID usage codes mean —
-  // `key` would be layout- and shift-dependent and send the wrong key.
-  sendKey(FRAME.KEY_DOWN, e.code);
-});
-
-document.addEventListener("keyup", (e) => {
-  if (!captured) return;
-  e.preventDefault();
-  sendKey(FRAME.KEY_UP, e.code);
-});
-
-// --- mouse -----------------------------------------------------------------
 
 // Motion is accumulated and flushed once per animation frame rather than sent
 // per event. Un-coalesced, a fast flick fills the dongle's HID queue, and a full
@@ -292,43 +377,80 @@ function flushMotion() {
   }
 }
 
-document.addEventListener("mousemove", (e) => {
-  if (!captured) return;
-  const scale = parseFloat(el.sensitivity.value);
-  pendingDx += e.movementX * scale;
-  pendingDy += e.movementY * scale;
-  if (!flushScheduled) {
-    flushScheduled = true;
-    requestAnimationFrame(flushMotion);
-  }
-});
+// Everything below registers only in direct mode (see MODE). Nothing here is
+// reachable on a device without Pointer Lock, and in soft mode the same
+// gestures arrive from the touch surface instead.
+function installDirectInput() {
+  document.addEventListener("pointerlockchange", () => {
+    captured = document.pointerLockElement === el.stage;
+    el.overlay.hidden = captured;
+    if (!captured) sendReleaseAll();
+  });
 
-// Buttons go as an absolute mask, so a dropped frame self-corrects instead of
-// leaving a button held (protocol.h).
-function sendButtons(e) {
-  if (!captured) return;
-  e.preventDefault();
-  const mask =
-    (e.buttons & 1 ? 1 : 0) | (e.buttons & 2 ? 2 : 0) | (e.buttons & 4 ? 4 : 0);
-  send([FRAME.MOUSE_BUTTON, mask]);
-}
-document.addEventListener("mousedown", sendButtons);
-document.addEventListener("mouseup", sendButtons);
-document.addEventListener("contextmenu", (e) => {
-  if (captured) e.preventDefault();
-});
+  el.stage.addEventListener("click", () => {
+    if (!captured) enterCapture();
+  });
 
-document.addEventListener(
-  "wheel",
-  (e) => {
+  document.addEventListener("keydown", (e) => {
     if (!captured) return;
     e.preventDefault();
-    const v = Math.max(-127, Math.min(127, -Math.sign(e.deltaY)));
-    const h = Math.max(-127, Math.min(127, Math.sign(e.deltaX)));
-    send([FRAME.MOUSE_SCROLL, v & 0xff, h & 0xff]);
-  },
-  { passive: false },
-);
+    // Esc is the release gesture and is not forwarded; the sidebar button sends it
+    // to the target when that is what you actually want.
+    if (e.code === "Escape") {
+      exitCapture();
+      return;
+    }
+    // `code` is the physical key position, which is what HID usage codes mean —
+    // `key` would be layout- and shift-dependent and send the wrong key.
+    sendKey(FRAME.KEY_DOWN, e.code);
+  });
+
+  document.addEventListener("keyup", (e) => {
+    if (!captured) return;
+    e.preventDefault();
+    sendKey(FRAME.KEY_UP, e.code);
+  });
+
+  // --- mouse -----------------------------------------------------------------
+
+  document.addEventListener("mousemove", (e) => {
+    if (!captured) return;
+    const scale = parseFloat(el.sensitivity.value);
+    pendingDx += e.movementX * scale;
+    pendingDy += e.movementY * scale;
+    if (!flushScheduled) {
+      flushScheduled = true;
+      requestAnimationFrame(flushMotion);
+    }
+  });
+
+  // Buttons go as an absolute mask, so a dropped frame self-corrects instead of
+  // leaving a button held (protocol.h).
+  function sendButtons(e) {
+    if (!captured) return;
+    e.preventDefault();
+    const mask =
+      (e.buttons & 1 ? 1 : 0) | (e.buttons & 2 ? 2 : 0) | (e.buttons & 4 ? 4 : 0);
+    send([FRAME.MOUSE_BUTTON, mask]);
+  }
+  document.addEventListener("mousedown", sendButtons);
+  document.addEventListener("mouseup", sendButtons);
+  document.addEventListener("contextmenu", (e) => {
+    if (captured) e.preventDefault();
+  });
+
+  document.addEventListener(
+    "wheel",
+    (e) => {
+      if (!captured) return;
+      e.preventDefault();
+      const v = Math.max(-127, Math.min(127, -Math.sign(e.deltaY)));
+      const h = Math.max(-127, Math.min(127, Math.sign(e.deltaX)));
+      send([FRAME.MOUSE_SCROLL, v & 0xff, h & 0xff]);
+    },
+    { passive: false },
+  );
+}
 
 // --- sidebar ---------------------------------------------------------------
 
@@ -341,6 +463,8 @@ document.querySelectorAll("[data-combo]").forEach((button) => {
       .slice()
       .reverse()
       .forEach((code) => sendKey(FRAME.KEY_UP, code));
+    forgetReleased(codes);
+    releaseLatched();
   });
 });
 
@@ -392,27 +516,86 @@ const CHAR_MAP = (() => {
   return map;
 })();
 
-el.sendText.addEventListener("click", async () => {
-  const text = el.pasteText.value;
-  // The shifted characters above assume a US layout on the *target*: the target
-  // decides what a physical key position produces. Non-US targets will get the
-  // wrong punctuation, which is a known limitation, not a bug to fix here.
+// Press one physical key, wrapped in Shift when asked. This is the one place
+// a character becomes keystrokes, for the paste box and the soft keyboard
+// alike; the wire sees exactly what the paste box always sent.
+function pressKey(code, shift) {
+  // A latched Shift is already down; wrapping it again would release it early.
+  const wrap = shift && !latch.held.includes("ShiftLeft");
+  if (wrap) sendKey(FRAME.KEY_DOWN, "ShiftLeft");
+  sendKey(FRAME.KEY_DOWN, code);
+  sendKey(FRAME.KEY_UP, code);
+  if (wrap) sendKey(FRAME.KEY_UP, "ShiftLeft");
+  releaseLatched();
+}
+
+// One character through CHAR_MAP. Unmapped is reported, never dropped.
+function typeChar(ch) {
+  const m = CHAR_MAP.get(ch);
+  if (!m) {
+    setStatus(`can't type: ${JSON.stringify(ch)}`, "bad");
+    return false;
+  }
+  pressKey(m.code, m.shift);
+  return true;
+}
+
+// The shifted characters above assume a US layout on the *target*: the target
+// decides what a physical key position produces. Non-US targets will get the
+// wrong punctuation, which is a known limitation, not a bug to fix here.
+// Strings go out one at a time, in order: a second string enqueued while one
+// is still being paced waits for it, and single characters typed meanwhile
+// (typeLater) queue behind both. Without this a composed word and the
+// keystroke that committed it would interleave on the wire.
+let typeChain = Promise.resolve();
+let typing = 0;
+// Bumped by cancelTyping(): a paced string checks it between characters and
+// stops. Release-all means "nothing more reaches the target from what was
+// queued" — a paste that carried on typing after the page went hidden, or
+// after a reconnect, would be the console typing on its own (principle 4).
+let typeGen = 0;
+
+function cancelTyping() {
+  typeGen += 1;
+  typeChain = Promise.resolve();
+  typing = 0;
+}
+
+function typeString(text) {
   const unsupported = [...new Set([...text].filter((c) => !CHAR_MAP.has(c)))];
   if (unsupported.length) {
     setStatus(`can't type: ${unsupported.join(" ")}`, "bad");
-    return;
+    return Promise.resolve(false);
   }
-  for (const ch of text) {
-    const { code, shift } = CHAR_MAP.get(ch);
-    if (shift) sendKey(FRAME.KEY_DOWN, "ShiftLeft");
-    sendKey(FRAME.KEY_DOWN, code);
-    sendKey(FRAME.KEY_UP, code);
-    if (shift) sendKey(FRAME.KEY_UP, "ShiftLeft");
-    // Targets drop keystrokes that arrive faster than they poll; this is a guess
-    // at a safe rate and wants measuring on real hardware.
-    await new Promise((r) => setTimeout(r, 8));
+  const gen = typeGen;
+  typing += 1;
+  const run = typeChain.then(async () => {
+    for (const ch of text) {
+      if (gen !== typeGen) return false; // cancelled: report, never resume
+      typeChar(ch);
+      // Targets drop keystrokes that arrive faster than they poll; this is a
+      // guess at a safe rate and wants measuring on real hardware.
+      await new Promise((r) => setTimeout(r, 8));
+    }
+    return gen === typeGen;
+  });
+  typeChain = run.finally(() => {
+    if (gen === typeGen) typing -= 1;
+  });
+  return run;
+}
+
+// One character or key, now if nothing is being paced, else after it.
+function typeLater(fn) {
+  if (typing === 0) fn();
+  else typeChain = typeChain.then(fn);
+}
+
+el.sendText.addEventListener("click", async () => {
+  const text = el.pasteText.value;
+  if (await typeString(text)) {
+    setStatus(`sent ${text.length} characters`, "ok");
   }
-  setStatus(`sent ${text.length} characters`, "ok");
 });
 
 // --- local capture video ----------------------------------------------------
@@ -460,6 +643,490 @@ if (!navigator.mediaDevices) {
   listCameras().catch(() => {});
 }
 
+// --- soft input: touch trackpad and soft keyboard --------------------------
+//
+// Registered only in soft mode (see MODE). There is no pointer lock anywhere
+// in here: a finger on the surface is its own capture, which is why a phone
+// dodges the Safari keyboard.lock() limitation rather than inheriting it.
+
+// Starting values, NOT measured (AGENTS.md §2, principle 6). Tune against a
+// real phone and a real target, then record what was measured in
+// docs/design/mobile-console.md.
+const TOUCH = {
+  GAIN: 2, // finger px → mouse counts, times the sensitivity slider
+  TAP_MAX_MS: 250, // down→up faster than this with little travel is a tap
+  TAP_SLOP_PX: 10, // travel allowed inside a tap
+  LONG_PRESS_MS: 400, // one still finger this long → left button held (drag)
+  // Dwell between BUTTON 1 and BUTTON 0 of a synthesized click. The dongle's
+  // report task drains every queued intent before emitting, and only keyboard
+  // intents are guarded against being applied on top of a state whose report
+  // has not gone out (hid_out_usb.c, issue #58): two button frames drained in one pass
+  // collapse into one report with nothing pressed, and the click is lost. A
+  // human click outlasts a pass by orders of magnitude, which is why the
+  // desktop path never sees this.
+  TAP_CLICK_HOLD_MS: 40,
+  SCROLL_PX_PER_NOTCH: 20, // finger travel per wheel notch
+  SCROLL_MAX_PER_FLUSH: 3, // notches per animation frame; the rest carries
+  SCROLL_NATURAL: true, // finger down → content down, as the phone itself scrolls
+};
+
+function installSoftInput() {
+  const pad = el.touchpad;
+  const pointers = new Map(); // pointerId → last seen position
+  const touch = {
+    // idle | pending (one finger, might be a tap) | move | drag (button held)
+    // | two (two fingers, might be a right-click) | scroll
+    phase: "idle",
+    primary: null, // the first finger down; its travel is the scroll's
+    startAt: 0,
+    startX: 0,
+    startY: 0,
+    buttons: 0, // what this page believes the dongle holds
+    longPress: null,
+    scrollX: 0, // finger px accumulated toward the next notch
+    scrollY: 0,
+    pendingV: 0, // notches owed to the dongle
+    pendingH: 0,
+    scrollScheduled: false,
+    cancelled: false, // a finger was cancelled: this gesture can never click
+    clickTimers: new Set(), // dwell releases and deferred clicks in flight
+  };
+
+  function setButtons(mask) {
+    touch.buttons = mask;
+    send([FRAME.MOUSE_BUTTON, mask]);
+    pad.classList.toggle("dragging", mask !== 0);
+  }
+
+  // Timers here are tracked so a loss of confidence can cancel them: a
+  // deferred click firing after release-all would press a button on a page
+  // that has just promised it holds nothing.
+  function after(ms, fn) {
+    const t = setTimeout(() => {
+      touch.clickTimers.delete(t);
+      fn();
+    }, ms);
+    touch.clickTimers.add(t);
+  }
+
+  function cancelClickTimers() {
+    touch.clickTimers.forEach((t) => clearTimeout(t));
+    touch.clickTimers.clear();
+  }
+
+  function click(mask) {
+    setButtons(mask);
+    after(TOUCH.TAP_CLICK_HOLD_MS, () => {
+      // A gesture that began inside the dwell owns the mask now; its own end
+      // path releases it.
+      if (touch.phase === "idle" && touch.buttons !== 0) setButtons(0);
+    });
+  }
+
+  function clearLongPress() {
+    if (touch.longPress !== null) {
+      clearTimeout(touch.longPress);
+      touch.longPress = null;
+    }
+  }
+
+  function startDrag() {
+    touch.longPress = null;
+    if (touch.phase !== "pending") return;
+    touch.phase = "drag";
+    setButtons(1);
+  }
+
+  function scheduleMotion() {
+    if (!flushScheduled) {
+      flushScheduled = true;
+      requestAnimationFrame(flushMotion);
+    }
+  }
+
+  // Scroll goes out at most once per animation frame, a few notches at a
+  // time, with the remainder carried — never one frame per pointermove. The
+  // dongle drops motion when its queue is full, but a full queue meeting a
+  // key frame is a release-all, and two fingers must not be able to cause
+  // that (net.c).
+  function flushScroll() {
+    touch.scrollScheduled = false;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      touch.pendingV = touch.pendingH = 0;
+      return;
+    }
+    const cap = TOUCH.SCROLL_MAX_PER_FLUSH;
+    const clamp = (n) => Math.max(-cap, Math.min(cap, n));
+    const v = clamp(touch.pendingV);
+    const h = clamp(touch.pendingH);
+    touch.pendingV -= v;
+    touch.pendingH -= h;
+    if (v || h) send([FRAME.MOUSE_SCROLL, v & 0xff, h & 0xff]);
+    if (touch.pendingV || touch.pendingH) scheduleScroll();
+  }
+
+  function scheduleScroll() {
+    if (!touch.scrollScheduled) {
+      touch.scrollScheduled = true;
+      requestAnimationFrame(flushScroll);
+    }
+  }
+
+  // Every way a gesture can end comes through here, and every one of them
+  // leaves the button mask at zero — a cancelled drag must not stay a drag.
+  function endGesture(e, allowClick) {
+    if (!pointers.delete(e.pointerId)) return; // already ended (pointerup then lostpointercapture)
+    if (pointers.size > 0) return; // wait for the last finger
+    finishGesture(allowClick);
+  }
+
+  // Lost confidence (page hidden, window blurred): whatever fingers the page
+  // thinks are down, it is no longer being told about them.
+  function abortGesture() {
+    pointers.clear();
+    cancelClickTimers();
+    finishGesture(false);
+  }
+
+  function finishGesture(allowClick) {
+    clearLongPress();
+    const quick = performance.now() - touch.startAt < TOUCH.TAP_MAX_MS;
+    let tap = 0;
+    if (allowClick && quick && !touch.cancelled) {
+      if (touch.phase === "pending") tap = 1;
+      else if (touch.phase === "two") tap = 2;
+    }
+    touch.phase = "idle";
+    touch.primary = null;
+    touch.cancelled = false;
+    touch.scrollX = touch.scrollY = 0;
+    touch.pendingV = touch.pendingH = 0; // notches owed by a gesture that is over
+    pad.classList.remove("scrolling");
+    if (touch.buttons !== 0) {
+      setButtons(0);
+      // A second tap inside the first one's dwell: its down must not follow
+      // that up in the same pass (issue #58), so it waits the dwell out too.
+      if (tap) after(TOUCH.TAP_CLICK_HOLD_MS, () => click(tap));
+      return;
+    }
+    if (tap) click(tap);
+  }
+
+  pad.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    // Keeps pointerup coming to the pad when the finger slides off it.
+    // Throws NotFoundError for a pointer the browser no longer counts as
+    // active; a gesture that cannot be captured is still tracked, and a
+    // thrown handler would leave it untracked with nothing to release it.
+    try {
+      pad.setPointerCapture(e.pointerId);
+    } catch (_) {
+      /* tracked anyway */
+    }
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 1) {
+      touch.phase = "pending";
+      touch.primary = e.pointerId;
+      touch.startAt = performance.now();
+      touch.startX = e.clientX;
+      touch.startY = e.clientY;
+      touch.longPress = setTimeout(startDrag, TOUCH.LONG_PRESS_MS);
+    } else if (
+      pointers.size === 2 &&
+      (touch.phase === "pending" || touch.phase === "move")
+    ) {
+      clearLongPress();
+      touch.phase = "two";
+      touch.scrollX = touch.scrollY = 0;
+    }
+    // A second finger during a drag, or a third finger: ignored, the gesture
+    // in progress keeps going and ends when the last finger lifts.
+  });
+
+  pad.addEventListener("pointermove", (e) => {
+    const p = pointers.get(e.pointerId);
+    if (!p) return;
+    // movementX/Y is always 0 on iOS Safari; take the difference ourselves.
+    const dx = e.clientX - p.x;
+    const dy = e.clientY - p.y;
+    p.x = e.clientX;
+    p.y = e.clientY;
+    if (pointers.size === 1) {
+      if (touch.phase === "pending") {
+        const travel = Math.hypot(
+          e.clientX - touch.startX,
+          e.clientY - touch.startY,
+        );
+        if (travel < TOUCH.TAP_SLOP_PX) return; // still a candidate tap
+        clearLongPress();
+        touch.phase = "move";
+      }
+      if (touch.phase === "move" || touch.phase === "drag") {
+        const scale = TOUCH.GAIN * parseFloat(el.sensitivity.value);
+        pendingDx += dx * scale;
+        pendingDy += dy * scale;
+        scheduleMotion();
+      }
+      return;
+    }
+    if (touch.phase !== "two" && touch.phase !== "scroll") return;
+    if (e.pointerId !== touch.primary) return; // one finger's travel, not both
+    touch.scrollX += dx;
+    touch.scrollY += dy;
+    const nx = Math.trunc(touch.scrollX / TOUCH.SCROLL_PX_PER_NOTCH);
+    const ny = Math.trunc(touch.scrollY / TOUCH.SCROLL_PX_PER_NOTCH);
+    if (nx === 0 && ny === 0) return;
+    touch.scrollX -= nx * TOUCH.SCROLL_PX_PER_NOTCH;
+    touch.scrollY -= ny * TOUCH.SCROLL_PX_PER_NOTCH;
+    touch.phase = "scroll";
+    pad.classList.add("scrolling");
+    // Wheel +1 is "content down" on the wire (the desktop path sends
+    // -sign(deltaY)); a finger moving down drags the content down with it.
+    touch.pendingV += TOUCH.SCROLL_NATURAL ? ny : -ny;
+    touch.pendingH += TOUCH.SCROLL_NATURAL ? -nx : nx;
+    scheduleScroll();
+  });
+
+  pad.addEventListener("pointerup", (e) => endGesture(e, true));
+  // A cancelled gesture is dropped, never promoted to a click — and one
+  // cancelled finger taints the whole gesture, so the other finger's clean
+  // lift cannot turn a broken two-finger touch into a right-click.
+  const cancel = (e) => {
+    if (pointers.has(e.pointerId)) touch.cancelled = true;
+    endGesture(e, false);
+  };
+  pad.addEventListener("pointercancel", cancel);
+  pad.addEventListener("lostpointercapture", cancel);
+  pad.addEventListener("contextmenu", (e) => e.preventDefault());
+
+  // touch-action: none is not enough on every iOS version: only a cancelled
+  // touchmove reliably stops elastic overscroll and pinch-zoom.
+  const swallow = (e) => e.preventDefault();
+  pad.addEventListener("touchstart", swallow, { passive: false });
+  pad.addEventListener("touchmove", swallow, { passive: false });
+
+  // Size the page to the visible viewport, so the soft keyboard pushes the
+  // trackpad and key rows up instead of covering them. Driven by resize only:
+  // a first version also re-fitted on every visualViewport scroll and forced
+  // the window back to the top, and on the phone (2026-09-08) that fought the
+  // page's own scrolling when "More" was open — every drag, either direction,
+  // scrolled up. How iOS shifts a fixed body while the keyboard is open is
+  // still to be looked at on the device.
+  function fitViewport() {
+    const vv = window.visualViewport;
+    const root = document.documentElement.style;
+    root.setProperty("--vvh", `${vv ? vv.height : window.innerHeight}px`);
+    root.setProperty("--vvt", `${vv ? vv.offsetTop : 0}px`);
+  }
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", fitViewport);
+  }
+  window.addEventListener("resize", fitViewport);
+  fitViewport();
+
+  // Open on the desktop (where the summary is hidden), folded on a phone.
+  el.more.open = false;
+
+  // Nothing on this page scrolls except the "More" sheet and the text boxes.
+  // A finger dragging anywhere else must not reach Safari, whose answer to a
+  // downward drag on a page that cannot scroll is pull-to-refresh — which
+  // reloads the console mid-session (seen on the phone, 2026-09-08).
+  document.addEventListener(
+    "touchmove",
+    (e) => {
+      if (!e.target.closest(".more[open], textarea")) e.preventDefault();
+    },
+    { passive: false },
+  );
+
+  // --- the phone's keyboard -------------------------------------------------
+  //
+  // A soft keyboard reports no physical key position: keydown arrives with an
+  // empty `code` and keyCode 229 (issue #11), so the direct path has nothing to
+  // send. What it does report, reliably, is the edit it is about to make —
+  // `beforeinput` says insertText "a", deleteContentBackward, insertLineBreak —
+  // and that is enough: each character goes through CHAR_MAP to a physical
+  // position, exactly as the paste box has always done, and the edit itself is
+  // cancelled so the box never fills. Cancelling it is also what keeps the two
+  // paths from double-typing: the `input` handler below only ever restores the
+  // box and reports what it found; it never sends.
+  //
+  // The box always holds exactly one zero-width space with the caret after it.
+  // Empty, Backspace produces no beforeinput at all; a space would trip the
+  // double-space-to-period rewrite and type a Backspace on the target.
+  const SENTINEL = "\u200b";
+  const box = el.softInput;
+  let composing = false; // inside an IME composition: nothing is sent until it commits
+  let justComposed = false; // the input event that trails a commit is not a leak
+
+  function resetBox() {
+    box.value = SENTINEL;
+    box.setSelectionRange(1, 1);
+  }
+
+  // focus() is honoured on iOS only inside a user gesture: this button is it.
+  el.softKbd.addEventListener("click", () => {
+    resetBox();
+    box.focus();
+  });
+  box.addEventListener("focus", () => el.softKbd.classList.add("active"));
+  box.addEventListener("blur", () => el.softKbd.classList.remove("active"));
+
+  box.addEventListener("beforeinput", (e) => {
+    if (composing) return; // let the IME work; compositionend sends the result
+    e.preventDefault();
+    justComposed = false;
+    switch (e.inputType) {
+      case "insertText": {
+        // Predictive taps arrive as several characters at once; like the
+        // paste box, all of them or none, never half a word.
+        const text = e.data || "";
+        const bad = [...new Set([...text].filter((c) => !CHAR_MAP.has(c)))];
+        if (bad.length) {
+          setStatus(`can't type: ${bad.join(" ")}`, "bad");
+          break;
+        }
+        if (text.length === 1) typeLater(() => typeChar(text));
+        else typeString(text); // a predictive-text commit: paced like a paste
+        break;
+      }
+      case "insertLineBreak":
+      case "insertParagraph":
+        typeLater(() => typeChar("\n"));
+        break;
+      case "deleteContentBackward":
+        typeLater(() => pressKey("Backspace", false));
+        break;
+      case "deleteContentForward":
+        typeLater(() => pressKey("Delete", false));
+        break;
+      case "insertFromPaste":
+      case "insertFromDrop": {
+        const text =
+          e.data ?? (e.dataTransfer ? e.dataTransfer.getData("text/plain") : "");
+        typeString(text); // paced, and refused whole if any character is unmapped
+        break;
+      }
+      default:
+        // deleteWordBackward, insertReplacementText (an autocorrect that got
+        // through), and whatever else: said out loud rather than guessed at.
+        setStatus(`unsupported edit: ${e.inputType}`, "bad");
+    }
+  });
+
+  // Restores the sentinel and reports anything that reached the box without
+  // going through beforeinput. Never types.
+  box.addEventListener("input", () => {
+    if (composing) return;
+    const trailing = justComposed;
+    justComposed = false;
+    if (box.value === SENTINEL) return;
+    const leaked = box.value.split(SENTINEL).join("");
+    if (leaked && !trailing) {
+      setStatus(`dropped ${leaked.length} character(s) the keyboard slipped past`, "bad");
+    }
+    resetBox();
+  });
+
+  // Android keyboards compose whole words and commit them at once, so the
+  // target sees the word when the phone does — a latency to measure, not to
+  // assume. CJK commits are unmapped and refused by typeString, by name.
+  box.addEventListener("compositionstart", () => {
+    composing = true;
+  });
+  box.addEventListener("compositionend", (e) => {
+    composing = false;
+    justComposed = true;
+    if (e.data) typeString(e.data);
+    resetBox();
+  });
+
+  // Tapping an on-screen key must not move focus off the box, or the phone's
+  // keyboard dismisses on every Esc. Cancelling pointerdown suppresses the
+  // mousedown that would move focus; click still fires. Unverified on iOS —
+  // if the keyboard still drops, the fallback is touchend + preventDefault
+  // with the action invoked from there.
+  for (const host of [el.keyrows, el.macros, el.release]) {
+    host.addEventListener("pointerdown", (e) => {
+      if (e.target.closest("button")) e.preventDefault();
+    });
+  }
+
+  // Long-press timers, so losing confidence can cancel them: a finger on
+  // Ctrl when the page goes hidden must not press Ctrl half a second later
+  // on a page that has already sent release-all.
+  const modTimers = new Map();
+  function cancelModTimers() {
+    modTimers.forEach((t) => clearTimeout(t));
+    modTimers.clear();
+  }
+  el.keyrows.querySelectorAll("[data-mod]").forEach((b) => {
+    const code = b.dataset.mod;
+    // Modifiers run on pointer events, never on click, so cancelling
+    // touchstart costs nothing here — and it is what stops iOS treating the
+    // long press as a text selection when CSS alone does not.
+    b.addEventListener("touchstart", (e) => e.preventDefault(), {
+      passive: false,
+    });
+    b.addEventListener("pointerdown", () => {
+      clearTimeout(modTimers.get(code));
+      modTimers.set(
+        code,
+        setTimeout(() => {
+          modTimers.delete(code);
+          lockLatch(code);
+        }, LATCH_LOCK_MS),
+      );
+    });
+    b.addEventListener("pointerup", () => {
+      if (!modTimers.has(code)) return; // the long press already locked it
+      clearTimeout(modTimers.get(code));
+      modTimers.delete(code);
+      toggleLatch(code);
+    });
+    b.addEventListener("pointercancel", () => {
+      clearTimeout(modTimers.get(code));
+      modTimers.delete(code);
+    });
+  });
+
+  // Lost confidence in soft mode: exitCapture() releases nothing here (nothing
+  // is captured), so the release has to be explicit. The dongle would release
+  // on its own three seconds later; this page does not make it wait.
+  //
+  // Coming back is the other half of being honest about it. A backgrounded
+  // phone throttles the keepalive, so the dongle has ended the session; an
+  // open socket needs one frame to claim it again (net.c re-claims on any
+  // frame from the owner), and a closed one should not sit out its backoff.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      cancelModTimers();
+      abortGesture();
+      sendReleaseAll();
+      return;
+    }
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      send([FRAME.STATUS_REQ]);
+    } else if (socket === null) {
+      clearTimeout(reconnectTimer);
+      reconnectDelay = 500;
+      setStatus("back in view — reconnecting", "bad");
+      connect();
+    }
+    // A socket still opening or closing runs its course; onclose reconnects.
+  });
+  window.addEventListener("blur", () => {
+    cancelModTimers();
+    abortGesture();
+    sendReleaseAll();
+  });
+}
+
+if (MODE === "direct") {
+  installDirectInput();
+} else {
+  installSoftInput();
+}
 connect();
 
 // --- disk image over /ws-media --------------------------------------------

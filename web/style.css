@@ -185,3 +185,323 @@ label {
   display: flex;
   gap: 0.5rem;
 }
+
+/* A <details> that is only ever closed on a phone: on the desktop the summary
+   is hidden and the sections inside lay out as they did before it existed. */
+.more {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.more > summary {
+  display: none;
+}
+
+.soft-only {
+  display: none;
+}
+
+/* --- soft mode (touch) ------------------------------------------------------
+   One page, subtracted: no stage, no video, no disk image. The body becomes a
+   fixed flex column sized from the visual viewport (app.js sets --vvh/--vvt),
+   so the trackpad and key rows stay above the soft keyboard instead of under
+   it, and the page itself never scrolls. Sections are re-ordered bottom-up:
+   the thumb is at the bottom, so what it touches most sits nearest it. */
+
+body.soft {
+  position: fixed;
+  inset: 0;
+  height: var(--vvh, 100dvh);
+  transform: translateY(var(--vvt, 0px));
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0 0.5rem env(safe-area-inset-bottom);
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body.soft header {
+  padding: 0.5rem 0;
+  flex-wrap: wrap;
+  order: 0;
+}
+
+body.soft #status {
+  font-size: 1rem;
+}
+
+body.soft main,
+body.soft .panel {
+  display: contents;
+}
+
+body.soft .stage,
+body.soft .desktop-only {
+  display: none;
+}
+
+body.soft .soft-only {
+  display: flex;
+}
+
+body.soft .panel section {
+  padding: 0.5rem;
+}
+
+body.soft #release {
+  order: 1;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+/* A grid, not a scrolling row: the page cancels every touchmove outside the
+   "More" sheet (app.js), which also kills horizontal panning, so a row that
+   overflowed would hide its tail with no way to reach it. */
+body.soft #macros {
+  order: 2;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr));
+  gap: 0.4rem;
+}
+
+body.soft #macros h2 {
+  display: none;
+}
+
+body.soft .touchpad {
+  order: 3;
+  flex: 1 1 0;
+  min-height: 100px;
+  align-items: flex-end;
+  justify-content: center;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+body.soft .touchpad.dragging {
+  border-color: var(--ok);
+  border-style: solid;
+}
+
+body.soft .touchpad.scrolling {
+  border-color: var(--muted);
+  border-style: solid;
+}
+
+body.soft .touchpad .hint {
+  margin: 0;
+  padding: 0.5rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-align: center;
+  pointer-events: none;
+}
+
+body.soft .keyrows {
+  order: 4;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+/* Clusters are grids, so a key sits where a keyboard puts it. Rows wrap
+   rather than scroll: on a real phone (2026-09-08) a scrolling row read as
+   "the keys stop at Del", with Enter and Space off the edge unseen. */
+body.soft .cluster {
+  display: grid;
+  gap: 0.4rem;
+}
+
+body.soft .cluster button,
+body.soft #macros button {
+  width: auto;
+  min-width: 0;
+  padding-left: 0.2rem;
+  padding-right: 0.2rem;
+}
+
+body.soft .mods {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+body.soft .edit {
+  grid-template-columns: repeat(4, 1fr) 2fr;
+}
+
+body.soft .navblock {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+}
+
+body.soft .arrows,
+body.soft .nav {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+/* Inverted T: ↑ alone on the top row, ← ↓ → across the bottom. Auto-placement
+   would otherwise flow ← into the top row's free cell. */
+body.soft .arrows .up {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+body.soft .arrows button:not(.up) {
+  grid-row: 2;
+}
+
+body.soft .fkeys {
+  grid-template-columns: repeat(6, 1fr);
+}
+
+/* A latched modifier is a claim about what the dongle holds, drawn as one. */
+body.soft button.latched {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+body.soft button.locked {
+  background: var(--ok);
+  color: var(--bg);
+}
+
+body.soft .softbar {
+  order: 5;
+  position: relative;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+body.soft #soft-kbd {
+  flex: 0 0 auto;
+}
+
+body.soft #soft-kbd.active {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+/* Focusable, so it can summon the keyboard, but never seen: display:none and
+   visibility:hidden both make an element unfocusable. */
+body.soft #soft-input {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  opacity: 0;
+  resize: none;
+}
+
+body.soft .softbar .note {
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.3;
+}
+
+/* "More" is folded by default. Open, it takes the place of the trackpad, key
+   rows and keyboard bar in the column and scrolls inside that space, so the
+   header, connection state, Release-all and macros stay in flow above it —
+   the status line is also where the sheet's own buttons report. Nothing is
+   measured or absolutely positioned: the body is fixed to the visual viewport
+   (so the soft keyboard pushes the trackpad up instead of covering it), and on
+   iOS a fixed, transformed body does not scroll — page scrolling was tried
+   first and handed every drag to Safari's pull-to-refresh (2026-09-08). */
+body.soft .more {
+  order: 6;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+body.soft .more[open] {
+  order: 3;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+
+body.soft:has(.more[open]) .touchpad,
+body.soft:has(.more[open]) .keyrows,
+body.soft:has(.more[open]) .softbar {
+  display: none;
+}
+
+body.soft .more[open] > summary {
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  z-index: 1;
+}
+
+/* Everything but the trackpad and "More" keeps its natural height. */
+body.soft header,
+body.soft #release,
+body.soft #macros,
+body.soft .keyrows,
+body.soft .softbar {
+  flex-shrink: 0;
+}
+
+body.soft .more > summary {
+  display: list-item;
+  min-height: 44px;
+  line-height: 44px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* Tap targets: 44px is the floor a thumb can hit reliably. The -webkit-
+   prefixed user-select is not decoration: without it iOS Safari answers a
+   long press on a modifier with text-selection handles over its label
+   (seen on a phone, 2026-09-08). touch-action: manipulation drops the
+   double-tap-to-zoom wait, so a tap is a tap. */
+body.soft button,
+body.soft select {
+  min-height: 44px;
+  min-width: 44px;
+  margin-bottom: 0;
+  flex: 0 0 auto;
+  width: auto;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+}
+
+/* Whole-page, not per button: on the phone the handles still appeared with
+   the rule on the buttons alone (2026-09-08). Only the two text boxes may
+   select. */
+body.soft,
+body.soft * {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+body.soft textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+body.soft #release-all,
+body.soft #start-video,
+body.soft #send-text,
+body.soft #wake-target,
+body.soft select {
+  width: 100%;
+}
