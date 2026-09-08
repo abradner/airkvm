@@ -113,7 +113,75 @@ static void weak_signal_warning_has_hysteresis(void) {
   CHECK_EQ_INT(indicator_state_for(&s, INDICATOR_IDLE), INDICATOR_IDLE);
 }
 
+// Setup mode outranks every other state, and the reason is the NCM device:
+// TinyUSB enumerates in setup mode, so usb_mounted goes TRUE while there is no
+// keyboard behind it. Ranked the other way round the light reports health
+// about a network adapter.
+static void setup_mode_outranks_everything(void) {
+  struct status_snapshot s = healthy();
+  s.setup_active = true;
+  CHECK_EQ_INT(indicator_state_for(&s, INDICATOR_IDLE), INDICATOR_SETUP);
+
+  // The case that matters: mounted, because NCM enumerated.
+  s.usb_mounted = true;
+  CHECK_EQ_INT(indicator_state_for(&s, INDICATOR_IDLE), INDICATOR_SETUP);
+
+  // And it must beat every other state, not just the healthy one.
+  s.wifi_connected = false;  // would be FAULT
+  CHECK_EQ_INT(indicator_state_for(&s, INDICATOR_IDLE), INDICATOR_SETUP);
+  s = healthy();
+  s.setup_active = true;
+  s.usb_mounted = false;  // would be FAULT
+  CHECK_EQ_INT(indicator_state_for(&s, INDICATOR_IDLE), INDICATOR_SETUP);
+  s = healthy();
+  s.setup_active = true;
+  s.usb_suspended = true;  // would be SUSPENDED
+  CHECK_EQ_INT(indicator_state_for(&s, INDICATOR_IDLE), INDICATOR_SETUP);
+  s = healthy();
+  s.setup_active = true;
+  s.rssi = -85;  // would be WARN
+  CHECK_EQ_INT(indicator_state_for(&s, INDICATOR_IDLE), INDICATOR_SETUP);
+  s = healthy();
+  s.setup_active = true;
+  s.client_connected = true;  // would be BOUND
+  CHECK_EQ_INT(indicator_state_for(&s, INDICATOR_IDLE), INDICATOR_SETUP);
+}
+
+// No credentials is WARN, not FAULT: nothing is broken, and the remedy is
+// printed on the panel.
+static void no_credentials_warns_rather_than_faults(void) {
+  struct status_snapshot s = healthy();
+  s.no_credentials = true;
+  s.wifi_connected = false;  // a board with no credentials has no link...
+  // ...but no link is FAULT on its own, and that outranks WARN, so the
+  // interesting case is a board that somehow has a link and no stored
+  // credentials — assert the ranking explicitly rather than by implication.
+  CHECK_EQ_INT(indicator_state_for(&s, INDICATOR_IDLE), INDICATOR_FAULT);
+
+  s = healthy();
+  s.no_credentials = true;
+  CHECK_EQ_INT(indicator_state_for(&s, INDICATOR_IDLE), INDICATOR_WARN);
+
+  // Stable across ticks: it is set once at boot, so it must not interact with
+  // the RSSI hysteresis band.
+  CHECK_EQ_INT(indicator_state_for(&s, INDICATOR_WARN), INDICATOR_WARN);
+}
+
+// media_attached is deliberately NOT a state: it is not a health signal, and
+// the panel already carries it. Assert the absence so nobody adds it back
+// without arguing for it.
+static void media_attached_is_not_a_health_state(void) {
+  struct status_snapshot s = healthy();
+  s.media_attached = true;
+  CHECK_EQ_INT(indicator_state_for(&s, INDICATOR_IDLE), INDICATOR_IDLE);
+  s.client_connected = true;
+  CHECK_EQ_INT(indicator_state_for(&s, INDICATOR_IDLE), INDICATOR_BOUND);
+}
+
 int main(void) {
+  RUN(setup_mode_outranks_everything);
+  RUN(no_credentials_warns_rather_than_faults);
+  RUN(media_attached_is_not_a_health_state);
   RUN(healthy_and_unbound_is_idle);
   RUN(a_client_makes_it_bound);
   RUN(either_half_being_down_is_a_fault);
