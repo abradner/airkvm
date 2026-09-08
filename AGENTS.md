@@ -808,6 +808,26 @@ code is written.*
     general rule is that any vendor "helper" compiled by a Kconfig flag deserves an `nm` of what
     it defines before the flag is flipped.
 
+16. **Turning a flag off is not the same as emitting nothing, and a callback linked into every
+    image runs in every mode.** Two defects from one review (PR #53), both principle 1 shaped.
+    *(a)* The setup-mode USB link promised a DHCP offer with no DNS option, and the code cleared
+    the netif's DNS flag to get it. IDF's DHCP server (`dhcpserver.c`, `add_offer_options`) puts
+    **its own address** into the option in the `else` of that flag whenever
+    `CONFIG_LWIP_DHCPS_ADD_DNS` is on — which it is by default — so "off" produced a resolver that
+    answers nothing, the opposite of the claim, and the softAP's captive DNS had been arriving by
+    the same accident. Rule: **when you clear a flag to suppress an output, read the off branch
+    and check the emitted bytes, not the flag**; a default that lives in the `else` is invisible
+    from the API. The symbol is now off in `sdkconfig.defaults` (an existing one: §6.1), the AP
+    names its resolver explicitly, and CI asserts the header.
+    *(b)* Setup mode never calls `msc_out_start()`, but `tud_mount_cb` (`hid_out_usb.c`) is
+    linked into every S3 image and calls `msc_out_bus_reset()`, which took a mutex that did not
+    exist — an assert on the TinyUSB task at the first SET_CONFIGURATION, a reboot that consumed
+    the setup flag, and no console to say so. Rule: **a mode that skips a module's start still
+    links its callbacks, so every owner's entry point must tolerate never-started**, and the
+    acceptance test for a new USB mode is enumeration in that mode, not a green build. Neither
+    is reachable from host tests or the C3 (gotcha 8 again); both were found by a fresh agent
+    reading vendor sources against the commit's own claims.
+
 ## 10. Maintaining This Document
 
 Meta-rules for editing this file — they exist because each was violated somewhere first:
