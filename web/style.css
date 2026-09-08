@@ -185,3 +185,156 @@ label {
   display: flex;
   gap: 0.5rem;
 }
+
+/* A <details> that is only ever closed on a phone: on the desktop the summary
+   is hidden and the sections inside lay out as they did before it existed. */
+.more {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.more > summary {
+  display: none;
+}
+
+.soft-only {
+  display: none;
+}
+
+/* --- soft mode (touch) ------------------------------------------------------
+   One page, subtracted: no stage, no video, no disk image. The body becomes a
+   fixed flex column sized from the visual viewport (app.js sets --vvh/--vvt),
+   so the trackpad and key rows stay above the soft keyboard instead of under
+   it, and the page itself never scrolls. Sections are re-ordered bottom-up:
+   the thumb is at the bottom, so what it touches most sits nearest it. */
+
+body.soft {
+  position: fixed;
+  inset: 0;
+  height: var(--vvh, 100dvh);
+  transform: translateY(var(--vvt, 0px));
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0 0.5rem env(safe-area-inset-bottom);
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body.soft header {
+  padding: 0.5rem 0;
+  flex-wrap: wrap;
+  order: 0;
+}
+
+body.soft #status {
+  font-size: 1rem;
+}
+
+body.soft main,
+body.soft .panel {
+  display: contents;
+}
+
+body.soft .stage,
+body.soft .desktop-only {
+  display: none;
+}
+
+body.soft .soft-only {
+  display: flex;
+}
+
+body.soft .panel section {
+  padding: 0.5rem;
+}
+
+body.soft #release {
+  order: 1;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+body.soft #macros {
+  order: 2;
+  display: flex;
+  gap: 0.4rem;
+  overflow-x: auto;
+  touch-action: pan-x;
+  -webkit-overflow-scrolling: touch;
+}
+
+body.soft #macros h2 {
+  display: none;
+}
+
+body.soft .touchpad {
+  order: 3;
+  flex: 1 1 0;
+  min-height: 120px;
+  align-items: flex-end;
+  justify-content: center;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+body.soft .touchpad.dragging {
+  border-color: var(--ok);
+  border-style: solid;
+}
+
+body.soft .touchpad.scrolling {
+  border-color: var(--muted);
+  border-style: solid;
+}
+
+body.soft .touchpad .hint {
+  margin: 0;
+  padding: 0.5rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-align: center;
+  pointer-events: none;
+}
+
+body.soft .more {
+  order: 6;
+  gap: 0.5rem;
+}
+
+body.soft .more > summary {
+  display: list-item;
+  min-height: 44px;
+  line-height: 44px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* Tap targets: 44px is the floor a thumb can hit reliably. */
+body.soft button,
+body.soft select {
+  min-height: 44px;
+  min-width: 44px;
+  margin-bottom: 0;
+  flex: 0 0 auto;
+  width: auto;
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+
+body.soft #release-all,
+body.soft #start-video,
+body.soft #send-text,
+body.soft #wake-target,
+body.soft select {
+  width: 100%;
+}

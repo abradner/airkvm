@@ -2,7 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
+    />
     <title>airkvm console</title>
     <link rel="stylesheet" href="/style.css" />
   </head>
@@ -26,14 +29,23 @@
         </div>
       </section>
 
+      <!-- Soft mode's pointer. A finger on this surface is the mouse; there is
+           no pointer lock to ask for and no video to sit behind it. -->
+      <section id="touchpad" class="touchpad soft-only" aria-label="Trackpad">
+        <p class="hint">
+          1 finger moves · tap clicks · hold then move drags · 2 fingers scroll ·
+          2-finger tap right-clicks
+        </p>
+      </section>
+
       <aside class="panel">
-        <section>
+        <section class="desktop-only">
           <h2>Video</h2>
           <select id="camera" aria-label="Capture device"></select>
           <button id="start-video" type="button">Show capture</button>
         </section>
 
-        <section>
+        <section id="macros">
           <h2>Send keys</h2>
           <!-- Chords the browser can't deliver: the OS eats them before any page
                sees them. Buttons are the honest workaround, not a nicety. -->
@@ -46,6 +58,10 @@
           <button type="button" data-combo="Escape">Esc</button>
         </section>
 
+        <!-- On a phone these fold away under "More"; on the desktop the summary is
+             hidden and they read exactly as they always did. -->
+        <details id="more" class="more" open>
+          <summary>More</summary>
         <section>
           <h2>Type text</h2>
           <textarea
@@ -69,7 +85,7 @@
           />
         </section>
 
-        <section>
+        <section class="desktop-only">
           <h2>Disk image</h2>
           <!-- The image stays in this browser: the dongle asks for 16 KB
                chunks over a second socket as the target reads them, and the
@@ -90,8 +106,9 @@
           <div id="target-state" class="status">target: unknown</div>
           <button id="wake-target" type="button">Wake target</button>
         </section>
+        </details>
 
-        <section>
+        <section id="release">
           <button id="release-all" type="button" class="danger">
             Release all keys
           </button>

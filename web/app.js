@@ -79,6 +79,8 @@ const el = {
   wakeTarget: document.getElementById("wake-target"),
   target: document.getElementById("target-state"),
   mode: document.getElementById("mode"),
+  touchpad: document.getElementById("touchpad"),
+  more: document.getElementById("more"),
 };
 
 // --- input mode -------------------------------------------------------------
@@ -515,8 +517,250 @@ if (!navigator.mediaDevices) {
 
 // --- soft input: touch trackpad and soft keyboard --------------------------
 //
-// Registered only in soft mode (see MODE). Filled in below.
-function installSoftInput() {}
+// Registered only in soft mode (see MODE). There is no pointer lock anywhere
+// in here: a finger on the surface is its own capture, which is why a phone
+// dodges the Safari keyboard.lock() limitation rather than inheriting it.
+
+// Starting values, NOT measured (AGENTS.md §2, principle 6). Tune against a
+// real phone and a real target, then record what was measured in
+// docs/design/mobile-console.md.
+const TOUCH = {
+  GAIN: 2, // finger px → mouse counts, times the sensitivity slider
+  TAP_MAX_MS: 250, // down→up faster than this with little travel is a tap
+  TAP_SLOP_PX: 10, // travel allowed inside a tap
+  LONG_PRESS_MS: 400, // one still finger this long → left button held (drag)
+  // Dwell between BUTTON 1 and BUTTON 0 of a synthesized click. The dongle's
+  // report task drains every queued intent before emitting, and only keyboard
+  // intents are guarded against being applied on top of a state whose report
+  // has not gone out (hid_out_usb.c): two button frames drained in one pass
+  // collapse into one report with nothing pressed, and the click is lost. A
+  // human click outlasts a pass by orders of magnitude, which is why the
+  // desktop path never sees this.
+  TAP_CLICK_HOLD_MS: 40,
+  SCROLL_PX_PER_NOTCH: 20, // finger travel per wheel notch
+  SCROLL_MAX_PER_FLUSH: 3, // notches per animation frame; the rest carries
+  SCROLL_NATURAL: true, // finger down → content down, as the phone itself scrolls
+};
+
+function installSoftInput() {
+  const pad = el.touchpad;
+  const pointers = new Map(); // pointerId → last seen position
+  const touch = {
+    // idle | pending (one finger, might be a tap) | move | drag (button held)
+    // | two (two fingers, might be a right-click) | scroll
+    phase: "idle",
+    primary: null, // the first finger down; its travel is the scroll's
+    startAt: 0,
+    startX: 0,
+    startY: 0,
+    buttons: 0, // what this page believes the dongle holds
+    longPress: null,
+    scrollX: 0, // finger px accumulated toward the next notch
+    scrollY: 0,
+    pendingV: 0, // notches owed to the dongle
+    pendingH: 0,
+    scrollScheduled: false,
+  };
+
+  function setButtons(mask) {
+    touch.buttons = mask;
+    send([FRAME.MOUSE_BUTTON, mask]);
+    pad.classList.toggle("dragging", mask !== 0);
+  }
+
+  function click(mask) {
+    setButtons(mask);
+    setTimeout(() => {
+      // A gesture that began inside the dwell owns the mask now; its own end
+      // path releases it.
+      if (touch.phase === "idle" && touch.buttons !== 0) setButtons(0);
+    }, TOUCH.TAP_CLICK_HOLD_MS);
+  }
+
+  function clearLongPress() {
+    if (touch.longPress !== null) {
+      clearTimeout(touch.longPress);
+      touch.longPress = null;
+    }
+  }
+
+  function startDrag() {
+    touch.longPress = null;
+    if (touch.phase !== "pending") return;
+    touch.phase = "drag";
+    setButtons(1);
+  }
+
+  function scheduleMotion() {
+    if (!flushScheduled) {
+      flushScheduled = true;
+      requestAnimationFrame(flushMotion);
+    }
+  }
+
+  // Scroll goes out at most once per animation frame, a few notches at a
+  // time, with the remainder carried — never one frame per pointermove. The
+  // dongle drops motion when its queue is full, but a full queue meeting a
+  // key frame is a release-all, and two fingers must not be able to cause
+  // that (net.c).
+  function flushScroll() {
+    touch.scrollScheduled = false;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      touch.pendingV = touch.pendingH = 0;
+      return;
+    }
+    const cap = TOUCH.SCROLL_MAX_PER_FLUSH;
+    const clamp = (n) => Math.max(-cap, Math.min(cap, n));
+    const v = clamp(touch.pendingV);
+    const h = clamp(touch.pendingH);
+    touch.pendingV -= v;
+    touch.pendingH -= h;
+    if (v || h) send([FRAME.MOUSE_SCROLL, v & 0xff, h & 0xff]);
+    if (touch.pendingV || touch.pendingH) scheduleScroll();
+  }
+
+  function scheduleScroll() {
+    if (!touch.scrollScheduled) {
+      touch.scrollScheduled = true;
+      requestAnimationFrame(flushScroll);
+    }
+  }
+
+  // Every way a gesture can end comes through here, and every one of them
+  // leaves the button mask at zero — a cancelled drag must not stay a drag.
+  function endGesture(e, allowClick) {
+    if (!pointers.delete(e.pointerId)) return; // already ended (pointerup then lostpointercapture)
+    if (pointers.size > 0) return; // wait for the last finger
+    clearLongPress();
+    const quick = performance.now() - touch.startAt < TOUCH.TAP_MAX_MS;
+    let tap = 0;
+    if (allowClick && quick) {
+      if (touch.phase === "pending") tap = 1;
+      else if (touch.phase === "two") tap = 2;
+    }
+    touch.phase = "idle";
+    touch.primary = null;
+    touch.scrollX = touch.scrollY = 0;
+    touch.pendingV = touch.pendingH = 0; // notches owed by a gesture that is over
+    pad.classList.remove("scrolling");
+    if (touch.buttons !== 0) {
+      setButtons(0);
+      // A second tap inside the first one's dwell: its down must not follow
+      // that up in the same pass (issue #58), so it waits the dwell out too.
+      if (tap) setTimeout(() => click(tap), TOUCH.TAP_CLICK_HOLD_MS);
+      return;
+    }
+    if (tap) click(tap);
+  }
+
+  pad.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    // Keeps pointerup coming to the pad when the finger slides off it.
+    // Throws NotFoundError for a pointer the browser no longer counts as
+    // active; a gesture that cannot be captured is still tracked, and a
+    // thrown handler would leave it untracked with nothing to release it.
+    try {
+      pad.setPointerCapture(e.pointerId);
+    } catch (_) {
+      /* tracked anyway */
+    }
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 1) {
+      touch.phase = "pending";
+      touch.primary = e.pointerId;
+      touch.startAt = performance.now();
+      touch.startX = e.clientX;
+      touch.startY = e.clientY;
+      touch.longPress = setTimeout(startDrag, TOUCH.LONG_PRESS_MS);
+    } else if (
+      pointers.size === 2 &&
+      (touch.phase === "pending" || touch.phase === "move")
+    ) {
+      clearLongPress();
+      touch.phase = "two";
+      touch.scrollX = touch.scrollY = 0;
+    }
+    // A second finger during a drag, or a third finger: ignored, the gesture
+    // in progress keeps going and ends when the last finger lifts.
+  });
+
+  pad.addEventListener("pointermove", (e) => {
+    const p = pointers.get(e.pointerId);
+    if (!p) return;
+    // movementX/Y is always 0 on iOS Safari; take the difference ourselves.
+    const dx = e.clientX - p.x;
+    const dy = e.clientY - p.y;
+    p.x = e.clientX;
+    p.y = e.clientY;
+    if (pointers.size === 1) {
+      if (touch.phase === "pending") {
+        const travel = Math.hypot(
+          e.clientX - touch.startX,
+          e.clientY - touch.startY,
+        );
+        if (travel < TOUCH.TAP_SLOP_PX) return; // still a candidate tap
+        clearLongPress();
+        touch.phase = "move";
+      }
+      if (touch.phase === "move" || touch.phase === "drag") {
+        const scale = TOUCH.GAIN * parseFloat(el.sensitivity.value);
+        pendingDx += dx * scale;
+        pendingDy += dy * scale;
+        scheduleMotion();
+      }
+      return;
+    }
+    if (touch.phase !== "two" && touch.phase !== "scroll") return;
+    if (e.pointerId !== touch.primary) return; // one finger's travel, not both
+    touch.scrollX += dx;
+    touch.scrollY += dy;
+    const nx = Math.trunc(touch.scrollX / TOUCH.SCROLL_PX_PER_NOTCH);
+    const ny = Math.trunc(touch.scrollY / TOUCH.SCROLL_PX_PER_NOTCH);
+    if (nx === 0 && ny === 0) return;
+    touch.scrollX -= nx * TOUCH.SCROLL_PX_PER_NOTCH;
+    touch.scrollY -= ny * TOUCH.SCROLL_PX_PER_NOTCH;
+    touch.phase = "scroll";
+    pad.classList.add("scrolling");
+    // Wheel +1 is "content down" on the wire (the desktop path sends
+    // -sign(deltaY)); a finger moving down drags the content down with it.
+    touch.pendingV += TOUCH.SCROLL_NATURAL ? ny : -ny;
+    touch.pendingH += TOUCH.SCROLL_NATURAL ? -nx : nx;
+    scheduleScroll();
+  });
+
+  pad.addEventListener("pointerup", (e) => endGesture(e, true));
+  // A cancelled gesture is dropped, never promoted to a click.
+  pad.addEventListener("pointercancel", (e) => endGesture(e, false));
+  pad.addEventListener("lostpointercapture", (e) => endGesture(e, false));
+  pad.addEventListener("contextmenu", (e) => e.preventDefault());
+
+  // touch-action: none is not enough on every iOS version: only a cancelled
+  // touchmove reliably stops elastic overscroll and pinch-zoom.
+  const swallow = (e) => e.preventDefault();
+  pad.addEventListener("touchstart", swallow, { passive: false });
+  pad.addEventListener("touchmove", swallow, { passive: false });
+
+  // Size the page to the visible viewport, so the soft keyboard pushes the
+  // trackpad and key rows up instead of covering them. Unverified on a real
+  // phone: how iOS shifts a fixed body when the keyboard opens is the thing
+  // to look at first.
+  function fitViewport() {
+    const vv = window.visualViewport;
+    const root = document.documentElement.style;
+    root.setProperty("--vvh", `${vv ? vv.height : window.innerHeight}px`);
+    root.setProperty("--vvt", `${vv ? vv.offsetTop : 0}px`);
+    window.scrollTo(0, 0);
+  }
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", fitViewport);
+    window.visualViewport.addEventListener("scroll", fitViewport);
+  }
+  window.addEventListener("resize", fitViewport);
+  fitViewport();
+
+  // Open on the desktop (where the summary is hidden), folded on a phone.
+  el.more.open = false;
+}
 
 if (MODE === "direct") {
   installDirectInput();
