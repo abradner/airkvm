@@ -414,6 +414,15 @@ add rather than rewrite.
   probe, which took uncommitted changes with it. **The cleanup half of a throwaway probe is where
   the damage lives, not the probe itself.** `git reflog` recovers commits and nothing else, so
   the one rule that always pays is to commit before probing.
+- **A `head`/`tail` on a listing does not give you a partial answer, it gives you a confident
+  negative.** Asked whether a PR touched `palette.h`, a session ran `gh pr view --json files ...
+  | head -25`, did not see it, and told a peer the file was absent. It was there, past the cut.
+  The damage is not the truncation — it is that the report came out as a fact about the PR
+  ("#49 does not touch palette.h") rather than a fact about the command ("I looked at 25 of N
+  entries"). §8 already says to include a positive control when asserting absence in a test; the
+  same rule wants applying to any shell command you then reason from. Grep for the thing you care
+  about instead of eyeballing a truncated list, and if you must truncate, say so in the sentence
+  that reports the result.
 
 ## 7. CI & Deployment
 
@@ -896,8 +905,7 @@ code is written.*
     state you are least likely to look twice at.
     **Corollary for reviewers:** a `default:` arm or an early `return` in an error path deserves
     the question "what does this value MEAN to the caller", separately from "is it a legal value".
-    (a) and (b) were both found by adversarial review, not by tests; (c) by a human reading a
-    rebase. No test in this repo would have failed for any of them.
+    (a) and (b) were both found by adversarial review, not by tests; (c) by reading a rebase. No test in this repo would have failed for any of them.
 
 ## 10. Maintaining This Document
 
