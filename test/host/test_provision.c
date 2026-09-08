@@ -65,16 +65,18 @@ static uint32_t big_rng(void) {
   return 0xFFFFFFFFu;
 }
 
-static void psk_is_eight_digits(void) {
-  char psk[PROVISION_PSK_DIGITS + 1];
+static void psk_is_eight_hex_chars(void) {
+  char psk[PROVISION_PSK_LEN + 1];
   s_seq = 0;
-  provision_psk_digits(fake_rng, psk);
+  provision_psk_hex(fake_rng, psk);
   CHECK_EQ_STR(psk, "01234567");
-  s_seq = 7;
-  provision_psk_digits(fake_rng, psk);
-  CHECK_EQ_STR(psk, "78901234");
-  provision_psk_digits(big_rng, psk);
-  CHECK_EQ_STR(psk, "55555555");  // 0xFFFFFFFF % 10, every digit in range
+  s_seq = 8;
+  // Uppercase: the 3x5 panel font folds case, so what is shown must be what
+  // was generated, and passphrases are case-sensitive.
+  provision_psk_hex(fake_rng, psk);
+  CHECK_EQ_STR(psk, "89ABCDEF");
+  provision_psk_hex(big_rng, psk);
+  CHECK_EQ_STR(psk, "FFFFFFFF");  // 0xFFFFFFFF % 16, every nibble in range
   CHECK_EQ_INT(strlen(psk), 8);
 }
 
@@ -89,7 +91,7 @@ static void ap_ssid_comes_from_the_mac_tail(void) {
 int main(void) {
   RUN(parses_a_normal_form);
   RUN(refuses_what_a_network_cannot_use);
-  RUN(psk_is_eight_digits);
+  RUN(psk_is_eight_hex_chars);
   RUN(ap_ssid_comes_from_the_mac_tail);
   return test_summary("provision");
 }

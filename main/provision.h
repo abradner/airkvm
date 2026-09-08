@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// WiFi limits: an SSID is up to 32 bytes; a WPA2 passphrase is 8 to 63
+// WiFi limits: an SSID is up to 32 bytes; a WPA2/WPA3 passphrase is 8 to 63
 // characters, or empty for an open network.
 #define PROVISION_SSID_MAX 32
 #define PROVISION_PSK_MIN 8
@@ -26,11 +26,15 @@ struct provision_form {
 bool provision_parse_form(const char *body, size_t len,
                           struct provision_form *out);
 
-// Eight decimal digits from the given RNG, NUL-terminated into out[9]. A
-// hurdle, not a barrier: physical presence (reading the panel) is the gate.
-#define PROVISION_PSK_DIGITS 8
-void provision_psk_digits(uint32_t (*rng)(void),
-                          char out[PROVISION_PSK_DIGITS + 1]);
+// Eight uppercase hex characters from the given RNG, NUL-terminated into
+// out[9]: 32 bits, still eight characters to read off a panel. Uppercase
+// because the 3x5 font folds case and passphrases do not. With the AP on
+// WPA3-SAE (setup_mode.c) a captured handshake cannot be attacked offline,
+// so the size only has to beat online guessing at the AP's own pace —
+// which decimal digits did not, and were never meant to: they were a
+// hurdle behind WPA2, and this is the barrier the map (R-009) now claims.
+#define PROVISION_PSK_LEN 8
+void provision_psk_hex(uint32_t (*rng)(void), char out[PROVISION_PSK_LEN + 1]);
 
 // "airkvm-XXXX" from the last two bytes of the MAC, so two dongles in range
 // of each other do not collide. out must hold PROVISION_AP_SSID_LEN + 1.
