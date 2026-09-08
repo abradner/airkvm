@@ -80,6 +80,11 @@ const el = {
   target: document.getElementById("target-state"),
   mode: document.getElementById("mode"),
   touchpad: document.getElementById("touchpad"),
+  keyrows: document.getElementById("keyrows"),
+  macros: document.getElementById("macros"),
+  release: document.getElementById("release"),
+  softKbd: document.getElementById("soft-kbd"),
+  softInput: document.getElementById("soft-input"),
   more: document.getElementById("more"),
 };
 
@@ -448,19 +453,39 @@ function typeChar(ch) {
 // The shifted characters above assume a US layout on the *target*: the target
 // decides what a physical key position produces. Non-US targets will get the
 // wrong punctuation, which is a known limitation, not a bug to fix here.
-async function typeString(text) {
+// Strings go out one at a time, in order: a second string enqueued while one
+// is still being paced waits for it, and single characters typed meanwhile
+// (typeLater) queue behind both. Without this a composed word and the
+// keystroke that committed it would interleave on the wire.
+let typeChain = Promise.resolve();
+let typing = 0;
+
+function typeString(text) {
   const unsupported = [...new Set([...text].filter((c) => !CHAR_MAP.has(c)))];
   if (unsupported.length) {
     setStatus(`can't type: ${unsupported.join(" ")}`, "bad");
-    return false;
+    return Promise.resolve(false);
   }
-  for (const ch of text) {
-    typeChar(ch);
-    // Targets drop keystrokes that arrive faster than they poll; this is a guess
-    // at a safe rate and wants measuring on real hardware.
-    await new Promise((r) => setTimeout(r, 8));
-  }
-  return true;
+  typing += 1;
+  const run = typeChain.then(async () => {
+    for (const ch of text) {
+      typeChar(ch);
+      // Targets drop keystrokes that arrive faster than they poll; this is a
+      // guess at a safe rate and wants measuring on real hardware.
+      await new Promise((r) => setTimeout(r, 8));
+    }
+    return true;
+  });
+  typeChain = run.finally(() => {
+    typing -= 1;
+  });
+  return run;
+}
+
+// One character or key, now if nothing is being paced, else after it.
+function typeLater(fn) {
+  if (typing === 0) fn();
+  else typeChain = typeChain.then(fn);
 }
 
 el.sendText.addEventListener("click", async () => {
@@ -631,6 +656,17 @@ function installSoftInput() {
   function endGesture(e, allowClick) {
     if (!pointers.delete(e.pointerId)) return; // already ended (pointerup then lostpointercapture)
     if (pointers.size > 0) return; // wait for the last finger
+    finishGesture(allowClick);
+  }
+
+  // Lost confidence (page hidden, window blurred): whatever fingers the page
+  // thinks are down, it is no longer being told about them.
+  function abortGesture() {
+    pointers.clear();
+    finishGesture(false);
+  }
+
+  function finishGesture(allowClick) {
     clearLongPress();
     const quick = performance.now() - touch.startAt < TOUCH.TAP_MAX_MS;
     let tap = 0;
@@ -760,6 +796,134 @@ function installSoftInput() {
 
   // Open on the desktop (where the summary is hidden), folded on a phone.
   el.more.open = false;
+
+  // --- the phone's keyboard -------------------------------------------------
+  //
+  // A soft keyboard reports no physical key position: keydown arrives with an
+  // empty `code` and keyCode 229 (issue #11), so the direct path has nothing to
+  // send. What it does report, reliably, is the edit it is about to make —
+  // `beforeinput` says insertText "a", deleteContentBackward, insertLineBreak —
+  // and that is enough: each character goes through CHAR_MAP to a physical
+  // position, exactly as the paste box has always done, and the edit itself is
+  // cancelled so the box never fills. Cancelling it is also what keeps the two
+  // paths from double-typing: the `input` handler below only ever restores the
+  // box and reports what it found; it never sends.
+  //
+  // The box always holds exactly one zero-width space with the caret after it.
+  // Empty, Backspace produces no beforeinput at all; a space would trip the
+  // double-space-to-period rewrite and type a Backspace on the target.
+  const SENTINEL = "\u200b";
+  const box = el.softInput;
+  let composing = false; // inside an IME composition: nothing is sent until it commits
+  let justComposed = false; // the input event that trails a commit is not a leak
+
+  function resetBox() {
+    box.value = SENTINEL;
+    box.setSelectionRange(1, 1);
+  }
+
+  // focus() is honoured on iOS only inside a user gesture: this button is it.
+  el.softKbd.addEventListener("click", () => {
+    resetBox();
+    box.focus();
+  });
+  box.addEventListener("focus", () => el.softKbd.classList.add("active"));
+  box.addEventListener("blur", () => el.softKbd.classList.remove("active"));
+
+  box.addEventListener("beforeinput", (e) => {
+    if (composing) return; // let the IME work; compositionend sends the result
+    e.preventDefault();
+    justComposed = false;
+    switch (e.inputType) {
+      case "insertText": {
+        // Predictive taps arrive as several characters at once; like the
+        // paste box, all of them or none, never half a word.
+        const text = e.data || "";
+        const bad = [...new Set([...text].filter((c) => !CHAR_MAP.has(c)))];
+        if (bad.length) {
+          setStatus(`can't type: ${bad.join(" ")}`, "bad");
+          break;
+        }
+        typeLater(() => {
+          for (const ch of text) typeChar(ch);
+        });
+        break;
+      }
+      case "insertLineBreak":
+      case "insertParagraph":
+        typeLater(() => typeChar("\n"));
+        break;
+      case "deleteContentBackward":
+        typeLater(() => pressKey("Backspace", false));
+        break;
+      case "deleteContentForward":
+        typeLater(() => pressKey("Delete", false));
+        break;
+      case "insertFromPaste":
+      case "insertFromDrop": {
+        const text =
+          e.data ?? (e.dataTransfer ? e.dataTransfer.getData("text/plain") : "");
+        typeString(text); // paced, and refused whole if any character is unmapped
+        break;
+      }
+      default:
+        // deleteWordBackward, insertReplacementText (an autocorrect that got
+        // through), and whatever else: said out loud rather than guessed at.
+        setStatus(`unsupported edit: ${e.inputType}`, "bad");
+    }
+  });
+
+  // Restores the sentinel and reports anything that reached the box without
+  // going through beforeinput. Never types.
+  box.addEventListener("input", () => {
+    if (composing) return;
+    const trailing = justComposed;
+    justComposed = false;
+    if (box.value === SENTINEL) return;
+    const leaked = box.value.split(SENTINEL).join("");
+    if (leaked && !trailing) {
+      setStatus(`dropped ${leaked.length} character(s) the keyboard slipped past`, "bad");
+    }
+    resetBox();
+  });
+
+  // Android keyboards compose whole words and commit them at once, so the
+  // target sees the word when the phone does — a latency to measure, not to
+  // assume. CJK commits are unmapped and refused by typeString, by name.
+  box.addEventListener("compositionstart", () => {
+    composing = true;
+  });
+  box.addEventListener("compositionend", (e) => {
+    composing = false;
+    justComposed = true;
+    if (e.data) typeString(e.data);
+    resetBox();
+  });
+
+  // Tapping an on-screen key must not move focus off the box, or the phone's
+  // keyboard dismisses on every Esc. Cancelling pointerdown suppresses the
+  // mousedown that would move focus; click still fires. Unverified on iOS —
+  // if the keyboard still drops, the fallback is touchend + preventDefault
+  // with the action invoked from there.
+  for (const host of [el.keyrows, el.macros, el.release]) {
+    host.addEventListener("pointerdown", (e) => {
+      if (e.target.closest("button")) e.preventDefault();
+    });
+  }
+
+  // Lost confidence in soft mode: exitCapture() is a no-op here (nothing is
+  // captured), so the release has to be explicit. The dongle would release on
+  // its own three seconds later; this page does not make it wait.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      abortGesture();
+      sendReleaseAll();
+    }
+  });
+  window.addEventListener("blur", () => {
+    abortGesture();
+    sendReleaseAll();
+  });
 }
 
 if (MODE === "direct") {

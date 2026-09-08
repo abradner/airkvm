@@ -38,6 +38,79 @@
         </p>
       </section>
 
+      <!-- Keys a soft keyboard has no way to produce, laid out as the clusters
+           a physical keyboard puts them in, so the hand knows where they are:
+           modifiers, an edit row, the inverted-T arrows beside the navigation
+           block, and the F row. Each is a data-combo like the sidebar's;
+           modifiers latch (app.js). -->
+      <div id="keyrows" class="keyrows soft-only" aria-label="Keys">
+        <div class="cluster mods">
+          <button type="button" data-mod="ControlLeft">Ctrl</button>
+          <button type="button" data-mod="AltLeft">Alt</button>
+          <button type="button" data-mod="ShiftLeft">Shift</button>
+          <button type="button" data-mod="MetaLeft">Cmd/Win</button>
+        </div>
+        <div class="cluster edit">
+          <button type="button" data-combo="Escape">Esc</button>
+          <button type="button" data-combo="Tab">Tab</button>
+          <button type="button" data-combo="Backspace">⌫</button>
+          <button type="button" data-combo="Enter">↵</button>
+          <button type="button" data-combo="Space" class="wide">Space</button>
+        </div>
+        <div class="navblock">
+          <div class="cluster arrows">
+          <button type="button" data-combo="ArrowUp" class="up">↑</button>
+          <button type="button" data-combo="ArrowLeft">←</button>
+          <button type="button" data-combo="ArrowDown">↓</button>
+          <button type="button" data-combo="ArrowRight">→</button>
+          </div>
+          <div class="cluster nav">
+          <button type="button" data-combo="Insert">Ins</button>
+          <button type="button" data-combo="Home">Home</button>
+          <button type="button" data-combo="PageUp">PgUp</button>
+          <button type="button" data-combo="Delete">Del</button>
+          <button type="button" data-combo="End">End</button>
+          <button type="button" data-combo="PageDown">PgDn</button>
+          </div>
+        </div>
+        <div class="cluster fkeys">
+          <button type="button" data-combo="F1">F1</button>
+          <button type="button" data-combo="F2">F2</button>
+          <button type="button" data-combo="F3">F3</button>
+          <button type="button" data-combo="F4">F4</button>
+          <button type="button" data-combo="F5">F5</button>
+          <button type="button" data-combo="F6">F6</button>
+          <button type="button" data-combo="F7">F7</button>
+          <button type="button" data-combo="F8">F8</button>
+          <button type="button" data-combo="F9">F9</button>
+          <button type="button" data-combo="F10">F10</button>
+          <button type="button" data-combo="F11">F11</button>
+          <button type="button" data-combo="F12">F12</button>
+        </div>
+      </div>
+
+      <!-- The phone's own keyboard. The textarea is the focus target that
+           summons it; what the operator types is caught in beforeinput and sent
+           as keystrokes through CHAR_MAP, and never stays in the box. -->
+      <div class="softbar soft-only">
+        <button id="soft-kbd" type="button">Keyboard</button>
+        <textarea
+          id="soft-input"
+          rows="1"
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="none"
+          spellcheck="false"
+          inputmode="text"
+          enterkeyhint="enter"
+          aria-label="Type here to send keystrokes to the target"
+        ></textarea>
+        <span class="note">
+          Typed characters are sent as US-layout key positions; a target on
+          another layout gets different punctuation.
+        </span>
+      </div>
+
       <aside class="panel">
         <section class="desktop-only">
           <h2>Video</h2>
