@@ -43,12 +43,6 @@ enum indicator_state {
   INDICATOR_IDLE,
 };
 
-// How long a provisioning window lasts, for the LED's benefit only — the
-// authoritative countdown is status_snapshot.setup_remaining_s, set by
-// setup_mode.c. Declared here so a future backend can pulse toward expiry
-// without inventing its own idea of the deadline.
-#define INDICATOR_SETUP_WINDOW_S 300
-
 // Weakest signal band, matching ui.c's one-bar threshold. Kept as the same
 // number deliberately: the light and the screen should not disagree about
 // whether the link is weak.
