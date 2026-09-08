@@ -119,7 +119,14 @@ static esp_err_t redirect_get(httpd_req_t *req) {
   return httpd_resp_send(req, body, n);
 }
 
-esp_err_t http80_start(void) {
+esp_err_t http80_start(bool console_up) {
+#if !CONFIG_AIRKVM_LOG_TAP
+  if (!console_up) {
+    // Nothing to serve: no redirect target, and no diagnostic compiled in.
+    ESP_LOGW(TAG, "console down and no log tap — leaving port 80 closed");
+    return ESP_OK;
+  }
+#endif
   httpd_handle_t server = NULL;
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
   config.server_port = 80;
@@ -173,6 +180,16 @@ esp_err_t http80_start(void) {
     ESP_LOGW(TAG, "log tap on http://<ip>/log — DIAGNOSTIC BUILD ONLY");
   }
 #endif
+
+  // The redirect is registered only when there is something to redirect TO.
+  // With the console down this server exists purely to carry /log, which is
+  // the one moment the log tap was built for — gating both routes on console
+  // success would have removed the diagnostic on its intended failure path.
+  if (!console_up) {
+    ESP_LOGW(TAG,
+             "console is down — port 80 serves the log tap only, no redirect");
+    return ESP_OK;
+  }
 
   const httpd_uri_t redirect_route = {
       .uri = "/*", .method = HTTP_GET, .handler = redirect_get};

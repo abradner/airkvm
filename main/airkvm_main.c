@@ -104,15 +104,24 @@ void app_main(void) {
   // Never fatal. Port 80 carries a convenience and a diagnostic; the console
   // is on 443 and has already started.
   //
-  // Gated on net_start() having succeeded, for two reasons. If the TLS console
-  // failed to start (fatal by design, R-007 — a cert that will not parse has
-  // done this before, gotcha 6), a redirect to 443 sends the browser to the
-  // same refused connection this feature exists to remove, one hop later. And
-  // if net_start() failed before esp_netif_init(), httpd_start would run with
-  // no TCP/IP stack at all — logtap.h records that shape as a reboot loop.
+  // Gated on the TCP/IP STACK being up, not on net_start() having succeeded,
+  // and the difference is the whole point. Two distinct failures hide behind
+  // one error code:
+  //
+  //   no netif — httpd_start would bind with no stack at all, which logtap.h
+  //     records as a reboot loop. Nothing can run here.
+  //   netif up, console down — TLS refused to start (fatal to the console by
+  //     design, R-007; a cert that will not parse has done this before,
+  //     gotcha 6). The redirect must NOT be registered, since it would point
+  //     at a port with nothing behind it. But this is exactly the state the
+  //     log tap exists to let you read about, so the server still starts to
+  //     carry /log.
+  //
+  // An earlier version gated both on `err == ESP_OK`, and so deleted the
+  // network diagnostic on precisely the failure it was built for.
 #if CONFIG_AIRKVM_TLS
-  if (err == ESP_OK && http80_start() != ESP_OK) {
-    ESP_LOGW(TAG, "port 80 not served — console is still on https://");
+  if (net_netif_ready() && http80_start(net_console_up()) != ESP_OK) {
+    ESP_LOGW(TAG, "port 80 not served");
   }
 #endif
 
