@@ -31,7 +31,7 @@ change that found the disagreement.
 | Surface | Path / entry point | Auth mechanism | Notes |
 |---|---|---|---|
 | Console page | `GET /` (HTTPS, port 443) | **None** — transport encrypted, caller unauthenticated | Static page embedded in firmware. Anyone who can route to the dongle gets it. |
-| Input socket | `GET /ws` (WSS upgrade) | **None** — see R-001 | The actual keystroke path. Every input frame here becomes a USB HID report on the target. Also carries the wake request, which is answered here and never becomes a report: on `WAKE` the dongle signals USB remote wakeup to a suspended target and replies with a result frame, the protocol's only dongle→console message (unverified on hardware). |
+| Input socket | `GET /ws` (WSS upgrade) | **None** — see R-001 | The actual keystroke path. Every input frame here becomes a USB HID report on the target. Also carries the wake request, which is answered here and never becomes a report: on `WAKE` the dongle signals USB remote wakeup to a suspended target and replies with a result frame, one of the protocol's two dongle→console messages, the other being the `STATUS` reply to `STATUS_REQ` (wake unverified on hardware). |
 | USB HID device | USB-C port → target machine | **None, by design** | The target cannot authenticate a keyboard. This is inherent to HID, not a gap we can close. |
 | USB mass storage | Same port, interface 2 | **None, by design** | A removable-disk LUN (`main/msc_out.c`), always present so attaching media never re-enumerates. Its medium is whatever the media socket below has attached, or on the LCD147 board a card in the slot (`main/msc_src_sd.c`; insertion polled every 1 s, removal every 0.5 s); no medium until then. Read-only today. Unverified on hardware: whether a BIOS still takes the boot keyboard beside a card reader, and everything about the media path. |
 | Media socket | `GET /ws-media` (WSS upgrade, **port 8443**, its own `esp_http_server` instance) | **None** — see R-008 | Attaches a disk image held in the operator's browser (or `tools/poke.py media`) as the LUN's medium and serves its 16 KB chunks on demand. One client slot: a second media client cannot connect while one is connected (a second TLS session is heap the console needs). Closing the socket detaches; a client silent for two request timeouts (8 s) is dropped. Not advertised over mDNS. |
@@ -111,7 +111,10 @@ deliberately do not refresh the deadline; only the owner's.
 This **bounds** what was previously an unbounded gap, rather than closing it. A client that
 vanishes *without* closing its TCP connection (a suspended laptop, a backgrounded mobile browser)
 used to hold state until the socket layer noticed, which could be indefinitely; it is now at most
-~3s. What it does not do is measure client liveness: `esp_http_server` runs a single task for
+~3s. The phone console (`soft` mode, `web/app.js`) does not rely on the deadline for the
+case it can see coming: going hidden sends release-all itself, and coming back sends one frame
+on an open socket (which re-claims the session) or reconnects at once on a closed one. No
+boundary moves for the phone: same origin, same two routes, no new asset, no new outbound call. What it does not do is measure client liveness: `esp_http_server` runs a single task for
 accepting connections, performing TLS handshakes, serving assets and dispatching WebSocket
 frames — serially — so a PING that arrived on time but is queued behind that work is
 indistinguishable from silence. A TLS handshake measured ~4.8s on

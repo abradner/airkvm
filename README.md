@@ -58,6 +58,13 @@ PORT=/dev/tty.usbmodem1101 mise run flash
 The dongle shows its address on the OLED (and logs it on boot) — `http://<ip>/`, also
 `http://airkvm.local/`. Open that on your laptop, click the video pane to capture, and type.
 
+On a phone the same address is a trackpad and a keyboard, with no video: one finger moves the
+pointer, a tap clicks, holding a finger still then moving drags, two fingers scroll, and a
+two-finger tap right-clicks. The **Keyboard** button opens the phone's own keyboard, and
+modifiers on the key rows latch — tap Ctrl, then C. Typed characters are sent as US-layout key
+positions, so a target set to another layout gets different punctuation. Backgrounding the phone
+ends the session and releases every key on the target, on purpose; coming back reconnects.
+
 ## The front panel
 
 The little screen shows what you need when you walk up to the thing: its IP, the network it's on

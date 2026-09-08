@@ -660,7 +660,7 @@ const TOUCH = {
   // Dwell between BUTTON 1 and BUTTON 0 of a synthesized click. The dongle's
   // report task drains every queued intent before emitting, and only keyboard
   // intents are guarded against being applied on top of a state whose report
-  // has not gone out (hid_out_usb.c): two button frames drained in one pass
+  // has not gone out (hid_out_usb.c, issue #58): two button frames drained in one pass
   // collapse into one report with nothing pressed, and the click is lost. A
   // human click outlasts a pass by orders of magnitude, which is why the
   // desktop path never sees this.
