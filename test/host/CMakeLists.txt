@@ -42,6 +42,12 @@ add_test(NAME oled_geometry COMMAND test_oled_geometry)
 add_executable(test_canvas test_canvas.c ../../main/font3x5.c ../../main/font8x16.c)
 add_test(NAME canvas COMMAND test_canvas)
 
+# redirect.h is header-only and pure for the same reason keymap.c is: the part
+# worth testing is string handling on attacker-controlled input, and that
+# should not need a board to exercise.
+add_executable(test_redirect test_redirect.c)
+add_test(NAME redirect COMMAND test_redirect)
+
 # status.c itself needs FreeRTOS, but status.h's debug-expiry predicate is pure
 # and is the part R-006 depends on being right.
 add_executable(test_status_debug test_status_debug.c)
@@ -51,3 +57,11 @@ add_test(NAME status_debug COMMAND test_status_debug)
 # and is now shared by two backends, so it is exactly the part worth pinning.
 add_executable(test_indicator test_indicator.c)
 add_test(NAME indicator COMMAND test_indicator)
+
+# theme.h is header-only data, for the same reason canvas.h is header-only
+# code: so the thing that cannot be checked without a panel — is this legible —
+# becomes a number that can. Links libm for pow(), which the WCAG luminance
+# curve needs and which nothing else in this suite does.
+add_executable(test_theme test_theme.c)
+target_link_libraries(test_theme m)
+add_test(NAME theme COMMAND test_theme)

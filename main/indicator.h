@@ -61,6 +61,30 @@ enum indicator_state {
 // reason: choose the error that does not train the operator to look away.
 #define INDICATOR_STRONG_RSSI_DBM (-72)
 
+// Is the radio link weak enough to explain slowness?
+//
+// Extracted from indicator_state_for() below because the STATUS PANEL now
+// colours its signal bar on the same question, and the header above already
+// promised the light and the screen would not disagree about it. That promise
+// was a matched pair of constants; it is now a shared function, which is the
+// difference between a claim and a mechanism (AGENTS.md §10 meta-rule 5).
+// Delete this and the two would drift on the next threshold tweak.
+//
+// `was_weak` is the caller's own last answer, which is what gives the
+// hysteresis somewhere to live without this holding state — see the constants
+// above for why a bare threshold is not enough. Callers keep their own latch
+// and pass false on the first call; both are driven from the same snapshot at
+// the same cadence, so they move together.
+static inline bool indicator_link_is_weak(int8_t rssi, bool was_weak) {
+  // rssi == 0 means "not measured yet", not "catastrophically weak".
+  if (rssi == 0) {
+    return false;
+  }
+  // Enter below the weak level; leave only once back above the strong one.
+  return was_weak ? rssi < INDICATOR_STRONG_RSSI_DBM
+                  : rssi <= INDICATOR_WEAK_RSSI_DBM;
+}
+
 // `prev` is the state last returned, so the weak-signal warning can have
 // hysteresis without this function holding state of its own — it stays pure
 // and host-testable, and the hysteresis cannot end up implemented differently
@@ -102,14 +126,8 @@ static inline enum indicator_state indicator_state_for(
   if (s->usb_suspended) {
     return INDICATOR_SUSPENDED;
   }
-  // rssi == 0 means "not measured yet", not "catastrophically weak".
-  if (s->rssi != 0) {
-    const bool warning_already = prev == INDICATOR_WARN;
-    // Enter below the weak level; leave only once back above the strong one.
-    if (warning_already ? s->rssi < INDICATOR_STRONG_RSSI_DBM
-                        : s->rssi <= INDICATOR_WEAK_RSSI_DBM) {
-      return INDICATOR_WARN;
-    }
+  if (indicator_link_is_weak(s->rssi, prev == INDICATOR_WARN)) {
+    return INDICATOR_WARN;
   }
   return s->client_connected ? INDICATOR_BOUND : INDICATOR_IDLE;
 }
@@ -118,4 +136,13 @@ void indicator_init(void);
 
 // Call periodically; drives the LED from current status. Kept as a tick rather
 // than its own task so the UI task owns all the timing in one place.
-void indicator_tick(void);
+// Call periodically; drives the LED from `s`. Kept as a tick rather than its
+// own task so the UI task owns all the timing in one place.
+//
+// Takes the CALLER'S snapshot rather than reading its own, and returns the
+// state it just rendered, because the status panel derives the signal bar's
+// colour from the same question this answers. Two independent status_get()
+// calls microseconds apart can differ, and a difference inside the hysteresis
+// band does not wash out on the next tick — it latches, and the light and the
+// screen then disagree about the link indefinitely. One snapshot, one answer.
+enum indicator_state indicator_tick(const struct status_snapshot *s);

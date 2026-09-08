@@ -83,7 +83,7 @@ A conflict with a principle is a stop-and-check, never something to quietly work
 | USB stack | TinyUSB via `esp_tinyusb` | Composite: boot keyboard + relative mouse + a mass-storage LUN (`main/msc_out.c`) whose medium is a browser-held image streamed over `/ws-media` (`main/media_ws.c`, `main/block_source_browser.c`) or, on the LCD147 board, the microSD card (`main/msc_src_sd.c`). Advertises USB remote wakeup so the console can wake a suspended target. Keyboard delivery was verified on hardware 2026-09-04 as a two-interface device; the three-interface composite, media, and wakeup are unverified |
 | Network | `esp_http_server` (WebSocket) + `mdns` | Single origin serves console and socket. Credentials come from the radio's NVS store first, Kconfig on a fresh flash; a 5 s BOOT hold reboots into a softAP captive portal to change them (`main/setup_mode.c`), which on the S3 is also served over a USB NCM network device (`main/usb_net.c`, no route, no DNS) |
 | Console | Vanilla HTML/CSS/JS, no build step | Embedded in firmware via `EMBED_FILES`; no npm, no bundler, no CDN |
-| Display | SSD1306 72×40 over I2C, or ST7789 172×320 over SPI | One backend per board behind `main/display.h` (`display_ssd1306.c` / `display_st7789.c`), sharing the drawing layer in `main/canvas.h`. Status only (IP, mDNS name, link state). Both confirmed on real hardware: the OLED's pins and 180° rotation on 2026-08-31, the ST7789's pins, orientation and gap on 2026-09-06 |
+| Display | SSD1306 72×40 over I2C, or ST7789 172×320 over SPI | One backend per board behind `main/display.h` (`display_ssd1306.c` / `display_st7789.c`), sharing the drawing layer in `main/canvas.h`. Status only (IP, mDNS name, link state). Both confirmed on real hardware: the OLED's pins and 180° rotation on 2026-08-31, the ST7789's pins, orientation and gap on 2026-09-06. The LCD's four ink roles are coloured by a build-time theme (`main/theme.h`, `CONFIG_AIRKVM_THEME_*`), and a per-section hue (`main/display_hue.h`) resolves SECONDARY and ACCENT per 8-row band at flush, so the panel gets more than four colours without a third bit plane. The signal gauge's colour is the one that carries meaning, and its weak/healthy threshold is `indicator_link_is_weak` — shared with the LED so the two cannot disagree, not a second set of constants. Themes and hues are a no-op on the 1bpp OLED, and every colour's contrast ratio is asserted by `test/host/test_theme.c` rather than eyeballed |
 | Host tooling | Python 3 (stdlib only) | `tools/poke.py` drives a dongle from a terminal; not shipped to users |
 | Testing | CMake/ctest + plain C assertions | Keymap, protocol codec, and HID state are pure and host-tested — `test/host/` |
 | Deployment | `idf.py flash` over USB-C | No shipping OTA path yet — `main/ota.c` is a throwaway, URL-gated dev test hook, empty (no-op) in every real build. See §7 |
@@ -847,6 +847,57 @@ code is written.*
     acceptance test for a new USB mode is enumeration in that mode, not a green build. Neither
     is reachable from host tests or the C3 (gotcha 8 again); both were found by a fresh agent
     reading vendor sources against the commit's own claims.
+
+17. **A numeric proxy for a perceptual property ranks candidates; it does not pick between
+    them.** The panel's hardcoded Solarized Dark was rejected on hardware as too low contrast.
+    The diagnosis turned out to be exact and cheap: ui.c draws the address in PRIMARY and
+    *everything else* in SECONDARY, and Solarized's SECONDARY was base01 — the scheme's **comment**
+    tone — at 2.87:1 against the background. So the bug was a role misassignment, not a palette
+    choice, and the whole class became preventable by making contrast a number a test can fail on
+    (`test/host/test_theme.c`). That much is unambiguous progress. What is worth recording is what
+    happened *next*: a rule was stated ("default to the theme with the highest weakest ratio"),
+    applied, and it picked Tokyo Night — and then `tools/preview_ui.py` rendered the five themes
+    and the picture disagreed. Tokyo Night clears every floor by a mile and still reads flat,
+    because its PRIMARY and SECONDARY are only 2.66 apart, so the hierarchy the four ink roles
+    exist to create is present in the numbers and absent to the eye. The default is Monokai Machine
+    on the strength of the render. **General rules.** *(a) Let a metric set the floor, not the
+    ranking, whenever the property is perceptual.* A floor is a fact ("this is illegible"); a
+    ranking across candidates that all clear the floor is taste wearing a number's clothes. Both
+    are useful and only one belongs in an assertion. *(b) Compute the metric on what the hardware
+    can actually produce.* Every ratio here is measured on the RGB565-quantised colour, not the
+    source hex, and the two differ by up to 4% — which is more than the margin some of these
+    themes have. This was not theoretical: the first version of the test's own positive control
+    asserted 5.32:1 for mid grey on black, the textbook value, and failed, because RGB565 cannot
+    store #808080 and rounds it up to 5.51:1. *(c) This is entry 14 collecting its second scalp* —
+    the host renderer built because the panel was unavailable has now caught a rendering bug and
+    overruled a design decision, and it cost about a second per run each time.
+
+18. **A failure path that returns the HEALTHY answer disables an indicator somewhere else, and
+    nothing goes red.** Three instances in one day, across two sessions, which is what makes it a
+    shape rather than three typos.
+    *(a)* `indicator_tick()` returned `INDICATOR_IDLE` when the LED had not initialised. Harmless
+    while only the LED consumed it — but the status panel had just started colouring its signal
+    gauge from that return value, so a failed RMT init made a working screen report every link as
+    healthy. A dead LED silently disabling an unrelated indicator on a different device.
+    *(b)* `http80_start()` was gated on `net_start()` succeeding, to stop the HTTPS redirect
+    pointing at a console that had failed to start. That also skipped registering `/log` — and
+    `logtap.h` says in as many words that the tap exists for "when the thing being debugged is why
+    the console will not start". The guard deleted the diagnostic on precisely its intended
+    failure path.
+    *(c)* An `INDICATOR_SETUP` arm missing from the WS2812 backend's `switch` would fall into
+    `default:`, which is `SOL_LED_OK` — setup mode showing healthy green, with nothing failing
+    anywhere. Caught by reading rather than by a build.
+    **The general rule: when a function answers a question other code acts on, its error and
+    not-ready paths must not return a value that means "fine".** Return the real answer if you can
+    compute it (a) — the policy in that case did not need the hardware at all, so the readiness
+    check simply moved after it. Return a distinguishable "unknown" if you cannot. Never return
+    the healthy one. The reason these are expensive is that every one of them builds, links, and
+    passes: the failure path is the least-exercised code in the file, and it is reporting the
+    state you are least likely to look twice at.
+    **Corollary for reviewers:** a `default:` arm or an early `return` in an error path deserves
+    the question "what does this value MEAN to the caller", separately from "is it a legal value".
+    (a) and (b) were both found by adversarial review, not by tests; (c) by a human reading a
+    rebase. No test in this repo would have failed for any of them.
 
 ## 10. Maintaining This Document
 

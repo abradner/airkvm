@@ -45,15 +45,26 @@ CONFIG_TINYUSB_NCM_IN_NTB_BUFFS_COUNT=1
 CONFIG_TINYUSB_NCM_OUT_NTB_BUFF_MAX_SIZE=2048
 CONFIG_TINYUSB_NCM_IN_NTB_BUFF_MAX_SIZE=2048
 
-# The console holds one long-lived WebSocket plus three short static requests,
-# and the media server (main/media_ws.c) is a second httpd instance with two
-# client slots. Each instance also reserves three internal sockets, plus mDNS,
-# which the old value of 10 did not leave room for. This is an EXISTING symbol
+# Three httpd instances now, and this number is the sum of them: the console
+# (4 client slots), the media server (1, main/media_ws.c) and the port-80
+# redirect (2, main/http80.c). Each ALSO reserves three internal sockets — a
+# listener and two control-UDP — and mDNS wants one or two more, so the floor
+# is 4+1+2 clients plus 9 internal plus mDNS.
+#
+# esp_http_server checks max_open_sockets + 3 against this value for its OWN
+# instance only, so three servers each pass and then exhaust the pool between
+# them at runtime; the check cannot catch an over-subscribed sum. If you add a
+# fourth listener, do this arithmetic again.
+#
+# Setup mode's portal (main/setup_mode.c, 6 slots) is deliberately NOT in that
+# sum: it is exclusive with normal operation — the console, storage and HID are
+# all absent while it runs (R-009) — so its 6+3 replaces these rather than
+# adding to them, and it is the smaller total. Do not add the two together. This is an EXISTING symbol
 # in any generated sdkconfig from before: a defaults file cannot change it
-# (AGENTS.md §6.1). Delete or edit your sdkconfig and confirm 16 in
+# (AGENTS.md §6.1). Delete or edit your sdkconfig and confirm 20 in
 # build/config/sdkconfig.h, or the failure is a runtime accept()/socket()
 # ENFILE on whichever of TLS accept and mDNS loses.
-CONFIG_LWIP_MAX_SOCKETS=16
+CONFIG_LWIP_MAX_SOCKETS=20
 # IDF's DHCP server puts ITS OWN address into the DNS option of every offer
 # whenever a netif's DNS flag is off — the "off" branch is where the default
 # goes in, not where nothing goes in (dhcpserver.c, add_offer_options). With

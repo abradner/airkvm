@@ -15,7 +15,8 @@ set(airkvm_srcs
     "provision.c"
     "captive_dns.c"
     "ota.c"
-    "logtap.c")
+    "logtap.c"
+    "http80.c")
 
 # esp_https_server is required unconditionally even though TLS is a Kconfig
 # option: component requirements are resolved during CMake's early-expansion

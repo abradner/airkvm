@@ -152,12 +152,8 @@ void indicator_init(void) {
   ESP_LOGI(TAG, "WS2812 status LED on GPIO%d", BOARD_LED_RGB_GPIO);
 }
 
-void indicator_tick(void) {
-  if (!s_ready) {
-    return;
-  }
-  struct status_snapshot s;
-  status_get(&s);
+enum indicator_state indicator_tick(const struct status_snapshot *snap) {
+  const struct status_snapshot s = *snap;
 
   // Held across ticks so the weak-signal warning has hysteresis; see
   // indicator.h. Evaluated once per tick rather than three times, which also
@@ -165,6 +161,12 @@ void indicator_tick(void) {
   static enum indicator_state prev = INDICATOR_IDLE;
   const enum indicator_state state = indicator_state_for(&s, prev);
   prev = state;
+
+  // Policy first, hardware second — see indicator.c for why. A failed RMT init
+  // must not make the panel call every link healthy.
+  if (!s_ready) {
+    return state;
+  }
 
   uint8_t r, g, b;
   int ceiling;
@@ -257,11 +259,18 @@ void indicator_tick(void) {
 
   scale(&r, &g, &b, level);
   emit(r, g, b);
+  return state;
 }
 
 #else
 
 void indicator_init(void) {}
-void indicator_tick(void) {}
+enum indicator_state indicator_tick(const struct status_snapshot *snap) {
+  // No LED on this board, but what this answers is not about the LED: the
+  // status panel colours its signal bar from it. Run the policy anyway.
+  static enum indicator_state prev = INDICATOR_IDLE;
+  prev = indicator_state_for(snap, prev);
+  return prev;
+}
 
 #endif

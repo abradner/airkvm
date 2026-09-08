@@ -89,12 +89,8 @@ static int breathe_percent(int64_t now_us) {
   return (int)((up * BREATHE_CEILING_PCT) / half);
 }
 
-void indicator_tick(void) {
-  if (!s_ready) {
-    return;
-  }
-  struct status_snapshot s;
-  status_get(&s);
+enum indicator_state indicator_tick(const struct status_snapshot *snap) {
+  const struct status_snapshot s = *snap;
 
   const int64_t now = esp_timer_get_time();
 
@@ -105,6 +101,17 @@ void indicator_tick(void) {
   const enum indicator_state state = indicator_state_for(&s, prev);
   prev = state;
 
+  // The POLICY runs whether or not there is a working LED, and the readiness
+  // check sits AFTER it. The panel colours its signal bar from this return
+  // value, so bailing out early meant a board whose LED failed to initialise
+  // reported every link as healthy on a screen that was working fine — a dead
+  // LED silently disabling an unrelated indicator. Only the emission below
+  // depends on the hardware, and the latch has to keep advancing regardless or
+  // it drifts from the panel's for the same reason a second copy would.
+  if (!s_ready) {
+    return state;
+  }
+
   // With one channel the only vocabulary is brightness, so the mapping is
   // coarser than the RGB backend's: a fault sits steady at full, and anything
   // healthy-but-unbound stays dark. Dark is the honest signal that nobody is
@@ -112,11 +119,11 @@ void indicator_tick(void) {
   // life in.
   if (state == INDICATOR_FAULT) {
     set_percent(100);
-    return;
+    return state;
   }
   if (state == INDICATOR_IDLE) {
     set_percent(0);
-    return;
+    return state;
   }
   // One channel cannot say "suspended" in a colour, so it says it in a rhythm:
   // a fast blink, distinguishable from the slow breath of a bound session.
@@ -129,7 +136,7 @@ void indicator_tick(void) {
   }
   if (state == INDICATOR_SUSPENDED) {
     set_percent(((now / 250000) % 2) ? 60 : 0);
-    return;
+    return state;
   }
 
   int percent = breathe_percent(now);
@@ -139,11 +146,18 @@ void indicator_tick(void) {
     percent += BLIP_BOOST_PCT;
   }
   set_percent(percent);
+  return state;
 }
 
 #else  // !BOARD_HAS_LED
 
 void indicator_init(void) {}
-void indicator_tick(void) {}
+enum indicator_state indicator_tick(const struct status_snapshot *snap) {
+  // No LED on this board, but what this answers is not about the LED: the
+  // status panel colours its signal bar from it. Run the policy anyway.
+  static enum indicator_state prev = INDICATOR_IDLE;
+  prev = indicator_state_for(snap, prev);
+  return prev;
+}
 
 #endif

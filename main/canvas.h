@@ -219,3 +219,76 @@ static inline void canvas_bar(struct canvas *c, int col, int row, int width,
     }
   }
 }
+
+// A signal gauge: ascending steps, left to right, bottom-aligned — the shape
+// every phone and laptop uses for exactly this quantity, which is the point.
+// canvas_bar()'s equal boxes above say "four of something"; these say "a scale,
+// and this much of it".
+//
+// Filled steps are SOLID in the pen ink; unfilled ones are an OUTLINE in
+// `ink_off`. Both differences matter and neither is decoration:
+//
+//   - the outline keeps the empty part of the scale visible, so an absent step
+//     reads as "not reached" rather than "no data" (canvas_bar's reasoning);
+//   - solid-vs-outline means the reading does not depend on seeing colour.
+//
+// The second one was got wrong first time round: every step was drawn solid and
+// only the ink differed, which put the whole reading on hue. Measured on the
+// RGB565-quantised colours, an unfilled step against a filled one is 1.02:1 on
+// the default theme and 1.00:1 on solarized-dark — the ramp colours are chosen
+// to share a lightness, so to anyone who cannot separate those hues the gauge
+// was a solid block. Shape is what makes it legible without colour, and
+// test_canvas.c now asserts the two are drawn differently.
+//
+// The pen is restored before returning: this is the only drawing call that
+// touches two inks, and a caller that set PRIMARY and got SECONDARY back would
+// be a genuinely horrible bug to find.
+//
+// `ink_off` must not be CANVAS_INK_NONE. canvas_pixel reads ink 0 as "the
+// caller never set one" and substitutes PRIMARY, so passing NONE to mean "draw
+// nothing for unfilled steps" draws them in the BRIGHTEST ink instead. Pass an
+// ink you actually want.
+//
+// Not used by the 0.42" OLED — see the note at display_bar in
+// display_st7789.c for why the shape does not survive a 3x5 font.
+static inline void canvas_bar_steps(struct canvas *c, int col, int row,
+                                    int width, int filled, int sx, int sy,
+                                    uint8_t ink_off) {
+  const struct canvas_font *f = c->font;
+  if (f == NULL || width <= 0) {
+    return;
+  }
+  const int x0 = col * f->advance * sx;
+  const int y0 = row * f->line_h * sy;
+  // One pixel narrower than the pitch, so steps never touch — same derivation
+  // as canvas_bar(), and same reason (gotcha 14c).
+  const int bw = (f->advance - 1) * sx;
+  const int full_h = f->glyph_h * sy;
+  const uint8_t pen = c->ink;
+
+  for (int i = 0; i < width; i++) {
+    // Ascending, and never zero: the shortest step still has to be visible,
+    // or "one bar" and "no bars" look the same.
+    int h = full_h * (i + 1) / width;
+    if (h < 1) {
+      h = 1;
+    }
+    const bool lit = i < filled;
+    canvas_set_ink(c, lit ? pen : ink_off);
+    const int top = full_h - h;
+    for (int gx = 0; gx < bw; gx++) {
+      for (int gy = top; gy < full_h; gy++) {
+        // A one-pixel border of the step's own rectangle. At the shortest step
+        // (4px on this panel) that still leaves a visible hollow, which is why
+        // the outline is drawn at the step's height rather than as a fixed
+        // stub — the height has to keep meaning "position in the ramp".
+        const bool edge =
+            gx == 0 || gx == bw - 1 || gy == top || gy == full_h - 1;
+        if (lit || edge) {
+          canvas_pixel(c, x0 + i * f->advance * sx + gx, y0 + gy, true);
+        }
+      }
+    }
+  }
+  canvas_set_ink(c, pen);
+}
