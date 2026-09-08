@@ -111,9 +111,15 @@ config AIRKVM_WIFI_SSID
     string "WiFi SSID"
     default ""
     help
-        Network the dongle joins. Required — there is deliberately no default,
-        because a plausible-looking wrong value fails as a radio problem rather
-        than as a config problem (AGENTS.md §8).
+        Network the dongle joins on a fresh flash. Once the radio has a stored
+        configuration (this value after first boot, or whatever setup mode
+        saved — hold BOOT for 5 s and release), the stored one wins and this
+        is ignored; re-point a provisioned dongle through setup mode, not by
+        rebuilding.
+
+        No default: a plausible-looking wrong value fails as a radio problem
+        rather than as a config problem (AGENTS.md §8). With neither source
+        the dongle boots without WiFi and the panel says how to set it up.
 
 config AIRKVM_WIFI_PASSWORD
     string "WiFi password"

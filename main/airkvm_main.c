@@ -13,6 +13,8 @@
 #endif
 #include "net.h"
 #include "ota.h"
+#include "setup_flag.h"
+#include "setup_mode.h"
 #include "status.h"
 #include "ui.h"
 
@@ -24,6 +26,18 @@ void app_main(void) {
   // network happens to come up.
   status_init();
   ui_start();
+
+  // A 5 s BOOT hold in the previous run asked for setup mode (setup_flag.h).
+  // Everything below this line is the normal dongle; setup mode is a
+  // different device (an access point serving one page) and never returns.
+  // It brings up WiFi itself and starts no USB at all, so gotcha 10's
+  // ordering does not arise there.
+  if (setup_flag_take()) {
+    setup_mode_run();
+  }
+  // The missing-credentials path was verified on the C3 bench on 2026-08-10
+  // against Kconfig only; it now consults the radio's NVS store first
+  // (wifi.c), which that run predates.
 
   // Diagnostic builds only; an inline no-op stub otherwise (logtap.h). Started
   // before net_start() so a failure *inside* net_start — which is what issue

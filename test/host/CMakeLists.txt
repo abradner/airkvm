@@ -15,13 +15,16 @@ set(AIRKVM_PURE_SOURCES
     ../../main/wake_policy.c
     ../../main/msc_lun.c
     ../../main/media_proto.c
-    ../../main/block_cache.c)
+    ../../main/block_cache.c
+    ../../main/hold_button.c
+    ../../main/provision.c
+    ../../main/captive_dns.c)
 
 include_directories(../../main)
 enable_testing()
 
 foreach(suite keymap protocol hid_state session wake_policy msc_lun media_proto
-        block_cache)
+        block_cache hold_button provision captive_dns)
   add_executable(test_${suite} test_${suite}.c ${AIRKVM_PURE_SOURCES})
   add_test(NAME ${suite} COMMAND test_${suite})
 endforeach()
