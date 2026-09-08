@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>airkvm setup</title>
+    <!-- Served by the dongle's setup-mode access point over plain HTTP, with
+         no scripts: captive-portal mini-browsers are the least capable
+         browsers there are, and this page has to work in all of them. -->
+    <style>
+      body { margin: 0; padding: 1.5rem; font: 16px/1.5 system-ui, sans-serif; background: #14161a; color: #e6e8ec; }
+      main { max-width: 22rem; margin: 0 auto; }
+      h1 { font-size: 1.1rem; letter-spacing: 0.08em; text-transform: lowercase; margin: 0 0 1rem; }
+      label { display: block; font-size: 0.8rem; color: #9aa3b2; margin-top: 1rem; }
+      input { width: 100%; box-sizing: border-box; padding: 0.6rem; font-size: 1rem; border: 1px solid #2c313a; border-radius: 6px; background: #1d2026; color: inherit; }
+      button { margin-top: 1.5rem; width: 100%; padding: 0.7rem; font-size: 1rem; border: 0; border-radius: 6px; background: #4ea87a; color: #0b0d10; }
+      p { color: #9aa3b2; font-size: 0.85rem; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>airkvm setup</h1>
+      <p>Enter the WiFi network the dongle should join. It restarts as soon
+        as you save, and this access point disappears.</p>
+      <form method="post" action="/save">
+        <label for="ssid">Network name (SSID, up to 32 bytes)</label>
+        <input id="ssid" name="ssid" maxlength="32" required autocomplete="off" autocapitalize="none" />
+        <label for="psk">Password (empty for an open network; 8&ndash;63 bytes)</label>
+        <input id="psk" name="psk" type="password" minlength="8" maxlength="63" autocomplete="off" />
+        <button type="submit">Save and restart</button>
+      </form>
+      <p>If the dongle's panel shows a USB address, it is also a USB network
+        adapter while setup mode is up, and the computer it is plugged into
+        can open this page at that address.</p>
+      <p>Wrong network? Hold the dongle's BOOT button for 5 seconds and
+        release to get back here.</p>
+    </main>
+  </body>
+</html>

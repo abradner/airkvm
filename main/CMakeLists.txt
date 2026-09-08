@@ -9,6 +9,11 @@ set(airkvm_srcs
     "keymap.c"
     "protocol.c"
     "wake_policy.c"
+    "hold_button.c"
+    "setup_flag.c"
+    "setup_mode.c"
+    "provision.c"
+    "captive_dns.c"
     "ota.c"
     "logtap.c")
 
@@ -41,13 +46,24 @@ set(airkvm_requires
 # is only offered on targets with native USB OTG, so this never has to guard
 # against a C3 pulling in TinyUSB.
 #
-# NOTE: the `list(APPEND airkvm_requires ...)` below is dead — see the comment
-# above. TinyUSB reaches the link through main/idf_component.yml, not through
-# here. Left in place rather than removed in this change so the fix is its own
-# reviewable commit; tracked separately.
+# There is deliberately no `list(APPEND airkvm_requires esp_tinyusb)` here:
+# TinyUSB is a managed component and reaches the link through
+# main/idf_component.yml, whose `rules: if target in [esp32s3, esp32s2]` keeps
+# it off the C3. One did sit here from the first commit and never had any
+# effect, appearing to work only because the manifest was supplying the
+# dependency the whole time.
+#
+# The reason is not that this if() fails to run — it plainly runs, which is how
+# hid_out_usb.c gets selected below. It is that idf_component_register never
+# reads its REQUIRES argument for dependencies: those come from the __REQUIRES
+# property (component.cmake, __component_set_all_dependencies), filled by a
+# separate early-expansion pass that includes no sdkconfig, so CONFIG_ is
+# undefined there and the branch is skipped in the only pass that is read.
+# Appending here writes to a list nothing looks at again. SRCS have no such
+# split — idf_component_register consumes them in the real pass — which is why
+# the conditional below works. AGENTS.md §9 gotcha 7.
 if(CONFIG_AIRKVM_HID_BACKEND_USB)
     list(APPEND airkvm_srcs "hid_out_usb.c")
-    list(APPEND airkvm_requires esp_tinyusb)
 else()
     list(APPEND airkvm_srcs "hid_out_log.c")
 endif()
@@ -60,6 +76,13 @@ endif()
 if(CONFIG_TINYUSB_MSC_ENABLED)
     list(APPEND airkvm_srcs "msc_lun.c" "msc_out.c" "media_proto.c" "block_cache.c"
         "block_source_browser.c" "media_ws.c")
+endif()
+# The setup-mode USB network device (main/usb_net.c) is keyed on esp_tinyusb's
+# NET choice symbol for the same reason MSC is keyed on theirs above. It is
+# only ever started by setup_mode.c; the normal image carries the class
+# driver's static NTB buffers (sized in sdkconfig.defaults) and nothing else.
+if(CONFIG_TINYUSB_NET_MODE_NCM)
+    list(APPEND airkvm_srcs "usb_net.c")
 endif()
 if(CONFIG_AIRKVM_MSC_SD)
     if(NOT CONFIG_TINYUSB_MSC_ENABLED)
@@ -103,7 +126,7 @@ set(WEB_GZ "${CMAKE_CURRENT_BINARY_DIR}/web")
 file(MAKE_DIRECTORY "${WEB_GZ}")
 
 set(web_assets "")
-foreach(asset IN ITEMS index.html app.js style.css)
+foreach(asset IN ITEMS index.html app.js style.css setup.html)
     list(APPEND web_assets "${WEB_GZ}/${asset}.gz")
 endforeach()
 
@@ -111,7 +134,7 @@ endforeach()
 # requirements, where add_custom_command does not exist, and once for real.
 # Without this guard the first pass fails with "command is not scriptable".
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)
-    foreach(asset IN ITEMS index.html app.js style.css)
+    foreach(asset IN ITEMS index.html app.js style.css setup.html)
         add_custom_command(
             OUTPUT "${WEB_GZ}/${asset}.gz"
             # -n omits the timestamp so identical input gives identical output,

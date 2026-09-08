@@ -81,7 +81,7 @@ A conflict with a principle is a stop-and-check, never something to quietly work
 | Firmware language | C (C11) | ESP-IDF v5.5, installed by `mise run setup` into `.esp-idf/` |
 | Target hardware | ESP32-S3 (`esp32s3` target) | ESP32-S3-0.42 OLED supermini; native USB OTG is non-negotiable (§4) |
 | USB stack | TinyUSB via `esp_tinyusb` | Composite: boot keyboard + relative mouse + a mass-storage LUN (`main/msc_out.c`) whose medium is a browser-held image streamed over `/ws-media` (`main/media_ws.c`, `main/block_source_browser.c`) or, on the LCD147 board, the microSD card (`main/msc_src_sd.c`). Advertises USB remote wakeup so the console can wake a suspended target. Keyboard delivery was verified on hardware 2026-09-04 as a two-interface device; the three-interface composite, media, and wakeup are unverified |
-| Network | `esp_http_server` (WebSocket) + `mdns` | Single origin serves console and socket |
+| Network | `esp_http_server` (WebSocket) + `mdns` | Single origin serves console and socket. Credentials come from the radio's NVS store first, Kconfig on a fresh flash; a 5 s BOOT hold reboots into a softAP captive portal to change them (`main/setup_mode.c`), which on the S3 is also served over a USB NCM network device (`main/usb_net.c`, no route, no DNS) |
 | Console | Vanilla HTML/CSS/JS, no build step | Embedded in firmware via `EMBED_FILES`; no npm, no bundler, no CDN |
 | Display | SSD1306 72×40 over I2C, or ST7789 172×320 over SPI | One backend per board behind `main/display.h` (`display_ssd1306.c` / `display_st7789.c`), sharing the drawing layer in `main/canvas.h`. Status only (IP, mDNS name, link state). Both confirmed on real hardware: the OLED's pins and 180° rotation on 2026-08-31, the ST7789's pins, orientation and gap on 2026-09-06. The LCD's four ink roles are coloured by a build-time theme (`main/theme.h`, `CONFIG_AIRKVM_THEME_*`), and a per-section hue (`main/display_hue.h`) resolves SECONDARY and ACCENT per 8-row band at flush, so the panel gets more than four colours without a third bit plane. The signal gauge's colour is the one that carries meaning, and its weak/healthy threshold is `indicator_link_is_weak` — shared with the LED so the two cannot disagree, not a second set of constants. Themes and hues are a no-op on the 1bpp OLED, and every colour's contrast ratio is asserted by `test/host/test_theme.c` rather than eyeballed |
 | Host tooling | Python 3 (stdlib only) | `tools/poke.py` drives a dongle from a terminal; not shipped to users |
@@ -605,11 +605,28 @@ code is written.*
    length to paper over the difference.
 
 7. **Component `REQUIRES` cannot be made conditional on `CONFIG_` values.** Requirements are
-   resolved in CMake's early-expansion pass, where those values are not reliably visible, so
+   resolved in CMake's early-expansion pass, where those values are never visible, so
    `if(CONFIG_X) list(APPEND ... )` silently fails to add the include path and the build dies on a
    missing header with the option plainly enabled in `sdkconfig`. Require unconditionally and
    guard the code with `#if` instead. (Conditional `EMBED_*` lists are fine — those are consumed
    in the real pass.)
+   **Added 2026-09-07.** "Never visible" above was originally hedged as "not reliably visible";
+   it was measured on v5.5 and it is never — the early pass is a bare `cmake -P` that includes no
+   sdkconfig, on incremental configures with a populated `sdkconfig` on disk as much as on clean
+   ones.
+   The loud failure is also the *lucky* case: when something else already supplies the dependency,
+   a dead conditional REQUIRES links fine and looks load-bearing indefinitely.
+   `list(APPEND airkvm_requires esp_tinyusb)` sat inside the USB-backend `if()` from the first
+   commit and never had an effect, because `main/idf_component.yml` had been supplying TinyUSB the
+   whole time. Two things are needed to see it. **State the mechanism precisely:** the `if()` does
+   run in the real pass — it also picks the backend's source file — and what is dead is the
+   append, because `REQUIRES` is read only from the early pass. **Use the right instrument:**
+   `build_component_info.<component>.reqs` in `build/project_description.json` is what the
+   component was actually given, but compare against the *registry* name rather than the one in
+   `CMakeLists.txt` — the component manager rewrites managed short names, so a live `mdns`
+   requirement appears there as `espressif__mdns`, and a live `esp_tinyusb` one would appear as
+   `espressif__esp_tinyusb`. `reqs` holds direct requirements only (common and transitive ones are
+   not in it), so it answers "was this line added", not "what does this component link against".
 
 8. **Bench hardware that cannot do the headline feature still finds the headline bugs.** Entries
    1-3 above were found on an ESP32-C3, a board that physically cannot be a USB keyboard, via
@@ -791,7 +808,27 @@ code is written.*
     general rule is that any vendor "helper" compiled by a Kconfig flag deserves an `nm` of what
     it defines before the flag is flipped.
 
-16. **A numeric proxy for a perceptual property ranks candidates; it does not pick between
+16. **Turning a flag off is not the same as emitting nothing, and a callback linked into every
+    image runs in every mode.** Two defects from one review (PR #53), both principle 1 shaped.
+    *(a)* The setup-mode USB link promised a DHCP offer with no DNS option, and the code cleared
+    the netif's DNS flag to get it. IDF's DHCP server (`dhcpserver.c`, `add_offer_options`) puts
+    **its own address** into the option in the `else` of that flag whenever
+    `CONFIG_LWIP_DHCPS_ADD_DNS` is on — which it is by default — so "off" produced a resolver that
+    answers nothing, the opposite of the claim, and the softAP's captive DNS had been arriving by
+    the same accident. Rule: **when you clear a flag to suppress an output, read the off branch
+    and check the emitted bytes, not the flag**; a default that lives in the `else` is invisible
+    from the API. The symbol is now off in `sdkconfig.defaults` (an existing one: §6.1), the AP
+    names its resolver explicitly, and CI asserts the header.
+    *(b)* Setup mode never calls `msc_out_start()`, but `tud_mount_cb` (`hid_out_usb.c`) is
+    linked into every S3 image and calls `msc_out_bus_reset()`, which took a mutex that did not
+    exist — an assert on the TinyUSB task at the first SET_CONFIGURATION, a reboot that consumed
+    the setup flag, and no console to say so. Rule: **a mode that skips a module's start still
+    links its callbacks, so every owner's entry point must tolerate never-started**, and the
+    acceptance test for a new USB mode is enumeration in that mode, not a green build. Neither
+    is reachable from host tests or the C3 (gotcha 8 again); both were found by a fresh agent
+    reading vendor sources against the commit's own claims.
+
+17. **A numeric proxy for a perceptual property ranks candidates; it does not pick between
     them.** The panel's hardcoded Solarized Dark was rejected on hardware as too low contrast.
     The diagnosis turned out to be exact and cheap: ui.c draws the address in PRIMARY and
     *everything else* in SECONDARY, and Solarized's SECONDARY was base01 — the scheme's **comment**

@@ -8,14 +8,22 @@
 
 #include "esp_err.h"
 
-// Initialises NVS, brings up WiFi in station mode from Kconfig credentials, and
+// Initialises NVS, brings up WiFi in station mode from the stored credentials
+// (NVS, written by setup mode or by a previous boot's Kconfig values) or, on a
+// fresh flash, from Kconfig, and
 // returns as soon as the association is *started* — not once it succeeds.
 // Association continues in the background because USB HID must never wait on a
 // network that may never come up (docs/repo-map.md, boot flow).
 //
-// Fails fast when no SSID is configured rather than defaulting to anything
+// Fails fast when no SSID is stored or configured rather than defaulting to anything
 // (AGENTS.md §8, configuration).
 esp_err_t wifi_start(void);
+
+// NVS init with the erase-and-retry that a version bump needs. Called by
+// wifi_start() and by setup mode, which brings the radio up its own way.
+// Prefixed because `wifi_nvs_init` is a symbol inside Espressif's closed
+// libnet80211 and the link says so loudly.
+esp_err_t airkvm_nvs_init(void);
 
 // How hard the radio should be working right now.
 //
