@@ -177,7 +177,7 @@ _Static_assert(UI_Y_NETWORK % DISPLAY_CELL_H == 0 &&
 _Static_assert(UI_Y_DEBUG + DISPLAY_CELL_H <= DISPLAY_HEIGHT,
                "layout runs off the bottom of the panel");
 
-static void draw(const struct status_snapshot *s) {
+static void draw(const struct status_snapshot *s, bool led_weak) {
   display_clear();
 
   // Ink is set per element rather than once, because the point of having it is
@@ -185,6 +185,17 @@ static void draw(const struct status_snapshot *s) {
   // reference. On a single-colour panel every one of these is a no-op, so this
   // stays one draw() for both boards.
   display_set_ink(DISPLAY_INK_SECONDARY);
+
+  // Hue is set alongside ink, and the two are orthogonal: ink is the hierarchy
+  // (what you read first), hue is which of the theme's complementary colours
+  // this section belongs to. Sections read as sections rather than as six
+  // lines of the same grey. Also a no-op on the single-colour panel, so this
+  // stays one draw() for both boards.
+  //
+  // Deliberately restrained to three coloured sections plus neutral. A screen
+  // where everything is a different colour has no hierarchy either — it has
+  // just moved the problem.
+  display_set_hue(DISPLAY_HUE_IDENTITY);
 
   // Identity, and who holds the keyboard — the thing you check first when the
   // console feels unresponsive, so it sits top-right.
@@ -199,7 +210,13 @@ static void draw(const struct status_snapshot *s) {
   // The address is the only PRIMARY thing on the screen. Everything else is
   // context for it, and dimming the context is what makes it stand out —
   // cheaper and calmer than making the address itself louder.
+  //
+  // Its hue is NEUTRAL and that is not an oversight: PRIMARY does not take a
+  // hue at all (see theme.h), so the address is the same colour in every
+  // section and in every frame. The one thing on the panel that must never
+  // look like it changed meaning is the number you type into a browser.
   display_set_ink(DISPLAY_INK_PRIMARY);
+  display_set_hue(DISPLAY_HUE_NEUTRAL);
   display_text_tall(UI_X_COL, UI_Y_ADDRESS,
                     s->wifi_connected ? s->ip : "NO WIFI");
   display_set_ink(DISPLAY_INK_SECONDARY);
@@ -211,6 +228,7 @@ static void draw(const struct status_snapshot *s) {
   if (s->wifi_connected) {
     char host[DISPLAY_COLS + 1];
     snprintf(host, sizeof(host), "%s.local", CONFIG_AIRKVM_MDNS_HOSTNAME);
+    display_set_hue(DISPLAY_HUE_ADDRESS);
     display_text(UI_X_COL, UI_Y_MDNS / DISPLAY_CELL_H, host);
   }
 #endif
@@ -221,19 +239,90 @@ static void draw(const struct status_snapshot *s) {
     display_text(UI_X_COL, UI_Y_NETWORK / DISPLAY_CELL_H, "HOLD BOOT 5S:SETUP");
   }
   if (s->wifi_connected) {
-    display_text(UI_X_COL, UI_Y_NETWORK / DISPLAY_CELL_H, s->ssid);
-    // The only non-text element, and the only accent on the panel. Note it is
-    // NOT a warning colour: a weak signal shows amber on the LED, which is
-    // visible from across a room. Saying it twice would make neither say it.
+    // SSID and signal bar share a hue because they share a row — hue is
+    // resolved per 8-row band, so whatever colours the bar necessarily colours
+    // the text beside it. The three link hues hold the SSID's colour constant
+    // and move only the bar's.
+    //
+    // Which link hue: the light's own answer, passed in by ui_task, not a
+    // second opinion computed here.
+    //
+    // Two earlier attempts at this were wrong, and both failure modes are worth
+    // knowing. A private `bool` latch drifted because the light's hysteresis
+    // input is `prev == WARN` and a fault or suspend clears that as a side
+    // effect, which a bare bool has no equivalent of. Running the light's state
+    // machine a second time here drifted too — this block only executes while
+    // WiFi is up, so the copy stopped advancing during exactly the outage that
+    // moves the real one. And a divergence inside the hysteresis band does not
+    // wash out: both sides latch, so they stay split until something else
+    // moves them.
+    //
+    // One tick, one snapshot, one answer, handed down. That is the only shape
+    // that makes indicator.h's promise true rather than nearly true.
+    //
+    // On the colour itself: until now the bar was deliberately never a warning
+    // colour, on the argument that the LED already says "weak" from across the
+    // room and saying it twice makes neither say it. That argument narrows
+    // rather than survives — see display_hue.h. The bar is the only place that
+    // can say HOW weak, and colouring it by the quantity it already displays
+    // is redundant coding of one variable, not a second claim. It stops at
+    // amber: red means fault on this device, and one bar is not a fault.
+    const int bars = rssi_bars(s->rssi);
+    display_set_hue(bars == 0  ? DISPLAY_HUE_LINK_NONE
+                    : led_weak ? DISPLAY_HUE_LINK_WEAK
+                               : DISPLAY_HUE_LINK);
+
+    // The SSID, clipped so it cannot run into what sits to its right on this
+    // row. display_text clips at the PANEL edge, not at a column, and
+    // canvas_text only ORs pixels in — so an over-long SSID does not push the
+    // caption aside, it draws through it and both become unreadable. A 32-char
+    // SSID is legal (STATUS_SSID_LEN) and reaches column 32; the caption
+    // starts at column 27.
+    char ssid[STATUS_SSID_LEN];
+    snprintf(ssid, sizeof(ssid), "%s", s->ssid);
+
+#if BOARD_DISPLAY_ST7789
+    // The number the bar is a picture of, right up against it, because four
+    // shapes in a corner with no caption are decoration. It is also the thing
+    // you would quote to someone else — AGENTS.md §9 entry 4 was diagnosed by
+    // an RSSI reading, not by a bar count.
+    //
+    // LCD only: the 0.42" panel has 18 columns, and spending 8 of them here
+    // would leave 6 for an SSID. On that board the bar stays uncaptioned,
+    // which is the honest trade at 72x40 rather than an oversight.
+    char sig[10];
+    if (s->rssi == 0) {
+      snprintf(sig, sizeof(sig), "-- dBm");
+    } else {
+      snprintf(sig, sizeof(sig), "%d dBm", (int)s->rssi);
+    }
+    const int cap_col = DISPLAY_COLS - 4 - (int)strlen(sig) - 1;
+    // One blank column between the SSID and the caption, so they read as two
+    // things rather than one run-on string.
+    const int ssid_max = cap_col - UI_X_COL - 1;
+    if (ssid_max > 0 && (int)strlen(ssid) > ssid_max) {
+      ssid[ssid_max] = '\0';
+    }
+    display_text(cap_col, UI_Y_NETWORK / DISPLAY_CELL_H, sig);
+#endif
+
+    display_text(UI_X_COL, UI_Y_NETWORK / DISPLAY_CELL_H, ssid);
+
     display_set_ink(DISPLAY_INK_ACCENT);
-    display_bar(DISPLAY_COLS - 4, UI_Y_NETWORK / DISPLAY_CELL_H, 4,
-                rssi_bars(s->rssi));
+    display_bar(DISPLAY_COLS - 4, UI_Y_NETWORK / DISPLAY_CELL_H, 4, bars);
     display_set_ink(DISPLAY_INK_SECONDARY);
   }
 
   // Whether a target is actually listening, and proof that input is arriving —
   // together these separate "my input isn't getting there" from "the target is
   // ignoring me", which is the question this device gets used to answer.
+  //
+  // Neutral, and the last coloured section is above this one. The USB row is
+  // the one that gets read when something is wrong, and a colour of its own
+  // would either compete with the LED (which already says fault) or have to
+  // mean nothing, which is worse on a row that looks like it means something.
+  display_set_hue(DISPLAY_HUE_NEUTRAL);
+
   char line[DISPLAY_COLS + 1];
   if (s->usb_mounted && s->usb_suspended) {
     // Enumerated, but the target has parked the bus: nothing typed now will
@@ -262,7 +351,22 @@ static void draw(const struct status_snapshot *s) {
   // smallest renderable glyph is already 2.5x the OLED's linear size, so the
   // assumption is weaker here and must not be weakened further. Do not "fix"
   // this to match the other rows.
+  //
+  // It also inherits SECONDARY ink, which the themeable palette (theme.h) took
+  // from 2.9:1 to 7.9:1 of contrast in the default theme. That is the whole
+  // point of the theme change and this row rides along with it: legibility at
+  // distance went up for every SECONDARY element, including this one. Recorded
+  // in R-006 rather than worked around, because the honest options are all
+  // worse — a fifth ink role means a third bit plane and 7KB of heap this
+  // board does not have, and drawing the row in a deliberately illegible
+  // colour would be security by squinting.
   if (s->debug) {
+    // NEUTRAL, explicitly, and this one is a security parameter like the cell
+    // size above it (R-006). It is already neutral by inheritance from the
+    // target row; saying it here means a future reordering of draw() cannot
+    // quietly hand the keystroke row a colour, and a reviewer sees the intent
+    // rather than having to trace the pen back through the function.
+    display_set_hue(DISPLAY_HUE_NEUTRAL);
     display_text(UI_X_COL, UI_Y_DEBUG / DISPLAY_CELL_H,
                  s->last_event[0] ? s->last_event : "DEBUG ON");
   }
@@ -426,7 +530,9 @@ static void ui_task(void *arg) {
     const bool screensaver_active = idle_ms >= SCREENSAVER_IDLE_MS;
 
     poll_button(screensaver_active, snapshot.setup_active);
-    indicator_tick();
+    // One snapshot for the light and the panel, and the light's verdict is
+    // what the panel's signal bar is coloured by — see draw().
+    const enum indicator_state led = indicator_tick(&snapshot);
 
     // Let the radio follow the operator. This task already knows how long it
     // has been since input arrived, which is exactly the signal, so the tier
@@ -462,7 +568,7 @@ static void ui_task(void *arg) {
       } else if (screensaver_active) {
         draw_screensaver();
       } else {
-        draw(&snapshot);
+        draw(&snapshot, led == INDICATOR_WARN);
       }
     }
 

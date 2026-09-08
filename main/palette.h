@@ -1,28 +1,46 @@
-// Solarized Dark, in one place, for anything on this device that shows colour.
+// The device's colour vocabulary: named Solarized tones, and the LED hues.
 //
-// Chosen rather than saturated primaries because a status light and a status
-// screen are things you sit next to for hours, and full-gamut red/green is
-// exhausting at that distance. Solarized's accents are deliberately desaturated
-// and share a lightness, so no single one grabs the eye harder than the others
-// — which matters when the point is that only *one* of them should be on at a
-// time.
+// == What moved, and why the panel is no longer here ==
 //
-// Both encodings live here so the LED and the panel cannot drift into two
-// slightly different reds. The LED wants 8-bit-per-channel; the ST7789 wants
-// RGB565.
+// This file used to hold the screen's four roles as well, on the argument that
+// keeping both encodings together stopped the LED and the panel drifting into
+// two slightly different reds. The screen's roles now live in theme.h, because
+// the panel became themeable and the LED deliberately did not (see below), so
+// there is no longer a shared red to keep in step — that argument dissolved
+// rather than being overruled. What is left here is the vocabulary theme.h
+// names its Solarized entry from, plus the LED's own hues.
+//
+// == The LED is NOT themed, and that is a decision, not an omission ==
+//
+// A theme changes what the panel looks like. It must not change what the light
+// MEANS. Red is a fault on every airkvm board and in every theme; if a theme
+// could reassign it, the one channel on this device that is readable from
+// across a room without reading would stop being a fact and start being a
+// preference. The hues below are also tuned for a point source rather than for
+// text — see the note above SOL_LED_OK — and a theme transcribed from an
+// editor screenshot would re-break exactly what that tuning fixed.
 #pragma once
 
 #include <stdint.h>
 
 #define RGB24(r, g, b) (((uint32_t)(r) << 16) | ((uint32_t)(g) << 8) | (b))
 
-// 5-6-5. Note the panel's byte order is a separate question from this packing:
-// pure black and pure white are byte-order agnostic, which is why the
-// monochrome build never had to care. The first real colour on screen is where
-// that stops being true — expect to check `data_endian` when the palette
-// reaches the LCD.
+// 5-6-5, in natural order. The panel's byte order is a separate question from
+// this packing and is answered in display_st7789.c (BE16), not here: black and
+// white are palindromic in RGB565, so the monochrome build never noticed, and
+// the first coloured frame came out with the background vivid green until the
+// swap went in (hardware, 2026-09-07). Colours are stored the way they are
+// written; a transport swaps them if its panel wants that.
 #define RGB565(r, g, b) \
   ((uint16_t)((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3)))
+
+// RGB565 from one of the comma-triple macros below, e.g. RGB565_OF(SOL_BASE03).
+// The extra level of indirection is required rather than decorative: macro
+// arguments are separated on commas BEFORE they are expanded, so a direct
+// RGB565(SOL_BASE03) passes one argument to a three-parameter macro and fails
+// to compile. Going through a one-parameter macro expands the triple first and
+// the rescan then splits it.
+#define RGB565_OF(triple) RGB565(triple)
 
 // Backgrounds and text, darkest to lightest.
 #define SOL_BASE03 0x00, 0x2B, 0x36  // background
@@ -31,28 +49,8 @@
 #define SOL_BASE0 0x83, 0x94, 0x96   // body text
 #define SOL_BASE1 0x93, 0xA1, 0xA1   // emphasised content
 
-// Screen roles, as RGB565. Four, matching canvas.h's ink roles.
-//
-// The scheme is restrained on purpose, and the reason is architectural rather
-// than aesthetic: on this board the RGB LED is the primary status channel, so
-// the panel does not have to alarm. It can spend colour on HIERARCHY instead —
-// which is the thing a status screen actually lacks when everything is the
-// same white.
-//
-//   PRIMARY    base1   the address: the one thing you read at a glance
-//   SECONDARY  base01  labels, SSID, mDNS name — present, deliberately quieter
-//   ACCENT     cyan    the signal bar, the only non-text element
-//
-// No red and no amber here. Those live on the LED, where they are visible from
-// across a room and cannot be missed; duplicating them on the panel would make
-// two things say the same thing and neither say it well.
-#define SOL_SCREEN_BG RGB565(0x00, 0x2B, 0x36)
-#define SOL_SCREEN_PRIMARY RGB565(0x93, 0xA1, 0xA1)
-#define SOL_SCREEN_SECONDARY RGB565(0x58, 0x6E, 0x75)
-#define SOL_SCREEN_ACCENT RGB565(0x2A, 0xA1, 0x98)
-
-// LED hues. Separate from the screen entries above, and the reason is that the
-// two have genuinely different jobs.
+// LED hues. Separate from the screen's themed roles in theme.h, and the reason
+// is that the two have genuinely different jobs.
 //
 // Solarized's palette is tuned for TEXT: its accents are desaturated and share
 // a lightness so none dominates a page. That is exactly wrong for a status
