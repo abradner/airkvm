@@ -93,12 +93,12 @@ bool provision_parse_form(const char *body, size_t len,
   return true;
 }
 
-void provision_psk_digits(uint32_t (*rng)(void),
-                          char out[PROVISION_PSK_DIGITS + 1]) {
-  for (int i = 0; i < PROVISION_PSK_DIGITS; i++) {
-    out[i] = (char)('0' + (rng() % 10u));
+void provision_psk_hex(uint32_t (*rng)(void), char out[PROVISION_PSK_LEN + 1]) {
+  static const char hex[] = "0123456789ABCDEF";
+  for (int i = 0; i < PROVISION_PSK_LEN; i++) {
+    out[i] = hex[rng() % 16u];
   }
-  out[PROVISION_PSK_DIGITS] = '\0';
+  out[PROVISION_PSK_LEN] = '\0';
 }
 
 void provision_ap_ssid(const uint8_t mac[6],

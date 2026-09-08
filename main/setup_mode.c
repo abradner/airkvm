@@ -207,14 +207,25 @@ static esp_err_t start_ap(char *ssid, char *psk) {
   ESP_RETURN_ON_ERROR(esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP), TAG, "mac");
   provision_ap_ssid(mac, ssid);
   // esp_random() is true random once the radio is initialised, which it is.
-  provision_psk_digits(esp_random, psk);
+  provision_psk_hex(esp_random, psk);
 
   wifi_config_t ap = {0};
   strlcpy((char *)ap.ap.ssid, ssid, sizeof(ap.ap.ssid));
   ap.ap.ssid_len = (uint8_t)strlen(ssid);
   strlcpy((char *)ap.ap.password, psk, sizeof(ap.ap.password));
   ap.ap.channel = 1;
-  ap.ap.authmode = WIFI_AUTH_WPA2_PSK;
+  // WPA3-SAE only, not WPA2/WPA3 mixed: SAE is a PAKE, so a handshake
+  // captured from the air cannot be attacked offline — which is the whole
+  // point, because the operator's home network password is what crosses
+  // this link. Mixed mode would hand an attacker a WPA2 downgrade and the
+  // 32-bit passphrase to crack at leisure. The cost is that clients older
+  // than iOS 13 / Android 10 cannot join; accepted (Alex, 2026-09-07).
+  // WPA3 mandates protected management frames, so PMF is required
+  // explicitly rather than left to the driver to infer.
+  ap.ap.authmode = WIFI_AUTH_WPA3_PSK;
+  ap.ap.pmf_cfg.capable = true;
+  ap.ap.pmf_cfg.required = true;
+  ap.ap.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
   ap.ap.max_connection = 2;
   ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_AP, &ap), TAG, "ap config");
   ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "wifi start");
@@ -260,7 +271,7 @@ static esp_err_t start_ap(char *ssid, char *psk) {
 
 void setup_mode_run(void) {
   char ssid[PROVISION_AP_SSID_LEN + 1];
-  char psk[PROVISION_PSK_DIGITS + 1];
+  char psk[PROVISION_PSK_LEN + 1];
   ESP_LOGW(TAG, "SETUP MODE: no keyboard, no disk, no console for up to %d s",
            SETUP_TIMEOUT_S);
 
