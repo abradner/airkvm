@@ -6,6 +6,7 @@
 
 #include "esp_log.h"
 #include "hid_out.h"
+#include "http80.h"
 #include "logtap.h"
 #if CONFIG_AIRKVM_MSC_SD
 #include "msc_src_sd.h"
@@ -95,10 +96,34 @@ void app_main(void) {
 #endif
 
   // Only now is there a network stack to bind to (esp_netif_init happens
-  // inside net_start). No-op unless AIRKVM_LOG_TAP is set.
-  if (logtap_serve() != ESP_OK) {
-    ESP_LOGW(TAG, "log tap failed to serve");
+  // inside net_start). This is the plain-HTTP server on port 80: the redirect
+  // to HTTPS, and the log tap's route if that build enabled it. Compiled out
+  // entirely on a non-TLS build, where the console itself is on port 80 and
+  // there is nothing to redirect to.
+  //
+  // Never fatal. Port 80 carries a convenience and a diagnostic; the console
+  // is on 443 and has already started.
+  //
+  // Gated on the TCP/IP STACK being up, not on net_start() having succeeded,
+  // and the difference is the whole point. Two distinct failures hide behind
+  // one error code:
+  //
+  //   no netif — httpd_start would bind with no stack at all, which logtap.h
+  //     records as a reboot loop. Nothing can run here.
+  //   netif up, console down — TLS refused to start (fatal to the console by
+  //     design, R-007; a cert that will not parse has done this before,
+  //     gotcha 6). The redirect must NOT be registered, since it would point
+  //     at a port with nothing behind it. But this is exactly the state the
+  //     log tap exists to let you read about, so the server still starts to
+  //     carry /log.
+  //
+  // An earlier version gated both on `err == ESP_OK`, and so deleted the
+  // network diagnostic on precisely the failure it was built for.
+#if CONFIG_AIRKVM_TLS
+  if (net_netif_ready() && http80_start(net_console_up()) != ESP_OK) {
+    ESP_LOGW(TAG, "port 80 not served");
   }
+#endif
 
   if (err == ESP_OK) {
     ESP_LOGI(TAG, "airkvm ready");

@@ -235,11 +235,17 @@ config AIRKVM_LOG_TAP
     depends on AIRKVM_TLS
     default n
     help
-        Requires AIRKVM_TLS, because it serves on port 80 and a non-TLS
-        console is already there (start_http in main/net.c). Without this
-        dependency the two race for the same port and which one you get is
-        a coin toss — the log tap is a diagnostic, so it must never be the
-        thing that breaks the console it is diagnosing.
+        Requires AIRKVM_TLS, because port 80 is where a non-TLS console lives
+        (start_http in main/net.c) and the log tap must never be the thing that
+        breaks the console it is diagnosing.
+
+        On a TLS build port 80 is shared with the HTTPS redirect, and they do
+        not race: main/http80.c owns that server and registers both routes in
+        one place, in the order that makes /log win over the redirect's
+        catch-all. The dependency above is what kept that from ever being a
+        real race — with TLS off the console takes port 80 and the log tap is
+        not offered — so this is closing the door before a second occupant
+        arrived, not fixing a collision that happened.
 
         Captures ESP_LOG output into a ring buffer and serves it at
         http://<ip>/log on port 80, alongside whatever the console is doing.

@@ -42,6 +42,12 @@ add_test(NAME oled_geometry COMMAND test_oled_geometry)
 add_executable(test_canvas test_canvas.c ../../main/font3x5.c ../../main/font8x16.c)
 add_test(NAME canvas COMMAND test_canvas)
 
+# redirect.h is header-only and pure for the same reason keymap.c is: the part
+# worth testing is string handling on attacker-controlled input, and that
+# should not need a board to exercise.
+add_executable(test_redirect test_redirect.c)
+add_test(NAME redirect COMMAND test_redirect)
+
 # status.c itself needs FreeRTOS, but status.h's debug-expiry predicate is pure
 # and is the part R-006 depends on being right.
 add_executable(test_status_debug test_status_debug.c)

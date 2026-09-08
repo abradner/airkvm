@@ -852,6 +852,33 @@ code is written.*
     the host renderer built because the panel was unavailable has now caught a rendering bug and
     overruled a design decision, and it cost about a second per run each time.
 
+18. **A failure path that returns the HEALTHY answer disables an indicator somewhere else, and
+    nothing goes red.** Three instances in one day, across two sessions, which is what makes it a
+    shape rather than three typos.
+    *(a)* `indicator_tick()` returned `INDICATOR_IDLE` when the LED had not initialised. Harmless
+    while only the LED consumed it — but the status panel had just started colouring its signal
+    gauge from that return value, so a failed RMT init made a working screen report every link as
+    healthy. A dead LED silently disabling an unrelated indicator on a different device.
+    *(b)* `http80_start()` was gated on `net_start()` succeeding, to stop the HTTPS redirect
+    pointing at a console that had failed to start. That also skipped registering `/log` — and
+    `logtap.h` says in as many words that the tap exists for "when the thing being debugged is why
+    the console will not start". The guard deleted the diagnostic on precisely its intended
+    failure path.
+    *(c)* An `INDICATOR_SETUP` arm missing from the WS2812 backend's `switch` would fall into
+    `default:`, which is `SOL_LED_OK` — setup mode showing healthy green, with nothing failing
+    anywhere. Caught by reading rather than by a build.
+    **The general rule: when a function answers a question other code acts on, its error and
+    not-ready paths must not return a value that means "fine".** Return the real answer if you can
+    compute it (a) — the policy in that case did not need the hardware at all, so the readiness
+    check simply moved after it. Return a distinguishable "unknown" if you cannot. Never return
+    the healthy one. The reason these are expensive is that every one of them builds, links, and
+    passes: the failure path is the least-exercised code in the file, and it is reporting the
+    state you are least likely to look twice at.
+    **Corollary for reviewers:** a `default:` arm or an early `return` in an error path deserves
+    the question "what does this value MEAN to the caller", separately from "is it a legal value".
+    (a) and (b) were both found by adversarial review, not by tests; (c) by a human reading a
+    rebase. No test in this repo would have failed for any of them.
+
 ## 10. Maintaining This Document
 
 Meta-rules for editing this file — they exist because each was violated somewhere first:
