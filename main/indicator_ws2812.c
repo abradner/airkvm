@@ -153,9 +153,6 @@ void indicator_init(void) {
 }
 
 enum indicator_state indicator_tick(const struct status_snapshot *snap) {
-  if (!s_ready) {
-    return INDICATOR_IDLE;
-  }
   const struct status_snapshot s = *snap;
 
   // Held across ticks so the weak-signal warning has hysteresis; see
@@ -164,6 +161,12 @@ enum indicator_state indicator_tick(const struct status_snapshot *snap) {
   static enum indicator_state prev = INDICATOR_IDLE;
   const enum indicator_state state = indicator_state_for(&s, prev);
   prev = state;
+
+  // Policy first, hardware second — see indicator.c for why. A failed RMT init
+  // must not make the panel call every link healthy.
+  if (!s_ready) {
+    return state;
+  }
 
   uint8_t r, g, b;
   int ceiling;
@@ -257,8 +260,11 @@ enum indicator_state indicator_tick(const struct status_snapshot *snap) {
 
 void indicator_init(void) {}
 enum indicator_state indicator_tick(const struct status_snapshot *snap) {
-  (void)snap;
-  return INDICATOR_IDLE;
+  // No LED on this board, but what this answers is not about the LED: the
+  // status panel colours its signal bar from it. Run the policy anyway.
+  static enum indicator_state prev = INDICATOR_IDLE;
+  prev = indicator_state_for(snap, prev);
+  return prev;
 }
 
 #endif

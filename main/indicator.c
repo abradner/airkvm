@@ -90,9 +90,6 @@ static int breathe_percent(int64_t now_us) {
 }
 
 enum indicator_state indicator_tick(const struct status_snapshot *snap) {
-  if (!s_ready) {
-    return INDICATOR_IDLE;
-  }
   const struct status_snapshot s = *snap;
 
   const int64_t now = esp_timer_get_time();
@@ -103,6 +100,17 @@ enum indicator_state indicator_tick(const struct status_snapshot *snap) {
   static enum indicator_state prev = INDICATOR_IDLE;
   const enum indicator_state state = indicator_state_for(&s, prev);
   prev = state;
+
+  // The POLICY runs whether or not there is a working LED, and the readiness
+  // check sits AFTER it. The panel colours its signal bar from this return
+  // value, so bailing out early meant a board whose LED failed to initialise
+  // reported every link as healthy on a screen that was working fine — a dead
+  // LED silently disabling an unrelated indicator. Only the emission below
+  // depends on the hardware, and the latch has to keep advancing regardless or
+  // it drifts from the panel's for the same reason a second copy would.
+  if (!s_ready) {
+    return state;
+  }
 
   // With one channel the only vocabulary is brightness, so the mapping is
   // coarser than the RGB backend's: a fault sits steady at full, and anything
@@ -138,8 +146,11 @@ enum indicator_state indicator_tick(const struct status_snapshot *snap) {
 
 void indicator_init(void) {}
 enum indicator_state indicator_tick(const struct status_snapshot *snap) {
-  (void)snap;
-  return INDICATOR_IDLE;
+  // No LED on this board, but what this answers is not about the LED: the
+  // status panel colours its signal bar from it. Run the policy anyway.
+  static enum indicator_state prev = INDICATOR_IDLE;
+  prev = indicator_state_for(snap, prev);
+  return prev;
 }
 
 #endif

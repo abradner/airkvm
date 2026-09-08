@@ -369,19 +369,40 @@ def print_contrast(themes):
     """The ratios, from the same table the firmware draws from.
 
     Politeness, not enforcement: test/host/test_theme.c is what fails a build
-    when a theme drops below the floor. Deleting this function would cost a
-    convenient table and nothing else.
+    when a colour drops below the floor. Deleting this costs a convenient
+    table and nothing else.
+
+    Prints the two tables main/theme.h documents. The second one is the set
+    that actually reaches the panel: a hue carries a (secondary, accent) pair,
+    and for the three link states it is the ACCENT that is the signal bar.
     """
-    hue_names = [n for n, _ in sorted(HUE_INDEX.items(), key=lambda kv: kv[1])]
-    head = f"{'theme':22} {'PRIMARY':>8} {'SECONDARY':>10} {'ACCENT':>8}"
-    print(head + "".join(f"{n:>10}" for n in hue_names[1:]))
+    H = HUE_INDEX
+    print("ink roles, against each theme's background:")
+    print(f"  {'theme':22} {'PRIMARY':>8} {'SECONDARY':>10} {'ACCENT':>8}")
     for name, t in themes.items():
         bg = t["ink"][0]
-        row = (
-            f"{name:22} {contrast(t['ink'][1], bg):8.2f} "
+        print(
+            f"  {name:22} {contrast(t['ink'][1], bg):8.2f} "
             f"{contrast(t['ink'][2], bg):10.2f} {contrast(t['ink'][3], bg):8.2f}"
         )
-        print(row + "".join(f"{contrast(h, bg):10.2f}" for h in t["hue"][1:]))
+    print()
+    print("per-section colours, as drawn (a dash is the plain secondary):")
+    print(
+        f"  {'theme':22} {'IDENTITY':>9} {'ADDRESS':>9} {'bar ok':>8} {'bar weak':>9}"
+    )
+    for name, t in themes.items():
+        bg = t["ink"][0]
+        plain = t["ink"][2]
+
+        def text(idx):
+            c = t["hue"][idx][0]
+            return "-" if c == plain else f"{contrast(c, bg):.2f}"
+
+        print(
+            f"  {name:22} {text(H['IDENTITY']):>9} {text(H['ADDRESS']):>9} "
+            f"{contrast(t['hue'][H['LINK']][1], bg):8.2f} "
+            f"{contrast(t['hue'][H['LINK_WEAK']][1], bg):9.2f}"
+        )
     print("\n(WCAG ratios on the RGB565-quantised colours — what the panel shows.)")
 
 
