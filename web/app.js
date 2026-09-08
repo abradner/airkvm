@@ -78,10 +78,35 @@ const el = {
   releaseAll: document.getElementById("release-all"),
   wakeTarget: document.getElementById("wake-target"),
   target: document.getElementById("target-state"),
+  mode: document.getElementById("mode"),
 };
+
+// --- input mode -------------------------------------------------------------
+//
+// One mode per page load, chosen here and never changed. `direct` is pointer
+// lock plus KeyboardEvent.code — the path verified on hardware. `soft` is a
+// touch surface plus characters through CHAR_MAP (docs/design/mobile-console.md).
+// The inactive mode's listeners are never registered, so the two cannot both
+// forward the same keystroke; that exclusion is structural, not a flag.
+//
+// Feature detection first: iOS and iPadOS Safari have no Pointer Lock at all,
+// so `direct` could never capture there. The coarse-pointer clause catches
+// Android Chrome, which exposes requestPointerLock on a touchscreen. A
+// touchscreen laptop with a mouse primary stays `direct`. `?mode=` overrides
+// for testing either UI on the other kind of device.
+const MODE = (() => {
+  const forced = new URLSearchParams(location.search).get("mode");
+  if (forced === "direct" || forced === "soft") return forced;
+  const hasLock = "requestPointerLock" in Element.prototype;
+  const coarse = matchMedia("(pointer: coarse)").matches;
+  return hasLock && !coarse ? "direct" : "soft";
+})();
+document.body.classList.toggle("soft", MODE === "soft");
+el.mode.textContent = MODE === "soft" ? "touch" : "pointer lock";
 
 let socket = null;
 let reconnectDelay = 500;
+let reconnectTimer = null;
 
 function setStatus(text, kind) {
   el.status.textContent = text;
@@ -139,7 +164,7 @@ function connect() {
     stopPinging();
     exitCapture();
     socket = null;
-    setTimeout(connect, reconnectDelay);
+    reconnectTimer = setTimeout(connect, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 10000);
   };
 
@@ -214,16 +239,6 @@ function exitCapture() {
   }
 }
 
-document.addEventListener("pointerlockchange", () => {
-  captured = document.pointerLockElement === el.stage;
-  el.overlay.hidden = captured;
-  if (!captured) sendReleaseAll();
-});
-
-el.stage.addEventListener("click", () => {
-  if (!captured) enterCapture();
-});
-
 // Leaving the tab with keys held would leave them held on the target, because
 // the browser stops delivering keyup once the page is hidden.
 document.addEventListener("visibilitychange", () => {
@@ -231,28 +246,6 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("blur", exitCapture);
 window.addEventListener("pagehide", sendReleaseAll);
-
-document.addEventListener("keydown", (e) => {
-  if (!captured) return;
-  e.preventDefault();
-  // Esc is the release gesture and is not forwarded; the sidebar button sends it
-  // to the target when that is what you actually want.
-  if (e.code === "Escape") {
-    exitCapture();
-    return;
-  }
-  // `code` is the physical key position, which is what HID usage codes mean —
-  // `key` would be layout- and shift-dependent and send the wrong key.
-  sendKey(FRAME.KEY_DOWN, e.code);
-});
-
-document.addEventListener("keyup", (e) => {
-  if (!captured) return;
-  e.preventDefault();
-  sendKey(FRAME.KEY_UP, e.code);
-});
-
-// --- mouse -----------------------------------------------------------------
 
 // Motion is accumulated and flushed once per animation frame rather than sent
 // per event. Un-coalesced, a fast flick fills the dongle's HID queue, and a full
@@ -292,43 +285,80 @@ function flushMotion() {
   }
 }
 
-document.addEventListener("mousemove", (e) => {
-  if (!captured) return;
-  const scale = parseFloat(el.sensitivity.value);
-  pendingDx += e.movementX * scale;
-  pendingDy += e.movementY * scale;
-  if (!flushScheduled) {
-    flushScheduled = true;
-    requestAnimationFrame(flushMotion);
-  }
-});
+// Everything below registers only in direct mode (see MODE). Nothing here is
+// reachable on a device without Pointer Lock, and in soft mode the same
+// gestures arrive from the touch surface instead.
+function installDirectInput() {
+  document.addEventListener("pointerlockchange", () => {
+    captured = document.pointerLockElement === el.stage;
+    el.overlay.hidden = captured;
+    if (!captured) sendReleaseAll();
+  });
 
-// Buttons go as an absolute mask, so a dropped frame self-corrects instead of
-// leaving a button held (protocol.h).
-function sendButtons(e) {
-  if (!captured) return;
-  e.preventDefault();
-  const mask =
-    (e.buttons & 1 ? 1 : 0) | (e.buttons & 2 ? 2 : 0) | (e.buttons & 4 ? 4 : 0);
-  send([FRAME.MOUSE_BUTTON, mask]);
-}
-document.addEventListener("mousedown", sendButtons);
-document.addEventListener("mouseup", sendButtons);
-document.addEventListener("contextmenu", (e) => {
-  if (captured) e.preventDefault();
-});
+  el.stage.addEventListener("click", () => {
+    if (!captured) enterCapture();
+  });
 
-document.addEventListener(
-  "wheel",
-  (e) => {
+  document.addEventListener("keydown", (e) => {
     if (!captured) return;
     e.preventDefault();
-    const v = Math.max(-127, Math.min(127, -Math.sign(e.deltaY)));
-    const h = Math.max(-127, Math.min(127, Math.sign(e.deltaX)));
-    send([FRAME.MOUSE_SCROLL, v & 0xff, h & 0xff]);
-  },
-  { passive: false },
-);
+    // Esc is the release gesture and is not forwarded; the sidebar button sends it
+    // to the target when that is what you actually want.
+    if (e.code === "Escape") {
+      exitCapture();
+      return;
+    }
+    // `code` is the physical key position, which is what HID usage codes mean —
+    // `key` would be layout- and shift-dependent and send the wrong key.
+    sendKey(FRAME.KEY_DOWN, e.code);
+  });
+
+  document.addEventListener("keyup", (e) => {
+    if (!captured) return;
+    e.preventDefault();
+    sendKey(FRAME.KEY_UP, e.code);
+  });
+
+  // --- mouse -----------------------------------------------------------------
+
+  document.addEventListener("mousemove", (e) => {
+    if (!captured) return;
+    const scale = parseFloat(el.sensitivity.value);
+    pendingDx += e.movementX * scale;
+    pendingDy += e.movementY * scale;
+    if (!flushScheduled) {
+      flushScheduled = true;
+      requestAnimationFrame(flushMotion);
+    }
+  });
+
+  // Buttons go as an absolute mask, so a dropped frame self-corrects instead of
+  // leaving a button held (protocol.h).
+  function sendButtons(e) {
+    if (!captured) return;
+    e.preventDefault();
+    const mask =
+      (e.buttons & 1 ? 1 : 0) | (e.buttons & 2 ? 2 : 0) | (e.buttons & 4 ? 4 : 0);
+    send([FRAME.MOUSE_BUTTON, mask]);
+  }
+  document.addEventListener("mousedown", sendButtons);
+  document.addEventListener("mouseup", sendButtons);
+  document.addEventListener("contextmenu", (e) => {
+    if (captured) e.preventDefault();
+  });
+
+  document.addEventListener(
+    "wheel",
+    (e) => {
+      if (!captured) return;
+      e.preventDefault();
+      const v = Math.max(-127, Math.min(127, -Math.sign(e.deltaY)));
+      const h = Math.max(-127, Math.min(127, Math.sign(e.deltaX)));
+      send([FRAME.MOUSE_SCROLL, v & 0xff, h & 0xff]);
+    },
+    { passive: false },
+  );
+}
 
 // --- sidebar ---------------------------------------------------------------
 
@@ -392,27 +422,50 @@ const CHAR_MAP = (() => {
   return map;
 })();
 
-el.sendText.addEventListener("click", async () => {
-  const text = el.pasteText.value;
-  // The shifted characters above assume a US layout on the *target*: the target
-  // decides what a physical key position produces. Non-US targets will get the
-  // wrong punctuation, which is a known limitation, not a bug to fix here.
+// Press one physical key, wrapped in Shift when asked. This is the one place
+// a character becomes keystrokes, for the paste box and the soft keyboard
+// alike; the wire sees exactly what the paste box always sent.
+function pressKey(code, shift) {
+  if (shift) sendKey(FRAME.KEY_DOWN, "ShiftLeft");
+  sendKey(FRAME.KEY_DOWN, code);
+  sendKey(FRAME.KEY_UP, code);
+  if (shift) sendKey(FRAME.KEY_UP, "ShiftLeft");
+}
+
+// One character through CHAR_MAP. Unmapped is reported, never dropped.
+function typeChar(ch) {
+  const m = CHAR_MAP.get(ch);
+  if (!m) {
+    setStatus(`can't type: ${JSON.stringify(ch)}`, "bad");
+    return false;
+  }
+  pressKey(m.code, m.shift);
+  return true;
+}
+
+// The shifted characters above assume a US layout on the *target*: the target
+// decides what a physical key position produces. Non-US targets will get the
+// wrong punctuation, which is a known limitation, not a bug to fix here.
+async function typeString(text) {
   const unsupported = [...new Set([...text].filter((c) => !CHAR_MAP.has(c)))];
   if (unsupported.length) {
     setStatus(`can't type: ${unsupported.join(" ")}`, "bad");
-    return;
+    return false;
   }
   for (const ch of text) {
-    const { code, shift } = CHAR_MAP.get(ch);
-    if (shift) sendKey(FRAME.KEY_DOWN, "ShiftLeft");
-    sendKey(FRAME.KEY_DOWN, code);
-    sendKey(FRAME.KEY_UP, code);
-    if (shift) sendKey(FRAME.KEY_UP, "ShiftLeft");
+    typeChar(ch);
     // Targets drop keystrokes that arrive faster than they poll; this is a guess
     // at a safe rate and wants measuring on real hardware.
     await new Promise((r) => setTimeout(r, 8));
   }
-  setStatus(`sent ${text.length} characters`, "ok");
+  return true;
+}
+
+el.sendText.addEventListener("click", async () => {
+  const text = el.pasteText.value;
+  if (await typeString(text)) {
+    setStatus(`sent ${text.length} characters`, "ok");
+  }
 });
 
 // --- local capture video ----------------------------------------------------
@@ -460,6 +513,16 @@ if (!navigator.mediaDevices) {
   listCameras().catch(() => {});
 }
 
+// --- soft input: touch trackpad and soft keyboard --------------------------
+//
+// Registered only in soft mode (see MODE). Filled in below.
+function installSoftInput() {}
+
+if (MODE === "direct") {
+  installDirectInput();
+} else {
+  installSoftInput();
+}
 connect();
 
 // --- disk image over /ws-media --------------------------------------------
