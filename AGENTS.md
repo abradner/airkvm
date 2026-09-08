@@ -394,6 +394,18 @@ add rather than rewrite.
   USB-Serial/JTAG mode, esptool's `--before default_reset` enters the bootloader on its own —
   the manual BOOT+RESET in the first bullet above is only needed from HID mode, where there is
   no serial control channel to send it through.
+- **`cmd | tail && destructive` does not guard anything — a pipeline's exit status is the *last*
+  command's.** `git commit ... | tail -2 && git reset --hard HEAD~1` runs the reset
+  unconditionally, because `tail` succeeded even though the commit did not. That ate a finished,
+  tested commit; the reflog got it back, but only because it had been committed. This is the
+  second time in one session a git command destroyed work here — the first was `git checkout --`
+  to undo a probe, which took uncommitted changes with it. Both share a shape worth naming:
+  **the cleanup half of a throwaway probe is where the damage lives, not the probe itself.**
+  Three habits, in order of how much they buy: never put a destructive git command downstream of
+  `&&` in a pipeline (use `if cmd; then` or check `${PIPESTATUS[0]}`); prefer `git reset --hard
+  <explicit-sha>` over a relative `HEAD~1`, so a mis-fire lands somewhere known; and probe on a
+  *copy* rather than on the working tree. `git reflog` recovers commits and nothing else, so the
+  one rule that always pays is to commit before probing.
 
 ## 7. CI & Deployment
 
