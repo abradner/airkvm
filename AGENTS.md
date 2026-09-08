@@ -394,18 +394,26 @@ add rather than rewrite.
   USB-Serial/JTAG mode, esptool's `--before default_reset` enters the bootloader on its own —
   the manual BOOT+RESET in the first bullet above is only needed from HID mode, where there is
   no serial control channel to send it through.
-- **`cmd | tail && destructive` does not guard anything — a pipeline's exit status is the *last*
-  command's.** `git commit ... | tail -2 && git reset --hard HEAD~1` runs the reset
-  unconditionally, because `tail` succeeded even though the commit did not. That ate a finished,
-  tested commit; the reflog got it back, but only because it had been committed. This is the
-  second time in one session a git command destroyed work here — the first was `git checkout --`
-  to undo a probe, which took uncommitted changes with it. Both share a shape worth naming:
-  **the cleanup half of a throwaway probe is where the damage lives, not the probe itself.**
-  Three habits, in order of how much they buy: never put a destructive git command downstream of
-  `&&` in a pipeline (use `if cmd; then` or check `${PIPESTATUS[0]}`); prefer `git reset --hard
-  <explicit-sha>` over a relative `HEAD~1`, so a mis-fire lands somewhere known; and probe on a
-  *copy* rather than on the working tree. `git reflog` recovers commits and nothing else, so the
-  one rule that always pays is to commit before probing.
+- **A shell guard binds to the command immediately before it, which is often not the command you
+  meant to test.** Two sessions hit this within hours of each other, in two different shapes, so
+  it is a shape rather than a typo:
+  - *Pipeline* — `git commit ... | tail -2 && git reset --hard HEAD~1`. A pipeline's exit status
+    is the **last stage's**, so `tail` succeeding ran the reset even though the commit had
+    failed. That ate a finished, tested commit; `reflog` got it back, but only because it had
+    been committed.
+  - *Sequence* — `git commit ... ; git log && git push`. The `&&` tests `git log`, not the
+    commit. Observed while 1Password was locked: the commit failed, the push ran, and it was
+    harmless **only** because there was nothing to push. With a commit that had landed it would
+    have published something unverified.
+
+  Note the second one is not a pipeline at all, which is why "check `${PIPESTATUS[0]}`" is too
+  narrow a fix. What both need is for the guard to name the command it guards: `if git commit
+  ...; then`. Two more habits worth the keystrokes: prefer `git reset --hard <explicit-sha>` over
+  a relative `HEAD~1`, so a mis-fire lands somewhere known; and probe on a *copy* rather than the
+  working tree — the first instance of this in the same session was `git checkout --` to undo a
+  probe, which took uncommitted changes with it. **The cleanup half of a throwaway probe is where
+  the damage lives, not the probe itself.** `git reflog` recovers commits and nothing else, so
+  the one rule that always pays is to commit before probing.
 
 ## 7. CI & Deployment
 
