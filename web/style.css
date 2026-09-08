@@ -257,13 +257,14 @@ body.soft #release {
   background: none;
 }
 
+/* A grid, not a scrolling row: the page cancels every touchmove outside the
+   "More" sheet (app.js), which also kills horizontal panning, so a row that
+   overflowed would hide its tail with no way to reach it. */
 body.soft #macros {
   order: 2;
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr));
   gap: 0.4rem;
-  overflow-x: auto;
-  touch-action: pan-x;
-  -webkit-overflow-scrolling: touch;
 }
 
 body.soft #macros h2 {
@@ -273,7 +274,7 @@ body.soft #macros h2 {
 body.soft .touchpad {
   order: 3;
   flex: 1 1 0;
-  min-height: 120px;
+  min-height: 100px;
   align-items: flex-end;
   justify-content: center;
   border: 1px dashed var(--line);
@@ -318,7 +319,8 @@ body.soft .cluster {
   gap: 0.4rem;
 }
 
-body.soft .cluster button {
+body.soft .cluster button,
+body.soft #macros button {
   width: auto;
   min-width: 0;
   padding-left: 0.2rem;
@@ -359,6 +361,17 @@ body.soft .fkeys {
   grid-template-columns: repeat(6, 1fr);
 }
 
+/* A latched modifier is a claim about what the dongle holds, drawn as one. */
+body.soft button.latched {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+body.soft button.locked {
+  background: var(--ok);
+  color: var(--bg);
+}
+
 body.soft .softbar {
   order: 5;
   position: relative;
@@ -396,9 +409,50 @@ body.soft .softbar .note {
   line-height: 1.3;
 }
 
+/* "More" is folded by default. Open, it takes the place of the trackpad, key
+   rows and keyboard bar in the column and scrolls inside that space, so the
+   header, connection state, Release-all and macros stay in flow above it —
+   the status line is also where the sheet's own buttons report. Nothing is
+   measured or absolutely positioned: the body is fixed to the visual viewport
+   (so the soft keyboard pushes the trackpad up instead of covering it), and on
+   iOS a fixed, transformed body does not scroll — page scrolling was tried
+   first and handed every drag to Safari's pull-to-refresh (2026-09-08). */
 body.soft .more {
   order: 6;
   gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+body.soft .more[open] {
+  order: 3;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+
+body.soft:has(.more[open]) .touchpad,
+body.soft:has(.more[open]) .keyrows,
+body.soft:has(.more[open]) .softbar {
+  display: none;
+}
+
+body.soft .more[open] > summary {
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  z-index: 1;
+}
+
+/* Everything but the trackpad and "More" keeps its natural height. */
+body.soft header,
+body.soft #release,
+body.soft #macros,
+body.soft .keyrows,
+body.soft .softbar {
+  flex-shrink: 0;
 }
 
 body.soft .more > summary {
@@ -429,10 +483,19 @@ body.soft select {
   touch-action: manipulation;
 }
 
-body.soft .keyrows,
-body.soft #macros {
+/* Whole-page, not per button: on the phone the handles still appeared with
+   the rule on the buttons alone (2026-09-08). Only the two text boxes may
+   select. */
+body.soft,
+body.soft * {
   -webkit-user-select: none;
   user-select: none;
+  -webkit-touch-callout: none;
+}
+
+body.soft textarea {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 body.soft #release-all,
