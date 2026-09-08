@@ -68,6 +68,19 @@ static void ipv6_literals_keep_their_address(void) {
   // Unterminated bracket is malformed: refuse rather than emit a URL whose
   // authority section never closes.
   CHECK(!build("[fe80::1", "/"));
+  // Trailing junk after the bracket is the same class and was accepted until
+  // the grammar was enforced — it emitted https://[fe80::1]junk/, an authority
+  // no client can parse, out of nothing but legal characters.
+  CHECK(!build("[fe80::1]junk", "/"));
+  CHECK(!build("[fe80::1]:bad", "/"));
+  CHECK(!build("[fe80::1]:", "/"));
+  CHECK(!build("[]", "/"));
+  CHECK(!build("]", "/"));
+  CHECK(!build("[[fe80::1]", "/"));
+  // A real port still works, so this is grammar enforcement and not a blanket
+  // refusal of anything containing a colon.
+  CHECK(build("[fe80::1]:8443", "/"));
+  CHECK_EQ_STR(g_out, "https://[fe80::1]/");
 }
 
 // The one that matters. A Host containing CR or LF would end the Location
@@ -104,6 +117,13 @@ static void header_injection_is_refused(void) {
   CHECK(!build("safe.example:bad suffix", "/"));
   CHECK(!build("safe.example:\r\nX: y", "/"));
   CHECK(!build("safe.example:80junk\n", "/"));
+  // ...and a suffix made ONLY of allowlisted characters, which the charset
+  // check can never catch. Every case above contains a space or a newline, so
+  // they all passed while the grammar was still unenforced.
+  CHECK(!build("safe.example:bad", "/"));
+  CHECK(!build("safe.example:", "/"));
+  CHECK(!build("safe.example:80x", "/"));
+  CHECK(!build("a:b:c", "/"));
   // ...and a well-formed port still passes, so the check is not just refusing
   // everything with a colon in it.
   CHECK(build("safe.example:8443", "/"));
