@@ -46,6 +46,9 @@ struct status_snapshot {
   char setup_ssid[STATUS_SETUP_SSID_LEN];
   char setup_psk[STATUS_SETUP_PSK_LEN];
   char setup_ip[STATUS_IP_LEN];
+  // The USB network link's address (main/usb_net.c), empty when that link
+  // did not come up or the board has no USB device controller.
+  char setup_usb_ip[STATUS_IP_LEN];
   uint16_t setup_remaining_s;
 
   uint32_t events;           // input events since boot
@@ -64,6 +67,7 @@ void status_set_wifi(bool connected, const char *ip, const char *ssid);
 void status_set_no_credentials(void);
 void status_set_setup(const char *ssid, const char *psk, const char *ip);
 void status_set_setup_remaining(uint16_t seconds);
+void status_set_setup_usb_ip(const char *ip);
 void status_set_rssi(int8_t rssi);
 void status_set_client(bool connected);
 void status_set_usb_mounted(bool mounted);

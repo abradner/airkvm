@@ -20,6 +20,9 @@
 #include "lwip/inet.h"
 #include "provision.h"
 #include "status.h"
+#if CONFIG_TINYUSB_NET_MODE_NCM
+#include "usb_net.h"
+#endif
 #include "wifi.h"
 
 static const char *TAG = "setup";
@@ -232,6 +235,22 @@ static esp_err_t start_ap(char *ssid, char *psk) {
     ESP_LOGW(TAG, "captive-portal DHCP option not set (%s)",
              esp_err_to_name(opt));
   }
+  // The DNS option names this address — explicitly. It used to arrive by
+  // accident: with CONFIG_LWIP_DHCPS_ADD_DNS the server offered itself
+  // whenever the flag was off, which is off in sdkconfig.defaults now
+  // because the USB link must offer nothing (usb_net.h). Not best effort:
+  // the captive pop-up on a phone depends on this, and a silent miss would
+  // present as "the portal works if you type the address", which is
+  // exactly the report nobody files.
+  esp_netif_dns_info_t dns = {.ip = {.type = ESP_IPADDR_TYPE_V4}};
+  dns.ip.u_addr.ip4 = ip_info.ip;
+  ESP_RETURN_ON_ERROR(esp_netif_set_dns_info(s_ap, ESP_NETIF_DNS_MAIN, &dns),
+                      TAG, "ap dns address");
+  uint8_t on = 1;
+  ESP_RETURN_ON_ERROR(
+      esp_netif_dhcps_option(s_ap, ESP_NETIF_OP_SET,
+                             ESP_NETIF_DOMAIN_NAME_SERVER, &on, sizeof(on)),
+      TAG, "ap dns option");
   (void)esp_netif_dhcps_start(s_ap);
 
   BaseType_t ok = xTaskCreate(dns_task, "captive_dns", 3072,
@@ -259,13 +278,28 @@ void setup_mode_run(void) {
   }
 
   status_set_setup(ssid, psk, s_ip);
-  // The passphrase goes to the panel and nowhere else. This mode starts no
-  // TinyUSB, so the S3 enumerates on whatever it is plugged into as a
-  // USB-Serial/JTAG console carrying this log — a channel the panel-only
-  // claim would be false through.
+  // The passphrase goes to the panel and nowhere else. On a board without a
+  // USB device controller (the C3 bench) this mode starts no TinyUSB, so
+  // the dongle enumerates on whatever it is plugged into as a USB-Serial/
+  // JTAG console carrying this log — a channel the panel-only claim would be
+  // false through. On the S3 the NCM device below takes the port instead,
+  // and the rule holds for both.
   ESP_LOGI(TAG,
            "join WiFi \"%s\" (passphrase on the panel), then open http://%s/",
            ssid, s_ip);
+
+#if CONFIG_TINYUSB_NET_MODE_NCM
+  // After esp_wifi_start() (gotcha 10: the radio owns the BBPLL first).
+  // Best effort: the softAP is the primary path and works without this.
+  const esp_err_t usb = usb_net_start();
+  if (usb == ESP_OK) {
+    status_set_setup_usb_ip(USB_NET_IP_STR);
+    ESP_LOGI(TAG, "or over USB: http://%s/", USB_NET_IP_STR);
+  } else {
+    ESP_LOGW(TAG, "USB network device not started (%s); softAP only",
+             esp_err_to_name(usb));
+  }
+#endif
 
   for (int remaining = SETUP_TIMEOUT_S; remaining > 0; remaining--) {
     status_set_setup_remaining((uint16_t)remaining);

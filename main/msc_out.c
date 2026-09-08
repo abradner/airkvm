@@ -318,6 +318,15 @@ esp_err_t msc_out_start(void) {
 }
 
 void msc_out_bus_reset(void) {
+  // TinyUSB's mount/unmount callbacks live in hid_out_usb.c and are linked
+  // into every S3 image — including one whose running mode never called
+  // msc_out_start(). Setup mode is that image: it installs an NCM-only
+  // descriptor (usb_net.c) and the first SET_CONFIGURATION lands here with
+  // no lock to take, which FreeRTOS answers with an assert and a reboot
+  // that also consumes the setup flag. Not started means nothing to reset.
+  if (s_lock == NULL) {
+    return;
+  }
   LOCK();
   s_xfer_id++;
   UNLOCK();

@@ -4,11 +4,15 @@
 // While in it the dongle is a WiFi access point named airkvm-XXXX with an
 // 8-digit passphrase shown on the panel, serving one plain-HTTP page that
 // writes the credentials through esp_wifi_set_config() — the same NVS store
-// wifi.c reads first on a normal boot — and restarts. Nothing else runs: no
-// HID, no mass storage, no web console, no mDNS, no TinyUSB — which means the
-// USB-Serial/JTAG log console IS present on whatever the dongle is plugged
-// into, so the log must never carry the passphrase. It ends on save, on a
-// second 5 s hold, or after five minutes.
+// wifi.c reads first on a normal boot — and restarts. On the S3 the same
+// page is also reachable over USB: the dongle enumerates as a USB Ethernet
+// adapter on a private link (usb_net.h), so the machine it is plugged into
+// can browse to it without joining the AP. Nothing else runs: no HID, no
+// mass storage, no web console, no mDNS. On a board with no USB device
+// controller there is no TinyUSB either, and the USB-Serial/JTAG log console
+// IS present on whatever the dongle is plugged into — so the log must never
+// carry the passphrase, on any board. It ends on save, on a second 5 s hold,
+// or after five minutes.
 //
 // Boundary (docs/repo-map.md, R-009): anyone within WiFi range who can read
 // the panel can re-point the dongle at a network of their choosing, for five

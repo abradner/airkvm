@@ -30,6 +30,20 @@ CONFIG_TINYUSB_MSC_ENABLED=y
 # callbacks per 4 KB; this is one static DRAM buffer of this size. Tune after
 # measuring (principle 6), not before.
 CONFIG_TINYUSB_MSC_BUFSIZE=4096
+# Setup mode's USB network device (main/usb_net.c): a CDC-NCM function on an
+# NCM-only descriptor, never beside HID+MSC (the S3 has four IN endpoints).
+# The class driver's NTB buffers are static and therefore paid for in every
+# image, setup mode or not: one each way at Linux's 2048-byte minimum is
+# 4 KB, against ~19 KB at esp_tinyusb's 3/3 × 3200 defaults, on a part
+# whose free heap is the media cache's budget. Setup mode moves one form
+# post; throughput is not a goal there. NET_MODE is an EXISTING choice
+# symbol in any generated sdkconfig from before (AGENTS.md §6.1): edit it,
+# then confirm CONFIG_TINYUSB_NET_MODE_NCM in build/config/sdkconfig.h.
+CONFIG_TINYUSB_NET_MODE_NCM=y
+CONFIG_TINYUSB_NCM_OUT_NTB_BUFFS_COUNT=1
+CONFIG_TINYUSB_NCM_IN_NTB_BUFFS_COUNT=1
+CONFIG_TINYUSB_NCM_OUT_NTB_BUFF_MAX_SIZE=2048
+CONFIG_TINYUSB_NCM_IN_NTB_BUFF_MAX_SIZE=2048
 
 # The console holds one long-lived WebSocket plus three short static requests,
 # and the media server (main/media_ws.c) is a second httpd instance with two
@@ -40,6 +54,17 @@ CONFIG_TINYUSB_MSC_BUFSIZE=4096
 # build/config/sdkconfig.h, or the failure is a runtime accept()/socket()
 # ENFILE on whichever of TLS accept and mDNS loses.
 CONFIG_LWIP_MAX_SOCKETS=16
+# IDF's DHCP server puts ITS OWN address into the DNS option of every offer
+# whenever a netif's DNS flag is off — the "off" branch is where the default
+# goes in, not where nothing goes in (dhcpserver.c, add_offer_options). With
+# it on, setup mode's USB link (main/usb_net.c) would hand the plugged-in
+# machine a resolver that answers nothing, which is "resolver touched" in
+# R-009's terms and the opposite of what that link promises. Off, the DNS
+# option means what the flag says; the softAP link then names its captive
+# resolver explicitly (main/setup_mode.c). EXISTING symbol (AGENTS.md §6.1):
+# edit every generated sdkconfig by hand and confirm the header has no
+# CONFIG_LWIP_DHCPS_ADD_DNS line; CI checks that.
+CONFIG_LWIP_DHCPS_ADD_DNS=n
 CONFIG_HTTPD_WS_SUPPORT=y
 # IDF's default, pinned because main/media_proto.h sizes a media piece to fit
 # one inbound record payload (MEDIA_DATA_MAX). If this changes, that must too.

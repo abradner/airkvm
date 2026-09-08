@@ -302,6 +302,13 @@ static void draw_setup(const struct status_snapshot *s) {
   display_text(UI_X_COL, 2, line);
   display_set_ink(DISPLAY_INK_SECONDARY);
   display_text(UI_X_COL, 3, s->setup_ip);
+  if (s->setup_usb_ip[0] != '\0') {
+    // %.14s: STATUS_IP_LEN is 16, and "USB " plus a 15-character address
+    // would overrun the OLED's 18 columns; the only address this ever shows
+    // is 192.168.7.1, and the precision is what tells -Wformat-truncation.
+    snprintf(line, sizeof(line), "USB %.14s", s->setup_usb_ip);
+    display_text(UI_X_COL, 4, line);
+  }
   display_text(UI_X_COL, 5, "HOLD 5S: EXIT");
   display_flush();
 }

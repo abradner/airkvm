@@ -65,6 +65,12 @@ void status_set_setup(const char *ssid, const char *psk, const char *ip) {
   UNLOCK();
 }
 
+void status_set_setup_usb_ip(const char *ip) {
+  LOCK();
+  strlcpy(s_state.setup_usb_ip, ip, sizeof(s_state.setup_usb_ip));
+  UNLOCK();
+}
+
 void status_set_setup_remaining(uint16_t seconds) {
   LOCK();
   s_state.setup_remaining_s = seconds;
