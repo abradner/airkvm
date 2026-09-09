@@ -76,6 +76,31 @@ void display_set_ink(enum display_ink ink);
 //     there.
 void display_set_hue(enum display_hue hue);
 
+// Switches the panel to a theme, at runtime, from any task. A no-op on a
+// panel with no palette, like the two setters above.
+//
+// Applied at the next flush rather than immediately, and that is not laziness:
+// the palette and the dirty-band shadow are ui_task's, and display.h's own
+// single-task rule holds for them. A palette rewritten from the HTTP task
+// mid-flush would paint one mixed frame — tolerable — but a repaint flag set
+// from there could be cleared by the flush already in progress, leaving every
+// unchanged band in the OLD colours with nothing to disturb them. That is the
+// stale-patch failure the dirty check exists to prevent, arriving by a route
+// it cannot see: page_crc() hashes pixels and hue, not the palette. So the
+// request is parked and ui_task consumes it at the top of its own flush,
+// where it can both reload the palette and force the full repaint atomically.
+struct display_theme;
+void display_set_theme(const struct display_theme *theme);
+
+// Panel brightness, percent, from any task; parked and applied at the next
+// flush for the same reason as the theme. What "brightness" drives is the
+// board's business — a PWM backlight on the LCD, the contrast register on the
+// OLED — and 100 is what each board shipped at, so the default is
+// byte-identical to the panel before this existed. The floor is not enforced
+// here: settings_schema.h refuses anything below SETTINGS_SCREEN_MIN on the
+// wire and defaults it from flash, and ui.c forces 100 in setup mode (R-009).
+void display_set_brightness(int percent);
+
 esp_err_t display_init(void);
 
 // True when init succeeded. Every draw call is a no-op otherwise, so a board

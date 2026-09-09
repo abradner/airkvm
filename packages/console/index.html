@@ -16,6 +16,9 @@
         connecting…
       </div>
       <span id="mode" class="status" title="Input mode for this page load"></span>
+      <button id="settings-open" type="button" class="icon" aria-label="Settings" title="Settings">
+        &#9881;
+      </button>
     </header>
 
     <main>
@@ -158,7 +161,7 @@
           />
         </section>
 
-        <section class="desktop-only">
+        <section id="disk" class="desktop-only">
           <h2>Disk image</h2>
           <!-- The image stays in this browser: the dongle asks for 16 KB
                chunks over a second socket as the target reads them, and the
@@ -188,6 +191,52 @@
         </section>
       </aside>
     </main>
+
+    <!-- The settings panel: the device describes itself (GET /settings) and
+         this renders what it is told, so both boards get the controls they
+         actually have from one page. Three scopes, labelled rather than
+         blurred: device (stored on the dongle), browser (localStorage), and
+         session (fixed for this page load). Opening it releases capture in
+         both input modes first — see openSettings() in app.js for why that
+         is a safety rule and not tidiness. -->
+    <dialog id="settings" class="settings" aria-labelledby="settings-title">
+      <form method="dialog" class="settings-head">
+        <h2 id="settings-title">Settings</h2>
+        <button type="submit" aria-label="Close">&#10005;</button>
+      </form>
+      <div id="settings-status" class="status" role="status" aria-live="polite"></div>
+      <section>
+        <h2>This device</h2>
+        <dl id="device-details" class="details"></dl>
+      </section>
+      <section>
+        <h2>Device settings</h2>
+        <p class="scope-note">Stored on the dongle. Every browser that connects sees them.</p>
+        <div id="device-settings" class="fields"></div>
+      </section>
+      <section>
+        <h2>This browser</h2>
+        <p class="scope-note">Kept in this browser only.</p>
+        <div class="fields">
+          <label for="settings-sensitivity">
+            Mouse sensitivity <output id="settings-sensitivity-out"></output>
+          </label>
+          <input id="settings-sensitivity" type="range" min="0.2" max="3" step="0.1" value="1" />
+        </div>
+      </section>
+      <section>
+        <h2>This session</h2>
+        <p class="scope-note">Fixed for this page load.</p>
+        <dl class="details">
+          <dt>Input mode</dt>
+          <dd id="settings-mode"></dd>
+        </dl>
+        <p class="scope-note">
+          Reload as <a id="settings-mode-direct" href="?mode=direct">pointer lock</a> or
+          <a id="settings-mode-soft" href="?mode=soft">touch</a>.
+        </p>
+      </section>
+    </dialog>
 
     <script src="/app.js"></script>
   </body>

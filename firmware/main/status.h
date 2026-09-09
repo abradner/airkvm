@@ -113,13 +113,27 @@ void status_note_activity(void);
 // clock, but cheap to be right about) reads as "not expired" rather than
 // "expired long ago".
 static inline bool status_debug_is_expired(int64_t enabled_at_us,
-                                           int64_t now_us) {
-  return (now_us - enabled_at_us) >= (int64_t)STATUS_DEBUG_TIMEOUT_MS * 1000;
+                                           int64_t now_us,
+                                           uint32_t timeout_ms) {
+  return (now_us - enabled_at_us) >= (int64_t)timeout_ms * 1000;
 }
 
+// The timeout is settable from the console (settings.c, R-010) — and only
+// downward. STATUS_DEBUG_TIMEOUT_MS is the ceiling as well as the default:
+// a network caller may shorten how long keystrokes stay on screen and never
+// lengthen it, or they could pre-set the maximum and wait for a press. This
+// clamp is the ENFORCEMENT, applied by the one owner of the value; the
+// settings schema refusing a larger number on the wire is politeness that
+// could be deleted without making a longer window possible (AGENTS.md §8).
+// Pure and host-tested for the same reason the predicate above is.
+static inline uint32_t status_debug_timeout_clamp(uint32_t ms) {
+  return ms > STATUS_DEBUG_TIMEOUT_MS ? STATUS_DEBUG_TIMEOUT_MS : ms;
+}
+void status_set_debug_timeout_ms(uint32_t ms);
+
 // Physical-presence gate: toggled by the on-board button, never over the
-// network (docs/repo-map.md, R-006). Also turns itself off after
-// STATUS_DEBUG_TIMEOUT_MS.
+// network (docs/repo-map.md, R-006). Also turns itself off after the debug
+// timeout — at most STATUS_DEBUG_TIMEOUT_MS, see above.
 bool status_toggle_debug(void);
 bool status_debug_enabled(void);
 

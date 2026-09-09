@@ -33,11 +33,13 @@
 #include "board.h"
 #include "canvas.h"
 #include "display.h"
+#include "esp_check.h"
 #include "esp_log.h"
 
 #if BOARD_HAS_DISPLAY
 
 #include "driver/gpio.h"
+#include "driver/ledc.h"
 #include "driver/spi_master.h"
 #include "esp_heap_caps.h"
 #include "esp_lcd_io_spi.h"
@@ -219,6 +221,12 @@ static uint32_t page_crc(const uint8_t *lo, const uint8_t *hi, int n,
 }
 static bool s_never_flushed = true;
 
+// A theme change parked by display_set_theme() until ui_task's next flush.
+// A pointer into display_themes[], which is const and static, so the value is
+// valid for as long as the image is; volatile because it is written from the
+// HTTP task and read here.
+static const struct display_theme *volatile s_pending_theme;
+
 static uint16_t *s_band;  // BAND_PIXELS entries, DMA-capable
 
 static struct canvas s_canvas = {
@@ -240,30 +248,79 @@ static bool band_done(esp_lcd_panel_io_handle_t io,
   return woke == pdTRUE;
 }
 
+// The backlight is LEDC PWM so brightness is a setting rather than a switch.
+// Channel and timer 1, NOT 0: indicator.c claims LEDC_CHANNEL_0 for the
+// single-channel LED. That backend is not compiled on this board, so 0 would
+// work here today — and would collide the day a board has both, silently,
+// with the light and the panel fighting over one duty register. 5 kHz is
+// above anything the eye or the panel's own refresh can beat against; 10
+// bits gives 1024 steps, far more than the 19 the settings offer.
+#define BL_LEDC_MODE LEDC_LOW_SPEED_MODE
+#define BL_LEDC_TIMER LEDC_TIMER_1
+#define BL_LEDC_CHANNEL LEDC_CHANNEL_1
+#define BL_LEDC_RES LEDC_TIMER_10_BIT
+#define BL_DUTY_MAX ((1u << 10) - 1u)
+
+static bool s_bl_ready;
+// Requested brightness, and the one parked for the next flush. Two values so
+// ui_task can call display_set_brightness() every tick and only a CHANGE
+// reaches the duty register.
+static int s_brightness = 100;
+static volatile int s_pending_brightness = -1;
+
+static void backlight_apply(int percent) {
+  uint32_t duty = (BL_DUTY_MAX * (uint32_t)percent) / 100u;
+#if BOARD_LCD_BL_ON_LEVEL == 0
+  duty = BL_DUTY_MAX - duty;  // active-low: full brightness is zero duty
+#endif
+  ledc_set_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL, duty);
+  ledc_update_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL);
+}
+
 static esp_err_t backlight_init(void) {
-  const gpio_config_t bl = {
-      .pin_bit_mask = 1ULL << BOARD_LCD_BL,
-      .mode = GPIO_MODE_OUTPUT,
-      .pull_up_en = GPIO_PULLUP_DISABLE,
-      .pull_down_en = GPIO_PULLDOWN_DISABLE,
-      .intr_type = GPIO_INTR_DISABLE,
+  const ledc_timer_config_t timer = {
+      .speed_mode = BL_LEDC_MODE,
+      .timer_num = BL_LEDC_TIMER,
+      .duty_resolution = BL_LEDC_RES,
+      .freq_hz = 5000,
+      .clk_cfg = LEDC_AUTO_CLK,
   };
-  esp_err_t err = gpio_config(&bl);
-  if (err != ESP_OK) {
-    return err;
+  ESP_RETURN_ON_ERROR(ledc_timer_config(&timer), TAG, "backlight timer");
+  const ledc_channel_config_t channel = {
+      .gpio_num = BOARD_LCD_BL,
+      .speed_mode = BL_LEDC_MODE,
+      .channel = BL_LEDC_CHANNEL,
+      .timer_sel = BL_LEDC_TIMER,
+      .duty = 0,
+      .hpoint = 0,
+  };
+  ESP_RETURN_ON_ERROR(ledc_channel_config(&channel), TAG, "backlight channel");
+  s_bl_ready = true;
+  backlight_apply(s_brightness);
+  return ESP_OK;
+}
+
+void display_set_brightness(int percent) {
+  if (percent < 0) {
+    percent = 0;
   }
-  // Plain GPIO, not LEDC. A PWM fade would be nicer and is not worth claiming
-  // LEDC_CHANNEL_0, which indicator.c already names — see board.h.
-  return gpio_set_level(BOARD_LCD_BL, BOARD_LCD_BL_ON_LEVEL);
+  if (percent > 100) {
+    percent = 100;
+  }
+  if (percent == s_brightness) {
+    return;  // called every tick by ui_task; only a change is parked
+  }
+  s_brightness = percent;
+  s_pending_brightness = percent;
 }
 
 esp_err_t display_init(void) {
   // First, and unconditionally: every early return below leaves s_present
   // false so draws no-op, but a half-initialised palette would be a table of
   // zeroes, and zero is a valid colour rather than an obviously-broken one.
-  const struct display_theme *theme = &display_themes[DISPLAY_THEME_SELECTED];
+  const struct display_theme *theme = &display_themes[DISPLAY_THEME_DEFAULT];
   palette_load(theme);
-  ESP_LOGI(TAG, "theme: %s", theme->name);
+  ESP_LOGI(TAG, "theme: %s (build default)", theme->name);
 
   s_band_free = xSemaphoreCreateBinary();
   if (s_band_free == NULL) {
@@ -437,7 +494,30 @@ void display_bar(int col, int row, int width, int filled) {
   mark_bands(row * DISPLAY_CELL_H, DISPLAY_CELL_H);
 }
 
+void display_set_theme(const struct display_theme *theme) {
+  s_pending_theme = theme;
+}
+
 void display_flush(void) {
+  // A parked theme change is applied here, on this task, before the dirty
+  // check — see display_set_theme() in display.h for why it is not applied
+  // where it was requested. Forcing the full repaint is the substance: the CRC
+  // does not cover the palette, so with pixels unchanged every band would
+  // otherwise be skipped and the panel would keep its old colours.
+  const struct display_theme *pending = s_pending_theme;
+  if (pending != NULL) {
+    s_pending_theme = NULL;
+    palette_load(pending);
+    s_never_flushed = true;
+    ESP_LOGI(TAG, "theme: %s", pending->name);
+  }
+  const int brightness = s_pending_brightness;
+  if (brightness >= 0) {
+    s_pending_brightness = -1;
+    if (s_bl_ready) {
+      backlight_apply(brightness);
+    }
+  }
   if (!s_present) {
     return;
   }
@@ -515,6 +595,12 @@ void display_bar(int col, int row, int width, int filled) {
   (void)row;
   (void)width;
   (void)filled;
+}
+void display_set_theme(const struct display_theme *theme) {
+  (void)theme;
+}
+void display_set_brightness(int percent) {
+  (void)percent;
 }
 void display_flush(void) {}
 

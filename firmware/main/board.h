@@ -41,6 +41,13 @@
 #define BOARD_TALL_SX 1
 #define BOARD_TALL_SY 2
 
+// What the settings page says this board is and has (settings.c). Strings are
+// for a human; the flags decide which controls the page renders at all.
+#define BOARD_NAME "ESP32-C3 egg (bench)"
+#define BOARD_PANEL_KIND "ssd1306"
+#define BOARD_HAS_PALETTE 0    // 1bpp: a theme is a no-op here
+#define BOARD_HAS_BACKLIGHT 0  // contrast register only; PR 2 decides
+#define BOARD_LED_KIND "single"
 #define BOARD_HAS_LED 1
 #define BOARD_HAS_SDCARD 0
 #define BOARD_LED_PRIMARY 8  // blue "signal" LED, active-low
@@ -94,6 +101,11 @@
 #define BOARD_TALL_SX 1
 #define BOARD_TALL_SY 2
 
+#define BOARD_NAME "ESP32-S3-0.42 OLED supermini"
+#define BOARD_PANEL_KIND "ssd1306"
+#define BOARD_HAS_PALETTE 0    // 1bpp: a theme is a no-op here
+#define BOARD_HAS_BACKLIGHT 0  // contrast register only; PR 2 decides
+#define BOARD_LED_KIND "none"
 #define BOARD_HAS_LED 0
 #define BOARD_HAS_SDCARD 0
 #define BOARD_BUTTON 0
@@ -192,6 +204,11 @@
 // Driven by indicator_ws2812.c over RMT, not by indicator.c's LEDC PWM. If a
 // backlight fade later wants LEDC, note indicator.c claims LEDC_CHANNEL_0 —
 // pick another, even though that file is not compiled for this board.
+#define BOARD_NAME "Waveshare ESP32-S3-LCD-1.47B"
+#define BOARD_PANEL_KIND "st7789"
+#define BOARD_HAS_PALETTE 1
+#define BOARD_HAS_BACKLIGHT 1  // GPIO46, PWM-capable; PR 2 wires it
+#define BOARD_LED_KIND "rgb"
 #define BOARD_HAS_LED 1
 #define BOARD_LED_RGB_GPIO 38
 

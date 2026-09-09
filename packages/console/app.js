@@ -85,6 +85,16 @@ const el = {
   release: document.getElementById("release"),
   softKbd: document.getElementById("soft-kbd"),
   softInput: document.getElementById("soft-input"),
+  settings: document.getElementById("settings"),
+  settingsOpen: document.getElementById("settings-open"),
+  settingsStatus: document.getElementById("settings-status"),
+  deviceDetails: document.getElementById("device-details"),
+  deviceSettings: document.getElementById("device-settings"),
+  settingsSens: document.getElementById("settings-sensitivity"),
+  settingsSensOut: document.getElementById("settings-sensitivity-out"),
+  settingsMode: document.getElementById("settings-mode"),
+  settingsModeDirect: document.getElementById("settings-mode-direct"),
+  settingsModeSoft: document.getElementById("settings-mode-soft"),
   more: document.getElementById("more"),
 };
 
@@ -392,7 +402,7 @@ function installDirectInput() {
   });
 
   document.addEventListener("keydown", (e) => {
-    if (!captured) return;
+    if (!captured || settingsIsOpen()) return;
     e.preventDefault();
     // Esc is the release gesture and is not forwarded; the sidebar button sends it
     // to the target when that is what you actually want.
@@ -406,7 +416,7 @@ function installDirectInput() {
   });
 
   document.addEventListener("keyup", (e) => {
-    if (!captured) return;
+    if (!captured || settingsIsOpen()) return;
     e.preventDefault();
     sendKey(FRAME.KEY_UP, e.code);
   });
@@ -934,7 +944,7 @@ function installSoftInput() {
   document.addEventListener(
     "touchmove",
     (e) => {
-      if (!e.target.closest(".more[open], textarea")) e.preventDefault();
+      if (!e.target.closest(".more[open], textarea, dialog")) e.preventDefault();
     },
     { passive: false },
   );
@@ -974,6 +984,7 @@ function installSoftInput() {
 
   box.addEventListener("beforeinput", (e) => {
     if (composing) return; // let the IME work; compositionend sends the result
+    if (settingsIsOpen()) return; // the dialog owns input now; nothing is sent
     e.preventDefault();
     justComposed = false;
     switch (e.inputType) {
@@ -1348,3 +1359,255 @@ if (typeof DataView.prototype.setBigUint64 !== "function") {
   mediaEl.file.disabled = true;
   setMediaStatus("disk images need a newer browser (BigInt DataView)", "bad");
 }
+
+// --- settings -------------------------------------------------------------------
+//
+// The device describes itself and this renders what it is told: identity and
+// features into the details list, and each setting into a control chosen by
+// its declared type. A setting added in a later image needs no change here, and
+// a board that advertises no themes gets no theme control — the OLED dongle is
+// never offered a setting that provably does nothing.
+//
+// Opening the dialog RELEASES CAPTURE FIRST, in both input modes, and the key
+// handlers are gated on settingsIsOpen() as well. Neither alone is enough. In
+// direct mode a character typed into a field bubbles to the document handler;
+// with `captured` still true it would be sent to the target while
+// preventDefault() suppressed the local insertion — a field that will not
+// accept text, and the operator's input landing in the target's login prompt.
+// In soft mode there is no pointer lock, so `captured` is already false and the
+// hazard is the hidden textarea's beforeinput path instead. Every terminal
+// event releases (AGENTS.md §2, principle 4); opening a dialog is one.
+//
+// The gate reads the dialog's own `open` state rather than a boolean of its
+// own. A first version kept one and cleared it on the `close` event — which
+// the browser queues as a task, so the flag lagged the dialog by a tick. Two
+// copies of one fact, and the copy was the stale one (AGENTS.md §8, the
+// deletion test). The headless check caught it.
+
+function settingsIsOpen() {
+  return el.settings.open;
+}
+
+function settingsStatus(text, kind) {
+  el.settingsStatus.textContent = text;
+  el.settingsStatus.className = `status${kind ? ` ${kind}` : ""}`;
+}
+
+function detail(dl, term, value) {
+  const dt = document.createElement("dt");
+  dt.textContent = term;
+  const dd = document.createElement("dd");
+  dd.textContent = value;
+  dl.append(dt, dd);
+}
+
+function renderDetails(doc) {
+  const dl = el.deviceDetails;
+  dl.replaceChildren();
+  const id = doc.identity || {};
+  const f = doc.features || {};
+  detail(dl, "Board", id.board || "unknown");
+  detail(dl, "Chip", `${id.chip || "?"}, ${id.flash_mb || "?"} MB flash`);
+  detail(dl, "Firmware", `${id.fw || "?"} on ESP-IDF ${id.idf || "?"}`);
+  detail(
+    dl,
+    "Panel",
+    f.panel
+      ? `${f.panel} ${f.panel_w}\u00d7${f.panel_h}${f.palette ? ", colour" : ", mono"}${f.backlight ? ", backlight" : ""}`
+      : "none",
+  );
+  detail(dl, "LED", f.led || "none");
+  detail(dl, "USB", f.usb_device ? "keyboard, mouse, disk" : "none (bench board)");
+  detail(dl, "microSD", f.sdcard ? "slot" : "none");
+}
+
+// One control per declared type. The value the device holds is what is shown;
+// the reply to a change is the whole document, and the panel re-renders from
+// that rather than from what it asked for.
+function renderSetting(s) {
+  const wrap = document.createElement("div");
+  const label = document.createElement("label");
+  const id = `setting-${s.key}`;
+  label.htmlFor = id;
+  label.textContent = s.label || s.key;
+  wrap.append(label);
+  let input;
+  if (s.type === "enum") {
+    input = document.createElement("select");
+    for (const v of s.values || []) {
+      const opt = document.createElement("option");
+      opt.value = v;
+      opt.textContent = v;
+      opt.selected = v === s.value;
+      input.append(opt);
+    }
+  } else if (s.type === "range") {
+    input = document.createElement("input");
+    input.type = "range";
+    input.min = s.min;
+    input.max = s.max;
+    input.step = s.step || 1;
+    input.value = s.value;
+    const out = document.createElement("output");
+    out.textContent = `${s.value}${s.unit || ""}`;
+    label.append(" ", out);
+    input.addEventListener("input", () => {
+      out.textContent = `${input.value}${s.unit || ""}`;
+    });
+  } else if (s.type === "bool") {
+    input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = Boolean(s.value);
+  } else {
+    // A type this page does not know: show it, do not offer to change it.
+    const dd = document.createElement("span");
+    dd.className = "status";
+    dd.textContent = `${s.value} (not editable here)`;
+    wrap.append(dd);
+    return wrap;
+  }
+  input.id = id;
+  input.addEventListener("change", () => {
+    const value = s.type === "bool" ? (input.checked ? "1" : "0") : input.value;
+    postSetting(s.key, value);
+  });
+  wrap.append(input);
+  // A setting that takes effect at the next boot says so, and offers the
+  // restart only while the stored value differs from the running one — the
+  // device refuses a bare restart anyway (R-010); this is the page agreeing.
+  if (s.apply === "reboot") {
+    const note = document.createElement("p");
+    note.className = "scope-note";
+    if (s.running !== undefined && s.running !== s.value) {
+      note.textContent = `Running: ${s.running}. Takes effect after a restart. `;
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "danger";
+      btn.textContent = "Restart now";
+      btn.addEventListener("click", () => postSetting("restart", "1"));
+      note.append(btn);
+    } else {
+      note.textContent = "Takes effect after a restart.";
+    }
+    wrap.append(note);
+  }
+  return wrap;
+}
+
+// Feature flags the page acts on outside the dialog. Fetched once at load —
+// PR 1 fetched only on open, but "is there a disk interface this boot" decides
+// whether the Disk image section exists at all, and a section that lets you
+// attach an image the target can never see is a lie the page must not tell.
+function applyFeatures(doc) {
+  const f = (doc && doc.features) || {};
+  const disk = document.getElementById("disk");
+  if (disk) disk.hidden = f.usb_disk === false;
+}
+
+fetch("/settings", { cache: "no-store" })
+  .then((r) => (r.ok ? r.json() : null))
+  .then((doc) => doc && applyFeatures(doc))
+  .catch(() => {});
+
+function renderSettings(doc) {
+  renderDetails(doc);
+  const box = el.deviceSettings;
+  box.replaceChildren();
+  const list = Array.isArray(doc.settings) ? doc.settings : [];
+  if (list.length === 0) {
+    const p = document.createElement("p");
+    p.className = "scope-note";
+    p.textContent = "This board has nothing to change here yet.";
+    box.append(p);
+    return;
+  }
+  for (const s of list) box.append(renderSetting(s));
+}
+
+async function loadSettings() {
+  settingsStatus("loading\u2026");
+  try {
+    const r = await fetch("/settings", { cache: "no-store" });
+    if (!r.ok) throw new Error(`${r.status}`);
+    renderSettings(await r.json());
+    settingsStatus("");
+  } catch (err) {
+    settingsStatus(`could not read settings (${err.message})`, "bad");
+  }
+}
+
+async function postSetting(key, value) {
+  settingsStatus("saving\u2026");
+  try {
+    const r = await fetch("/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `${encodeURIComponent(key)}=${encodeURIComponent(value)}`,
+      cache: "no-store",
+    });
+    if (r.ok) {
+      const doc = await r.json();
+      renderSettings(doc);
+      applyFeatures(doc);
+      settingsStatus(key === "restart" ? "restarting\u2026" : "saved", "ok");
+      return;
+    }
+    // The device says why in plain text (400, 429, 500); show it and re-read
+    // so the control snaps back to what the device actually holds.
+    settingsStatus(`${await r.text()} (${r.status})`, "bad");
+    const again = await fetch("/settings", { cache: "no-store" });
+    if (again.ok) renderSettings(await again.json());
+  } catch (err) {
+    settingsStatus(`could not save (${err.message})`, "bad");
+  }
+}
+
+function openSettings() {
+  exitCapture(); // direct mode: drops pointer lock and sends release-all
+  if (MODE === "soft") el.softInput.blur(); // soft mode: the keyboard's box
+  el.settingsMode.textContent = MODE === "soft" ? "touch" : "pointer lock";
+  el.settings.showModal();
+  loadSettings();
+}
+
+el.settingsOpen.addEventListener("click", openSettings);
+
+// The reload links keep whatever else is in the query (?ws= for UI work).
+for (const [a, mode] of [
+  [el.settingsModeDirect, "direct"],
+  [el.settingsModeSoft, "soft"],
+]) {
+  const url = new URL(location.href);
+  url.searchParams.set("mode", mode);
+  a.href = url.toString();
+}
+
+// --- browser-scope preferences ----------------------------------------------------
+//
+// localStorage: per browser, per origin, and never sent anywhere — the
+// console must not phone out (AGENTS.md §2, principle 5). Both sliders are
+// views of one stored value; the setter is the only writer.
+
+const SENSITIVITY_KEY = "airkvm.sensitivity";
+
+function setSensitivity(value, save) {
+  const v = Math.min(3, Math.max(0.2, parseFloat(value) || 1));
+  el.sensitivity.value = v;
+  el.settingsSens.value = v;
+  el.settingsSensOut.textContent = `${v.toFixed(1)}\u00d7`;
+  if (save) {
+    try {
+      localStorage.setItem(SENSITIVITY_KEY, String(v));
+    } catch {
+      // Private mode or storage disabled: the slider still works for this load.
+    }
+  }
+}
+
+try {
+  setSensitivity(localStorage.getItem(SENSITIVITY_KEY) ?? "1", false);
+} catch {
+  setSensitivity("1", false);
+}
+el.sensitivity.addEventListener("input", (e) => setSensitivity(e.target.value, true));
+el.settingsSens.addEventListener("input", (e) => setSensitivity(e.target.value, true));

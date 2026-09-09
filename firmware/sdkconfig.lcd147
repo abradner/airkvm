@@ -43,3 +43,10 @@ CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
 # No CONFIG_SPIRAM* either. The 8MB octal PSRAM stays off: nothing here needs
 # it, and it is a third consumer of shared bus resources on the one part where
 # a shared-clock conflict has already cost an evening (gotcha 10).
+
+# A name of its own, so two dongles on one network do not fight over
+# "airkvm.local" — and, with AIRKVM_OTA_TEST_URL pointing at a directory, so
+# this board pulls airkvm-lcd.bin rather than whatever the other one is
+# pulling. Both mattered on 2026-09-09: mDNS had already renamed one board to
+# airkvm-2.local, and an OLED image was being served to this one.
+CONFIG_AIRKVM_MDNS_HOSTNAME="airkvm-lcd"

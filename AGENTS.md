@@ -112,10 +112,10 @@ A conflict with a principle is a stop-and-check, never something to quietly work
 |---|---|---|
 | Firmware language | C (C11) | ESP-IDF v5.5, installed by `mise run fw:setup` into `.esp-idf/` |
 | Target hardware | ESP32-S3 (`esp32s3` target) | ESP32-S3-0.42 OLED supermini; native USB OTG is non-negotiable (§4) |
-| USB stack | TinyUSB via `esp_tinyusb` | Composite: boot keyboard + relative mouse + a mass-storage LUN (`firmware/main/msc_out.c`) whose medium is a browser-held image streamed over `/ws-media` (`firmware/main/media_ws.c`, `firmware/main/block_source_browser.c`) or, on the LCD147 board, the microSD card (`firmware/main/msc_src_sd.c`). Advertises USB remote wakeup so the console can wake a suspended target. Keyboard delivery was verified on hardware 2026-09-04 as a two-interface device; the three-interface composite, media, and wakeup are unverified |
-| Network | `esp_http_server` (WebSocket) + `mdns` | Single origin serves console and socket. Credentials come from the radio's NVS store first, Kconfig on a fresh flash; a 5 s BOOT hold reboots into a softAP captive portal to change them (`firmware/main/setup_mode.c`), which on the S3 is also served over a USB NCM network device (`firmware/main/usb_net.c`, no route, no DNS) |
+| USB stack | TinyUSB via `esp_tinyusb` | Composite: boot keyboard + relative mouse, plus a mass-storage LUN (`firmware/main/msc_out.c`) when the stored USB composition includes it — the default; keyboard+mouse alone is the other, chosen from the console and applied at the next boot (`firmware/main/settings.c`, `settings_usb_disk_enabled`) whose medium is a browser-held image streamed over `/ws-media` (`firmware/main/media_ws.c`, `firmware/main/block_source_browser.c`) or, on the LCD147 board, the microSD card (`firmware/main/msc_src_sd.c`). Advertises USB remote wakeup so the console can wake a suspended target. Keyboard delivery was verified on hardware 2026-09-04 as a two-interface device; the three-interface composite, media, and wakeup are unverified |
+| Network | `esp_http_server` (WebSocket) + `mdns` | Single origin serves console, socket, and the device's settings document (`GET/POST /settings`, `firmware/main/settings.c`; the device describes itself and the page renders what it is told). Credentials come from the radio's NVS store first, Kconfig on a fresh flash; a 5 s BOOT hold reboots into a softAP captive portal to change them (`firmware/main/setup_mode.c`), which on the S3 is also served over a USB NCM network device (`firmware/main/usb_net.c`, no route, no DNS) |
 | Console | Vanilla HTML/CSS/JS, no build step | Embedded in firmware via `EMBED_FILES`; no npm, no bundler, no CDN |
-| Display | SSD1306 72×40 over I2C, or ST7789 172×320 over SPI | One backend per board behind `firmware/main/display.h` (`display_ssd1306.c` / `display_st7789.c`), sharing the drawing layer in `firmware/main/canvas.h`. Status only (IP, mDNS name, link state). Both confirmed on real hardware: the OLED's pins and 180° rotation on 2026-08-31, the ST7789's pins, orientation and gap on 2026-09-06. The LCD's four ink roles are coloured by a build-time theme (`firmware/main/theme.h`, `CONFIG_AIRKVM_THEME_*`), and a per-section hue (`firmware/main/display_hue.h`) resolves SECONDARY and ACCENT per 8-row band at flush, so the panel gets more than four colours without a third bit plane. The signal gauge's colour is the one that carries meaning, and its weak/healthy threshold is `indicator_link_is_weak` — shared with the LED so the two cannot disagree, not a second set of constants. Themes and hues are a no-op on the 1bpp OLED, and every colour's contrast ratio is asserted by `firmware/test/host/test_theme.c` rather than eyeballed |
+| Display | SSD1306 72×40 over I2C, or ST7789 172×320 over SPI | One backend per board behind `firmware/main/display.h` (`display_ssd1306.c` / `display_st7789.c`), sharing the drawing layer in `firmware/main/canvas.h`. Status only (IP, mDNS name, link state). Both confirmed on real hardware: the OLED's pins and 180° rotation on 2026-08-31, the ST7789's pins, orientation and gap on 2026-09-06. The LCD's four ink roles are coloured by a theme (`firmware/main/theme.h`) chosen at runtime from the console's settings panel and kept in NVS (`firmware/main/settings.c`); `CONFIG_AIRKVM_THEME_*` names only the fresh-flash default. A per-section hue (`firmware/main/display_hue.h`) resolves SECONDARY and ACCENT per 8-row band at flush, so the panel gets more than four colours without a third bit plane. The signal gauge's colour is the one that carries meaning, and its weak/healthy threshold is `indicator_link_is_weak` — shared with the LED so the two cannot disagree, not a second set of constants. Themes and hues are a no-op on the 1bpp OLED, and every colour's contrast ratio is asserted by `firmware/test/host/test_theme.c` rather than eyeballed |
 | Host tooling | Python 3 (stdlib only) | `firmware/tools/poke.py` drives a dongle from a terminal; not shipped to users |
 | Testing | CMake/ctest + plain C assertions | Keymap, protocol codec, and HID state are pure and host-tested — `firmware/test/host/` |
 | Deployment | `idf.py flash` over USB-C | No shipping OTA path yet — `firmware/main/ota.c` is a throwaway, URL-gated dev test hook, empty (no-op) in every real build. See §7 |
@@ -502,6 +502,38 @@ add rather than rewrite.
   same rule wants applying to any shell command you then reason from. Grep for the thing you care
   about instead of eyeballing a truncated list, and if you must truncate, say so in the sentence
   that reports the result.
+- **Merging a stacked PR with `--delete-branch` CLOSES the PR stacked on top of it.** GitHub does
+  not retarget a pull request whose base branch disappears; it closes it, and it then refuses both
+  `gh pr reopen` ("Could not open the pull request") and `gh pr edit --base` ("Cannot change the
+  base branch of a closed pull request"). The branch and its commits survive, so the work is not
+  lost — but the PR, its review history and its comment thread are, and the only way forward is a
+  fresh PR. Cost one PR in a three-deep stack on 2026-09-09.
+  **Retarget every child to `main` BEFORE merging its parent**, not after:
+  `gh pr edit <child> --base main`, confirm with `gh pr view <child> --json baseRefName`, and only
+  then merge the parent. Check the confirmation rather than the exit code — the failing
+  `gh pr edit` in that incident was inside an `&& echo` whose silence went unnoticed, which is the
+  shell-guard entry above biting a third time.
+  Second half of the same trap, and it is not optional either: after a **squash** merge the child
+  still carries the parent's individual commits while `main` has one squashed commit of the same
+  content, so the child reads as CONFLICTING even though nothing really disagrees. Merging `main`
+  into the child with `-X ours` is correct **only** once you have shown the child is a content
+  superset — `git log --oneline origin/main --not <child>` should list nothing but the parent's
+  squash commit — and the check that it worked is that the child's tree hash is *unchanged* by the
+  merge (`git rev-parse HEAD^{tree}` before and after). A changed tree there means the resolution
+  silently dropped something from `main`.
+- **`mise run fw:lint` passing is not evidence CI's lint passes: they run different clang-format
+  versions.** `mise.toml` pins `clang-format = "19"`; `.github/workflows/ci.yml` runs
+  `apt-get install -y clang-format`, which on the `ubuntu-latest` image is whatever Ubuntu ships
+  (18 at the time of writing). The two disagree about continuation alignment inside multi-line
+  macros: a `#define` with `\`-continued designated initialisers was accepted by 19 and rejected
+  by 18, so a locally-green branch reddened CI on a file nothing else had touched. Two ways to
+  settle it, and the first is the real fix: **pin the CI install to the same version mise does**,
+  so there is one formatter rather than two. Until then, code that avoids `\`-continued macros is
+  code neither version can argue about, and a suspect file can be checked against the other
+  version without waiting for CI — `pip install clang-format==18.1.8` into a throwaway venv ships
+  a binary wheel and takes seconds. General form: **a linter whose version is pinned in one place
+  and floating in another is two linters, and green from the pinned one proves nothing about the
+  floating one.**
 - **`firmware/main/indicator.c`'s LED body compiles on the C3 bench board and NOWHERE else — so the two S3
   builds are not coverage for it.** `BOARD_HAS_LED` is 1 on the C3, **0** on the S3 0.42" dongle,
   and 1 on the LCD147 — but the LCD147 selects `indicator_ws2812.c` instead

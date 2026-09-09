@@ -41,6 +41,7 @@
 #if CONFIG_TINYUSB_MSC_ENABLED
 #include "msc_out.h"
 #endif
+#include "settings.h"
 #include "status.h"
 #include "tinyusb.h"
 #include "wake_policy.h"
@@ -74,46 +75,81 @@ enum {
 static const uint8_t s_kbd_report_desc[] = {TUD_HID_REPORT_DESC_KEYBOARD()};
 static const uint8_t s_mouse_report_desc[] = {TUD_HID_REPORT_DESC_MOUSE()};
 
+// Two compositions, both built, one chosen at start from the stored USB
+// setting (settings.c, reboot-scoped): keyboard+mouse+disk and keyboard+mouse.
+// Each is a whole static descriptor rather than one assembled at runtime,
+// because a descriptor is a claim the host caches per VID/PID (below) and the
+// two therefore also differ in product ID. Keyboard+mouse alone is the exact
+// two-interface device that was verified on hardware first; the full one is
+// what has shipped since MSC landed.
+#define ITF_COUNT_HID HID_ITF_COUNT
+#define CONFIG_TOTAL_LEN_HID (TUD_CONFIG_DESC_LEN + 2 * TUD_HID_DESC_LEN)
 #if CONFIG_TINYUSB_MSC_ENABLED
-#define ITF_COUNT (HID_ITF_COUNT + 1)
-#define CONFIG_TOTAL_LEN \
+#define ITF_COUNT_FULL (HID_ITF_COUNT + 1)
+#define CONFIG_TOTAL_LEN_FULL \
   (TUD_CONFIG_DESC_LEN + 2 * TUD_HID_DESC_LEN + TUD_MSC_DESC_LEN)
-#else
-#define ITF_COUNT HID_ITF_COUNT
-#define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + 2 * TUD_HID_DESC_LEN)
 #endif
 
-static const uint8_t s_configuration_desc[] = {
-    // Remote wakeup advertised: it is what lets a "Wake target" from the
-    // console resume a sleeping machine, and it is what a physical keyboard
-    // does. The host still has to arm it (SET_FEATURE DEVICE_REMOTE_WAKEUP)
-    // before suspending; tud_remote_wakeup() refuses otherwise. 100 mA is
-    // knowingly wrong (WiFi TX peaks well above it) and knowingly left alone:
-    // raising it is its own enumeration test, not something to bundle with
-    // a second descriptor change (issue #32).
-    TUD_CONFIG_DESCRIPTOR(1, ITF_COUNT, 0, CONFIG_TOTAL_LEN,
+// The two HID interfaces, identical in both compositions. Boot protocol on
+// the keyboard interface is what makes this work before an OS loads its own
+// HID driver.
+#define HID_INTERFACE_DESCRIPTORS                                      \
+  TUD_HID_DESCRIPTOR(HID_ITF_KEYBOARD, 0, HID_ITF_PROTOCOL_KEYBOARD,   \
+                     sizeof(s_kbd_report_desc), EPNUM_HID_KEYBOARD,    \
+                     CFG_TUD_HID_EP_BUFSIZE, 10),                      \
+      TUD_HID_DESCRIPTOR(HID_ITF_MOUSE, 0, HID_ITF_PROTOCOL_MOUSE,     \
+                         sizeof(s_mouse_report_desc), EPNUM_HID_MOUSE, \
+                         CFG_TUD_HID_EP_BUFSIZE, 10)
+
+// Remote wakeup advertised in both: it is what lets a "Wake target" from the
+// console resume a sleeping machine, and it is what a physical keyboard
+// does. The host still has to arm it (SET_FEATURE DEVICE_REMOTE_WAKEUP)
+// before suspending; tud_remote_wakeup() refuses otherwise. 100 mA is
+// knowingly wrong (WiFi TX peaks well above it) and knowingly left alone:
+// raising it is its own enumeration test, not something to bundle with
+// a second descriptor change (issue #32).
+static const uint8_t s_configuration_desc_hid[] = {
+    TUD_CONFIG_DESCRIPTOR(1, ITF_COUNT_HID, 0, CONFIG_TOTAL_LEN_HID,
                           TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
-    // Boot protocol on the keyboard interface is what makes this work before an
-    // OS loads its own HID driver.
-    TUD_HID_DESCRIPTOR(HID_ITF_KEYBOARD, 0, HID_ITF_PROTOCOL_KEYBOARD,
-                       sizeof(s_kbd_report_desc), EPNUM_HID_KEYBOARD,
-                       CFG_TUD_HID_EP_BUFSIZE, 10),
-    TUD_HID_DESCRIPTOR(HID_ITF_MOUSE, 0, HID_ITF_PROTOCOL_MOUSE,
-                       sizeof(s_mouse_report_desc), EPNUM_HID_MOUSE,
-                       CFG_TUD_HID_EP_BUFSIZE, 10),
-#if CONFIG_TINYUSB_MSC_ENABLED
-    // Always present, even with no medium: a static descriptor means the
-    // target's USB topology never changes under it. Attaching media later is
-    // a removable-disk "medium inserted", not a re-enumeration — which would
-    // drop the keyboard mid-session and force a release-all. 64 is the
-    // full-speed bulk packet size. UNVERIFIED on hardware: whether a BIOS
-    // still accepts the boot keyboard beside an empty card reader is the
-    // claim this whole project rests on, and no OS-booted host can test it.
-    TUD_MSC_DESCRIPTOR(ITF_MSC, 6, EPNUM_MSC_OUT, EPNUM_MSC_IN, 64),
-#endif
+    HID_INTERFACE_DESCRIPTORS,
 };
 
-static const tusb_desc_device_t s_device_desc = {
+#if CONFIG_TINYUSB_MSC_ENABLED
+static const uint8_t s_configuration_desc_full[] = {
+    TUD_CONFIG_DESCRIPTOR(1, ITF_COUNT_FULL, 0, CONFIG_TOTAL_LEN_FULL,
+                          TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
+    HID_INTERFACE_DESCRIPTORS,
+    // Present for the whole boot, even with no medium: a static descriptor
+    // means the target's USB topology never changes under it. Attaching
+    // media later is a removable-disk "medium inserted", not a
+    // re-enumeration — which would drop the keyboard mid-session and force
+    // a release-all. 64 is the full-speed bulk packet size. UNVERIFIED on
+    // hardware: whether a BIOS still accepts the boot keyboard beside an
+    // empty card reader is the claim this whole project rests on, and no
+    // OS-booted host can test it. Leaving the disk out of the composition
+    // (settings.c) is the operator's answer when it does not.
+    TUD_MSC_DESCRIPTOR(ITF_MSC, 6, EPNUM_MSC_OUT, EPNUM_MSC_IN, 64),
+};
+#endif
+
+// Espressif's vendor ID with their generic product IDs. Do not invent a VID:
+// unallocated VIDs collide, and a colliding VID/PID pair can make a target
+// load the wrong driver for a device it thinks it has seen before.
+//
+// Espressif's PID map encodes the interface set (bit 2 HID, bit 1 MSC), and
+// it exists because hosts cache descriptors per VID/PID: the same PID with a
+// different interface list is how Windows ends up loading yesterday's driver
+// for today's device. So the two compositions are two PIDs, and a
+// keyboard-only composition is not offered until it has one of its own (#64).
+#define PID_HID_ONLY 0x4004  // keyboard + mouse
+#define PID_HID_MSC 0x4006   // keyboard + mouse + disk
+
+// Not const, and the only mutable descriptor here: idProduct is assigned once
+// in hid_out_start() before tinyusb_driver_install() and never again. The
+// alternative was two structs differing in one field, or a macro to build
+// them — the macro is what a formatter disagreed about across versions, and
+// two near-identical descriptors is the copy that drifts.
+static tusb_desc_device_t s_device_desc = {
     .bLength = sizeof(tusb_desc_device_t),
     .bDescriptorType = TUSB_DESC_DEVICE,
     .bcdUSB = 0x0200,
@@ -121,19 +157,8 @@ static const tusb_desc_device_t s_device_desc = {
     .bDeviceSubClass = 0x00,
     .bDeviceProtocol = 0x00,
     .bMaxPacketSize0 = CFG_TUD_ENDPOINT0_SIZE,
-    // Espressif's vendor ID with their generic HID product ID. Do not invent a
-    // VID: unallocated VIDs collide, and a colliding VID/PID pair can make a
-    // target load the wrong driver for a device it thinks it has seen before.
     .idVendor = 0x303A,
-// Espressif's PID map encodes the interface set (bit 2 HID, bit 1 MSC),
-// and it exists because hosts cache descriptors per VID/PID: the same
-// PID with a different interface list is how Windows ends up loading
-// yesterday's driver for today's device.
-#if CONFIG_TINYUSB_MSC_ENABLED
-    .idProduct = 0x4006,
-#else
-    .idProduct = 0x4004,
-#endif
+    .idProduct = PID_HID_ONLY,  // the composition decides; see hid_out_start
     .bcdDevice = 0x0100,
     .iManufacturer = 0x01,
     .iProduct = 0x02,
@@ -657,11 +682,31 @@ esp_err_t hid_out_start(void) {
   }
   hid_state_reset(&s_state);
 
+  // Which composition this boot presents. Read once, here: the descriptor,
+  // the LUN, the SD probe and the media socket all consult the same
+  // settings_usb_disk_enabled(), so they cannot disagree about whether there
+  // is a disk. Reboot-scoped by design — re-enumerating a live device is a
+  // hardware re-test of gotcha 10 (the USB and RF PHYs share the BBPLL) and
+  // is tracked, not attempted.
+  const uint8_t *configuration = s_configuration_desc_hid;
+  int itf_count = ITF_COUNT_HID;
+  s_device_desc.idProduct = PID_HID_ONLY;
 #if CONFIG_TINYUSB_MSC_ENABLED
-  // Before the driver: the host's first INQUIRY can land as soon as
-  // enumeration completes, and the LUN has to be there to answer it. Never
-  // blocks — nothing about a medium is touched here.
-  ESP_RETURN_ON_ERROR(msc_out_start(), TAG, "msc_out_start failed");
+  const bool with_disk = settings_usb_disk_enabled();
+  if (with_disk) {
+    // Before the driver: the host's first INQUIRY can land as soon as
+    // enumeration completes, and the LUN has to be there to answer it. Never
+    // blocks — nothing about a medium is touched here. Skipped entirely in
+    // the other composition; every msc_out_* entry point tolerates that
+    // (gotcha 16b), and the MSC callbacks are never invoked for an interface
+    // the descriptor does not declare.
+    ESP_RETURN_ON_ERROR(msc_out_start(), TAG, "msc_out_start failed");
+    configuration = s_configuration_desc_full;
+    itf_count = ITF_COUNT_FULL;
+    s_device_desc.idProduct = PID_HID_MSC;
+  }
+#else
+  const bool with_disk = false;
 #endif
 
   const tinyusb_config_t cfg = {
@@ -670,7 +715,7 @@ esp_err_t hid_out_start(void) {
       .string_descriptor_count =
           sizeof(s_string_desc) / sizeof(s_string_desc[0]),
       .external_phy = false,
-      .configuration_descriptor = s_configuration_desc,
+      .configuration_descriptor = configuration,
   };
   ESP_RETURN_ON_ERROR(tinyusb_driver_install(&cfg), TAG,
                       "tinyusb_driver_install failed");
@@ -678,7 +723,10 @@ esp_err_t hid_out_start(void) {
   if (xTaskCreate(report_task, "hid_report", 3072, NULL, 5, NULL) != pdPASS) {
     return ESP_ERR_NO_MEM;
   }
-  ESP_LOGI(TAG, "USB HID started (keyboard itf %d, mouse itf %d, %d itfs)",
-           HID_ITF_KEYBOARD, HID_ITF_MOUSE, ITF_COUNT);
+  ESP_LOGI(TAG,
+           "USB HID started (keyboard itf %d, mouse itf %d, %d itfs, PID "
+           "0x%04X, disk %s)",
+           HID_ITF_KEYBOARD, HID_ITF_MOUSE, itf_count, s_device_desc.idProduct,
+           with_disk ? "on" : "off");
   return ESP_OK;
 }

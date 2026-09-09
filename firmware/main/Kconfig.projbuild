@@ -77,7 +77,7 @@ config AIRKVM_HID_BACKEND_LOG
 endchoice
 
 choice AIRKVM_THEME
-    prompt "Status panel colour theme"
+    prompt "Default status panel colour theme"
     # Offered only on the board that has a palette. The 0.42" OLED is 1bpp:
     # every ink role renders as one lit pixel there, so a theme is a genuine
     # no-op and showing a choice would be exactly the kind of implied support
@@ -89,10 +89,11 @@ choice AIRKVM_THEME
         Which colours main/ui.c draws in: four ink roles, plus a per-section
         hue for the quiet text and the signal bar (main/display_hue.h).
 
-        Build-time rather than runtime, and that is a proposal rather than a
-        settled convention — main/theme.h states the argument, the short form
-        being that the BOOT button's two meanings are already load-bearing for
-        risk R-006 and a console control costs a protocol frame plus NVS.
+        The value a FRESH FLASH starts on. The operator changes it from the
+        console's settings panel (GET/POST /settings) and the choice is kept
+        in NVS across reboots; this only decides what the panel shows before
+        anyone has chosen, or after a stored name this image does not know.
+        main/theme.h records why the button was never the right control.
 
         The full set of ratios is in main/theme.h, and every one of them is
         asserted by test/host/test_theme.c rather than asserted in prose. The
@@ -209,6 +210,12 @@ config AIRKVM_OTA_TEST_URL
     string "OTA test image URL (throwaway, dev only)"
     default ""
     help
+        Ending in "/" makes it a DIRECTORY and each board pulls
+        <hostname>.bin from it, where <hostname> is AIRKVM_MDNS_HOSTNAME
+        above — so several dongles can poll one server without pulling each
+        other's firmware. Naming a file directly still works and is what a
+        single board wants.
+
         If set, polled every 60s once WiFi associates: each poll reads only
         the served image's header and compares it against the running image,
         downloading and rebooting into it only on a real difference. Proves

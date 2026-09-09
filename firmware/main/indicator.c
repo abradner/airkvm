@@ -33,8 +33,22 @@ static const char *TAG = "indicator";
 #define BREATHE_PERIOD_MS 4000
 
 static bool s_ready;
+static volatile int s_brightness = 100;
+
+void indicator_set_brightness(int percent) {
+  if (percent < 0) {
+    percent = 0;
+  }
+  if (percent > 100) {
+    percent = 100;
+  }
+  s_brightness = percent;
+}
 
 static void set_percent(int percent) {
+  // The operator's ceiling, applied before the clamp so 100% of a dim light
+  // is still dim.
+  percent = (percent * s_brightness) / 100;
   if (percent < 0) {
     percent = 0;
   }
@@ -152,6 +166,9 @@ enum indicator_state indicator_tick(const struct status_snapshot *snap) {
 #else  // !BOARD_HAS_LED
 
 void indicator_init(void) {}
+void indicator_set_brightness(int percent) {
+  (void)percent;
+}
 enum indicator_state indicator_tick(const struct status_snapshot *snap) {
   // No LED on this board, but what this answers is not about the LED: the
   // status panel colours its signal bar from it. Run the policy anyway.

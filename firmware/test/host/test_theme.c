@@ -374,10 +374,13 @@ static void every_role_in_a_theme_is_distinct(void) {
 
 // The build-time selection has to name a theme that exists. An enum value out
 // of range would index past the table and draw from whatever follows it.
-static void the_selected_theme_is_in_range(void) {
-  CHECK(DISPLAY_THEME_SELECTED >= 0);
-  CHECK(DISPLAY_THEME_SELECTED < DISPLAY_THEME_COUNT);
-  CHECK(display_themes[DISPLAY_THEME_SELECTED].name != NULL);
+// The fresh-flash default. The RUNTIME value can arrive from NVS or the network
+// and is clamped by settings_schema.c, which test_settings.c pins; this only
+// has to hold for the one value that is chosen at build time.
+static void the_default_theme_is_in_range(void) {
+  CHECK(DISPLAY_THEME_DEFAULT >= 0);
+  CHECK(DISPLAY_THEME_DEFAULT < DISPLAY_THEME_COUNT);
+  CHECK(display_themes[DISPLAY_THEME_DEFAULT].name != NULL);
 }
 
 // theme.h quotes a ratio table in its header comment, and a comment that
@@ -506,7 +509,7 @@ int main(void) {
   RUN(every_dark_theme_carries_at_least_one_hue);
   RUN(primary_outranks_secondary_in_every_theme);
   RUN(every_role_in_a_theme_is_distinct);
-  RUN(the_selected_theme_is_in_range);
+  RUN(the_default_theme_is_in_range);
   RUN(the_documented_ratios_are_the_real_ones);
   RUN(the_documented_hue_ratios_are_the_real_ones);
   RUN(the_link_hues_keep_the_plain_secondary);
