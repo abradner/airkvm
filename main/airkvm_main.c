@@ -97,7 +97,13 @@ void app_main(void) {
   // probe runs on its own task). SDMMC slot 1 is on the GPIO matrix and clocks
   // from the CPU's PLL, not the USB PHY enable gotcha 10 is about — a check,
   // not an assumption: WiFi must still associate with this in place.
-  if (msc_src_sd_start() != ESP_OK) {
+  // And only in a composition that has the disk interface: with it left out
+  // there is no LUN for a card to bind to, and the probe would be polling a
+  // slot for a medium nothing could present. msc_out tolerates the bind
+  // regardless (gotcha 16b), so this is tidiness, not the safety.
+  if (!settings_usb_disk_enabled()) {
+    ESP_LOGI(TAG, "microSD not started: disk interface is off this boot");
+  } else if (msc_src_sd_start() != ESP_OK) {
     ESP_LOGE(TAG, "microSD failed to start — no card support this boot");
   }
 #endif

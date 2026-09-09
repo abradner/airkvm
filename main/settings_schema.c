@@ -39,6 +39,42 @@ void settings_ranges_for_board(struct settings_range out[SETTINGS_RANGE_COUNT],
   };
 }
 
+static const char *const USB_VALUES[] = {"keyboard+mouse+disk",
+                                         "keyboard+mouse"};
+
+void settings_choices_for_board(
+    struct settings_choice out[SETTINGS_CHOICE_COUNT], bool usb_device) {
+  out[SETTINGS_CHOICE_USB] = (struct settings_choice){
+      .key = "usb",
+      .label = "USB interfaces",
+      .apply = "reboot",
+      .values = USB_VALUES,
+      .count = 2,
+      .def = SETTINGS_USB_WITH_DISK,
+      .present = usb_device,
+  };
+}
+
+int settings_choice_index(const struct settings_catalog *c,
+                          enum settings_choice_id id, const char *name) {
+  if (c == NULL || name == NULL) {
+    return -1;
+  }
+  const struct settings_choice *ch = &c->choices[id];
+  for (int i = 0; i < ch->count; i++) {
+    if (strcmp(ch->values[i], name) == 0) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+int settings_resolve_choice(const struct settings_catalog *c,
+                            enum settings_choice_id id, const char *stored) {
+  const int i = settings_choice_index(c, id, stored);
+  return i >= 0 ? i : c->choices[id].def;
+}
+
 int settings_theme_index(const struct settings_catalog *c, const char *name) {
   if (c == NULL || name == NULL) {
     return -1;
@@ -94,6 +130,9 @@ enum settings_parse_result settings_parse_form(const struct settings_catalog *c,
   for (int i = 0; i < SETTINGS_RANGE_COUNT; i++) {
     scratch.range[i] = -1;
   }
+  for (int i = 0; i < SETTINGS_CHOICE_COUNT; i++) {
+    scratch.choice[i] = -1;
+  }
   bool any = false;
 
   size_t pos = 0;
@@ -112,6 +151,39 @@ enum settings_parse_result settings_parse_form(const struct settings_catalog *c,
       }
       scratch.theme = i;
       any = true;
+      continue;
+    }
+    if (form_key_is(&p, "restart")) {
+      char text[4];
+      if (form_decode(p.value, p.value_len, text, sizeof(text)) != 1 ||
+          text[0] != '1') {
+        return SETTINGS_PARSE_BAD;
+      }
+      scratch.restart = true;
+      any = true;
+      continue;
+    }
+    bool matched = false;
+    for (int i = 0; i < SETTINGS_CHOICE_COUNT; i++) {
+      const struct settings_choice *ch = &c->choices[i];
+      if (!form_key_is(&p, ch->key)) {
+        continue;
+      }
+      char name[SETTINGS_THEME_NAME_MAX + 1];
+      if (!ch->present ||
+          form_decode(p.value, p.value_len, name, sizeof(name)) < 1) {
+        return SETTINGS_PARSE_BAD;
+      }
+      const int v = settings_choice_index(c, (enum settings_choice_id)i, name);
+      if (v < 0) {
+        return SETTINGS_PARSE_BAD;
+      }
+      scratch.choice[i] = v;
+      any = true;
+      matched = true;
+      break;
+    }
+    if (matched) {
       continue;
     }
     for (int i = 0; i < SETTINGS_RANGE_COUNT; i++) {
@@ -262,6 +334,9 @@ size_t settings_json(const struct settings_view *v, char *buf, size_t cap) {
   jw_raw(&w, ",");
   jw_key(&w, "usb_device");
   jw_bool(&w, v->feat.usb_device);
+  jw_raw(&w, ",");
+  jw_key(&w, "usb_disk");
+  jw_bool(&w, v->feat.usb_disk);
   jw_raw(&w, "},");
 
   // Each setting carries everything the page needs to render it, so a setting
@@ -335,6 +410,50 @@ size_t settings_json(const struct settings_view *v, char *buf, size_t cap) {
       jw_key(&w, "step");
       jw_int(&w, r->step);
       jw_raw(&w, "}");
+      emitted = true;
+    }
+    for (int i = 0; i < SETTINGS_CHOICE_COUNT; i++) {
+      const struct settings_choice *ch = &cat->choices[i];
+      if (!ch->present) {
+        continue;
+      }
+      int cur = v->choice_value[i];
+      if (cur < 0 || cur >= ch->count) {
+        cur = ch->def;
+      }
+      int run = v->choice_running[i];
+      if (run < 0 || run >= ch->count) {
+        run = ch->def;
+      }
+      if (emitted) {
+        jw_raw(&w, ",");
+      }
+      jw_raw(&w, "{");
+      jw_kv_str(&w, "key", ch->key);
+      jw_raw(&w, ",");
+      jw_kv_str(&w, "label", ch->label);
+      jw_raw(&w, ",");
+      jw_kv_str(&w, "scope", "device");
+      jw_raw(&w, ",");
+      jw_kv_str(&w, "type", "enum");
+      if (ch->apply != NULL) {
+        jw_raw(&w, ",");
+        jw_kv_str(&w, "apply", ch->apply);
+        jw_raw(&w, ",");
+        jw_kv_str(&w, "running", ch->values[run]);
+      }
+      jw_raw(&w, ",");
+      jw_kv_str(&w, "value", ch->values[cur]);
+      jw_raw(&w, ",");
+      jw_key(&w, "values");
+      jw_raw(&w, "[");
+      for (int j = 0; j < ch->count; j++) {
+        if (j > 0) {
+          jw_raw(&w, ",");
+        }
+        jw_str(&w, ch->values[j]);
+      }
+      jw_raw(&w, "]}");
       emitted = true;
     }
   }

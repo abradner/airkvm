@@ -332,7 +332,16 @@ void msc_out_bus_reset(void) {
   UNLOCK();
 }
 
+// Never-started is a normal state now, not only setup mode's: with the disk
+// left out of the USB composition (settings.c) msc_out_start() is skipped,
+// while the SD probe and the media socket still exist to be compiled. Gotcha
+// 16b's rule — every owner's entry point tolerates never-started — applied
+// to the three below as it already was to msc_out_bus_reset(). Taking a NULL
+// mutex is an assert and a reboot, which is exactly how 16b was found.
 bool msc_out_bind_if_free(const struct msc_source *src) {
+  if (s_lock == NULL) {
+    return false;  // no LUN in this composition: nothing to bind to
+  }
   LOCK();
   const bool bound = msc_lun_try_bind(&s_lun, src);
   UNLOCK();
@@ -343,6 +352,9 @@ bool msc_out_bind_if_free(const struct msc_source *src) {
 }
 
 bool msc_out_unbind_if(const struct msc_source *src) {
+  if (s_lock == NULL) {
+    return false;
+  }
   LOCK();
   const bool released = msc_lun_unbind_if(&s_lun, src);
   UNLOCK();
@@ -353,6 +365,9 @@ bool msc_out_unbind_if(const struct msc_source *src) {
 }
 
 const struct msc_source *msc_out_current(void) {
+  if (s_lock == NULL) {
+    return NULL;
+  }
   LOCK();
   const struct msc_source *src = s_lun.src;
   UNLOCK();

@@ -14,12 +14,15 @@ static void build_catalogues(void) {
   CAT = (struct settings_catalog){
       .themes = THEMES, .theme_count = 3, .theme_default = 1};
   settings_ranges_for_board(CAT.ranges, true, true);
+  settings_choices_for_board(CAT.choices, true);
   NO_PALETTE = (struct settings_catalog){
       .themes = NULL, .theme_count = 0, .theme_default = 0};
   settings_ranges_for_board(NO_PALETTE.ranges, true, false);
+  settings_choices_for_board(NO_PALETTE.choices, true);
   HEADLESS = (struct settings_catalog){
       .themes = NULL, .theme_count = 0, .theme_default = 0};
   settings_ranges_for_board(HEADLESS.ranges, false, false);
+  settings_choices_for_board(HEADLESS.choices, false);  // the C3: no USB device
 }
 
 static enum settings_parse_result parse(const struct settings_catalog *c,
@@ -29,9 +32,12 @@ static enum settings_parse_result parse(const struct settings_catalog *c,
 }
 
 static struct settings_update untouched(void) {
-  struct settings_update u = {.theme = 99};
+  struct settings_update u = {.theme = 99, .restart = true};
   for (int i = 0; i < SETTINGS_RANGE_COUNT; i++) {
     u.range[i] = 99;
+  }
+  for (int i = 0; i < SETTINGS_CHOICE_COUNT; i++) {
+    u.choice[i] = 99;
   }
   return u;
 }
@@ -118,6 +124,8 @@ static void a_posted_theme_is_accepted_only_if_the_catalogue_has_it(void) {
   CHECK_EQ_INT(parse(&CAT, "theme=tokyo-night", &u), SETTINGS_PARSE_OK);
   CHECK_EQ_INT(u.theme, 0);
   CHECK_EQ_INT(u.range[SETTINGS_RANGE_SCREEN], -1);  // not mentioned
+  CHECK_EQ_INT(u.choice[SETTINGS_CHOICE_USB], -1);
+  CHECK(!u.restart);
   // Percent-encoding and unknown keys, both ignored as a browser would need.
   CHECK_EQ_INT(parse(&CAT, "extra=1&theme=solarized%2Ddark&x=", &u),
                SETTINGS_PARSE_OK);
@@ -187,7 +195,7 @@ static void a_body_naming_nothing_we_know_is_not_a_success(void) {
   struct settings_update u = untouched();
   // A page from a newer image posting a key this one lacks must not be told
   // it worked — nor must an empty body.
-  CHECK_EQ_INT(parse(&CAT, "usb=hid", &u), SETTINGS_PARSE_NOTHING);
+  CHECK_EQ_INT(parse(&CAT, "macros=1", &u), SETTINGS_PARSE_NOTHING);
   CHECK_EQ_INT(parse(&CAT, "", &u), SETTINGS_PARSE_NOTHING);
   CHECK_EQ_INT(parse(&CAT, "&&", &u), SETTINGS_PARSE_NOTHING);
   CHECK_EQ_INT(u.theme, 99);
@@ -206,6 +214,70 @@ static void a_board_refuses_a_setting_for_a_thing_it_lacks(void) {
   CHECK_EQ_INT(parse(&NO_PALETTE, "screen=50", &u), SETTINGS_PARSE_OK);
   CHECK_EQ_INT(parse(&HEADLESS, "dbgtimeout=60", &u), SETTINGS_PARSE_OK);
   CHECK_EQ_INT(settings_resolve_theme(&NO_PALETTE, "anything"), 0);
+}
+
+// --- the USB composition: a reboot-scoped choice --------------------------------
+
+static void the_usb_choice_offers_exactly_the_two_with_product_ids(void) {
+  const struct settings_choice *ch = &CAT.choices[SETTINGS_CHOICE_USB];
+  CHECK_EQ_INT(ch->count, 2);
+  CHECK_EQ_STR(ch->values[SETTINGS_USB_WITH_DISK], "keyboard+mouse+disk");
+  CHECK_EQ_STR(ch->values[SETTINGS_USB_HID_ONLY], "keyboard+mouse");
+  CHECK_EQ_INT(ch->def, SETTINGS_USB_WITH_DISK);  // what ships today
+  CHECK_EQ_STR(ch->apply, "reboot");
+  CHECK_EQ_STR(ch->key, "usb");
+  CHECK(strlen(ch->key) <= 15);
+  CHECK(ch->present);
+  CHECK(!HEADLESS.choices[SETTINGS_CHOICE_USB].present);  // no USB device
+}
+
+static void a_stored_choice_resolves_or_defaults(void) {
+  CHECK_EQ_INT(
+      settings_resolve_choice(&CAT, SETTINGS_CHOICE_USB, "keyboard+mouse"),
+      SETTINGS_USB_HID_ONLY);
+  CHECK_EQ_INT(settings_resolve_choice(&CAT, SETTINGS_CHOICE_USB, NULL),
+               SETTINGS_USB_WITH_DISK);
+  CHECK_EQ_INT(settings_resolve_choice(&CAT, SETTINGS_CHOICE_USB, ""),
+               SETTINGS_USB_WITH_DISK);
+  // A composition a later image might know and this one does not: default,
+  // which is the full one, not the reduced one.
+  CHECK_EQ_INT(settings_resolve_choice(&CAT, SETTINGS_CHOICE_USB, "keyboard"),
+               SETTINGS_USB_WITH_DISK);
+  CHECK_EQ_INT(settings_choice_index(&CAT, SETTINGS_CHOICE_USB, "keyboard"),
+               -1);
+}
+
+static void a_posted_choice_is_accepted_only_if_offered(void) {
+  struct settings_update u = untouched();
+  CHECK_EQ_INT(parse(&CAT, "usb=keyboard%2Bmouse", &u), SETTINGS_PARSE_OK);
+  CHECK_EQ_INT(u.choice[SETTINGS_CHOICE_USB], SETTINGS_USB_HID_ONLY);
+  CHECK(!u.restart);
+  u = untouched();
+  CHECK_EQ_INT(parse(&CAT, "usb=keyboard", &u), SETTINGS_PARSE_BAD);
+  CHECK_EQ_INT(parse(&CAT, "usb=", &u), SETTINGS_PARSE_BAD);
+  CHECK_EQ_INT(parse(&CAT, "usb=disk", &u), SETTINGS_PARSE_BAD);
+  CHECK_EQ_INT(u.choice[SETTINGS_CHOICE_USB], 99);  // untouched on refusal
+  // No USB device at all: refused, not ignored.
+  CHECK_EQ_INT(parse(&HEADLESS, "usb=keyboard%2Bmouse", &u),
+               SETTINGS_PARSE_BAD);
+}
+
+static void restart_is_a_recognised_request_and_nothing_else(void) {
+  struct settings_update u = untouched();
+  // Recognised on its own (it is a known key, so not NOTHING) and alongside a
+  // change; settings.c decides whether it is honoured.
+  CHECK_EQ_INT(parse(&CAT, "restart=1", &u), SETTINGS_PARSE_OK);
+  CHECK(u.restart);
+  CHECK_EQ_INT(u.theme, -1);
+  u = untouched();
+  CHECK_EQ_INT(parse(&CAT, "usb=keyboard%2Bmouse&restart=1", &u),
+               SETTINGS_PARSE_OK);
+  CHECK(u.restart);
+  CHECK_EQ_INT(u.choice[SETTINGS_CHOICE_USB], SETTINGS_USB_HID_ONLY);
+  // Only "1" means yes: "0", "true", "" are refused rather than guessed.
+  CHECK_EQ_INT(parse(&CAT, "restart=0", &u), SETTINGS_PARSE_BAD);
+  CHECK_EQ_INT(parse(&CAT, "restart=true", &u), SETTINGS_PARSE_BAD);
+  CHECK_EQ_INT(parse(&CAT, "restart=", &u), SETTINGS_PARSE_BAD);
 }
 
 // --- the GET document ----------------------------------------------------------
@@ -231,6 +303,9 @@ static struct settings_view view(const struct settings_catalog *c) {
   v.range_value[SETTINGS_RANGE_SCREEN] = 60;
   v.range_value[SETTINGS_RANGE_LED] = 25;
   v.range_value[SETTINGS_RANGE_DEBUG_TIMEOUT] = 120;
+  v.choice_value[SETTINGS_CHOICE_USB] = SETTINGS_USB_HID_ONLY;     // stored
+  v.choice_running[SETTINGS_CHOICE_USB] = SETTINGS_USB_WITH_DISK;  // running
+  v.feat.usb_disk = true;
   return v;
 }
 
@@ -272,6 +347,15 @@ static void the_document_is_whole_and_balanced(void) {
   CHECK(strstr(buf, "\"key\":\"dbgtimeout\"") != NULL);
   CHECK(strstr(buf, "\"unit\":\"s\"") != NULL);
   CHECK(strstr(buf, "\"value\":120") != NULL);
+  // The choice carries both what is stored and what is running, so the page
+  // can say "restart to apply" from facts rather than from having asked.
+  CHECK(strstr(buf,
+               "\"key\":\"usb\",\"label\":\"USB interfaces\",\"scope\":"
+               "\"device\",\"type\":\"enum\",\"apply\":\"reboot\","
+               "\"running\":\"keyboard+mouse+disk\",\"value\":"
+               "\"keyboard+mouse\",\"values\":[\"keyboard+mouse+disk\","
+               "\"keyboard+mouse\"]}") != NULL);
+  CHECK(strstr(buf, "\"usb_disk\":true") != NULL);
   // Every element is comma-separated: "}{" would be two objects touching.
   CHECK(strstr(buf, "}{") == NULL);
 }
@@ -296,6 +380,7 @@ static void a_board_advertises_only_what_it_has(void) {
   CHECK(settings_json(&v, buf, sizeof(buf)) > 0);
   CHECK(strstr(buf, "\"settings\":[{\"key\":\"dbgtimeout\"") != NULL);
   CHECK(strstr(buf, "\"key\":\"screen\"") == NULL);
+  CHECK(strstr(buf, "\"key\":\"usb\"") == NULL);  // no USB device on the C3
 }
 
 static void a_current_value_out_of_range_reads_as_the_default(void) {
@@ -340,9 +425,11 @@ static void a_buffer_too_small_yields_nothing_rather_than_a_prefix(void) {
   CHECK_EQ_INT((long)settings_json(&v, buf, 8), 0);
   CHECK_EQ_STR(buf, "");
   // net.c's buffer must hold the biggest document any board serves; the
-  // LCD147 view above is that board. Pin it against a generous margin, so a
-  // grown catalogue fails here rather than as a 500 on the device.
-  CHECK(full < 1024 - 128);
+  // LCD147 view above is that board. Pin it against the same constant net.c
+  // sizes its buffer from, with margin, so a grown catalogue fails here
+  // rather than as a 500 on the device.
+  CHECK(full < SETTINGS_JSON_CAP - 128);
+  printf("  (LCD147 document: %zu of %d bytes)\n", full, SETTINGS_JSON_CAP);
 }
 
 int main(void) {
@@ -356,6 +443,10 @@ int main(void) {
   RUN(a_posted_range_is_accepted_only_within_its_bounds);
   RUN(a_body_naming_nothing_we_know_is_not_a_success);
   RUN(a_board_refuses_a_setting_for_a_thing_it_lacks);
+  RUN(the_usb_choice_offers_exactly_the_two_with_product_ids);
+  RUN(a_stored_choice_resolves_or_defaults);
+  RUN(a_posted_choice_is_accepted_only_if_offered);
+  RUN(restart_is_a_recognised_request_and_nothing_else);
   RUN(the_document_is_whole_and_balanced);
   RUN(a_board_advertises_only_what_it_has);
   RUN(a_current_value_out_of_range_reads_as_the_default);
