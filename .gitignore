@@ -48,11 +48,18 @@ managed_components/
 # stayed tracked, so nothing broke, and `git check-ignore` on a tracked file
 # reports "not ignored" and hides it. `git check-ignore --no-index` is what
 # shows the truth; use it when touching these lines.
+#
+# Enumerated, not globbed. `!/firmware/tools/*/sdkconfig.defaults` would work
+# today and would also re-allow the file for every tool directory added later —
+# which is the deny-all-then-re-allow rule above defeating itself, since the
+# whole point is that a new target must be added deliberately rather than
+# inherited. Adding a sixth means adding a line here, on purpose.
 sdkconfig*
 !/firmware/sdkconfig.defaults
 !/firmware/sdkconfig.bench
 !/firmware/sdkconfig.lcd147
-!/firmware/tools/*/sdkconfig.defaults
+!/firmware/tools/i2c_scan/sdkconfig.defaults
+!/firmware/tools/led_scan/sdkconfig.defaults
 dependencies.lock
 *.bin
 *.elf
