@@ -5,6 +5,40 @@
 
 #include "form.h"
 
+void settings_ranges_for_board(struct settings_range out[SETTINGS_RANGE_COUNT],
+                               bool has_screen, bool has_led) {
+  out[SETTINGS_RANGE_SCREEN] = (struct settings_range){
+      .key = "screen",
+      .label = "Screen brightness",
+      .unit = "%",
+      .min = SETTINGS_SCREEN_MIN,
+      .max = SETTINGS_SCREEN_MAX,
+      .step = 5,
+      .def = SETTINGS_SCREEN_DEFAULT,
+      .present = has_screen,
+  };
+  out[SETTINGS_RANGE_LED] = (struct settings_range){
+      .key = "led",
+      .label = "Status LED brightness",
+      .unit = "%",
+      .min = SETTINGS_LED_MIN,
+      .max = SETTINGS_LED_MAX,
+      .step = 5,
+      .def = SETTINGS_LED_DEFAULT,
+      .present = has_led,
+  };
+  out[SETTINGS_RANGE_DEBUG_TIMEOUT] = (struct settings_range){
+      .key = "dbgtimeout",
+      .label = "Keystroke display auto-off",
+      .unit = "s",
+      .min = SETTINGS_DEBUG_TIMEOUT_MIN_S,
+      .max = SETTINGS_DEBUG_TIMEOUT_MAX_S,
+      .step = 10,
+      .def = SETTINGS_DEBUG_TIMEOUT_MAX_S,
+      .present = true,  // every board has the button and the row
+  };
+}
+
 int settings_theme_index(const struct settings_catalog *c, const char *name) {
   if (c == NULL || name == NULL) {
     return -1;
@@ -23,6 +57,33 @@ int settings_resolve_theme(const struct settings_catalog *c,
   return i >= 0 ? i : c->theme_default;
 }
 
+int settings_resolve_range(const struct settings_catalog *c,
+                           enum settings_range_id id, int stored, bool have) {
+  const struct settings_range *r = &c->ranges[id];
+  if (have && stored >= r->min && stored <= r->max) {
+    return stored;
+  }
+  return r->def;
+}
+
+// A plain decimal integer and nothing else: no sign, no spaces, no suffix. The
+// values here are all non-negative, and "10%" or " 10" from a hand-written
+// request should be a 400 rather than a guess.
+static bool parse_uint(const char *s, int *out) {
+  if (*s == '\0' || strlen(s) > 6) {
+    return false;
+  }
+  int v = 0;
+  for (; *s; s++) {
+    if (*s < '0' || *s > '9') {
+      return false;
+    }
+    v = v * 10 + (*s - '0');
+  }
+  *out = v;
+  return true;
+}
+
 enum settings_parse_result settings_parse_form(const struct settings_catalog *c,
                                                const char *body, size_t len,
                                                struct settings_update *out) {
@@ -30,6 +91,9 @@ enum settings_parse_result settings_parse_form(const struct settings_catalog *c,
     return SETTINGS_PARSE_BAD;
   }
   struct settings_update scratch = {.theme = -1};
+  for (int i = 0; i < SETTINGS_RANGE_COUNT; i++) {
+    scratch.range[i] = -1;
+  }
   bool any = false;
 
   size_t pos = 0;
@@ -48,6 +112,23 @@ enum settings_parse_result settings_parse_form(const struct settings_catalog *c,
       }
       scratch.theme = i;
       any = true;
+      continue;
+    }
+    for (int i = 0; i < SETTINGS_RANGE_COUNT; i++) {
+      const struct settings_range *r = &c->ranges[i];
+      if (!form_key_is(&p, r->key)) {
+        continue;
+      }
+      char text[8];
+      int v;
+      if (!r->present ||
+          form_decode(p.value, p.value_len, text, sizeof(text)) < 1 ||
+          !parse_uint(text, &v) || v < r->min || v > r->max) {
+        return SETTINGS_PARSE_BAD;
+      }
+      scratch.range[i] = v;
+      any = true;
+      break;
     }
     // Unknown keys are ignored: a page from a newer image may post more.
   }
@@ -125,6 +206,11 @@ static void jw_key(struct jw *w, const char *k) {
   jw_char(w, ':');
 }
 
+static void jw_kv_str(struct jw *w, const char *k, const char *v) {
+  jw_key(w, k);
+  jw_str(w, v);
+}
+
 size_t settings_json(const struct settings_view *v, char *buf, size_t cap) {
   if (v == NULL || buf == NULL || cap == 0) {
     return 0;
@@ -136,20 +222,16 @@ size_t settings_json(const struct settings_view *v, char *buf, size_t cap) {
   jw_raw(&w, "{");
   jw_key(&w, "identity");
   jw_raw(&w, "{");
-  jw_key(&w, "board");
-  jw_str(&w, v->id.board);
+  jw_kv_str(&w, "board", v->id.board);
   jw_raw(&w, ",");
-  jw_key(&w, "chip");
-  jw_str(&w, v->id.chip);
+  jw_kv_str(&w, "chip", v->id.chip);
   jw_raw(&w, ",");
   jw_key(&w, "flash_mb");
   jw_int(&w, (long)v->id.flash_mb);
   jw_raw(&w, ",");
-  jw_key(&w, "fw");
-  jw_str(&w, v->id.fw);
+  jw_kv_str(&w, "fw", v->id.fw);
   jw_raw(&w, ",");
-  jw_key(&w, "idf");
-  jw_str(&w, v->id.idf);
+  jw_kv_str(&w, "idf", v->id.idf);
   jw_raw(&w, "},");
 
   jw_key(&w, "features");
@@ -173,8 +255,7 @@ size_t settings_json(const struct settings_view *v, char *buf, size_t cap) {
   jw_key(&w, "backlight");
   jw_bool(&w, v->feat.backlight);
   jw_raw(&w, ",");
-  jw_key(&w, "led");
-  jw_str(&w, v->feat.led);
+  jw_kv_str(&w, "led", v->feat.led);
   jw_raw(&w, ",");
   jw_key(&w, "sdcard");
   jw_bool(&w, v->feat.sdcard);
@@ -188,25 +269,21 @@ size_t settings_json(const struct settings_view *v, char *buf, size_t cap) {
   // current value, and what it may become.
   jw_key(&w, "settings");
   jw_raw(&w, "[");
+  bool emitted = false;
   if (has_themes) {
     const int cur = (v->theme >= 0 && v->theme < cat->theme_count)
                         ? v->theme
                         : cat->theme_default;
     jw_raw(&w, "{");
-    jw_key(&w, "key");
-    jw_str(&w, "theme");
+    jw_kv_str(&w, "key", "theme");
     jw_raw(&w, ",");
-    jw_key(&w, "label");
-    jw_str(&w, "Panel theme");
+    jw_kv_str(&w, "label", "Panel theme");
     jw_raw(&w, ",");
-    jw_key(&w, "scope");
-    jw_str(&w, "device");
+    jw_kv_str(&w, "scope", "device");
     jw_raw(&w, ",");
-    jw_key(&w, "type");
-    jw_str(&w, "enum");
+    jw_kv_str(&w, "type", "enum");
     jw_raw(&w, ",");
-    jw_key(&w, "value");
-    jw_str(&w, cat->themes[cur]);
+    jw_kv_str(&w, "value", cat->themes[cur]);
     jw_raw(&w, ",");
     jw_key(&w, "values");
     jw_raw(&w, "[");
@@ -217,6 +294,49 @@ size_t settings_json(const struct settings_view *v, char *buf, size_t cap) {
       jw_str(&w, cat->themes[i]);
     }
     jw_raw(&w, "]}");
+    emitted = true;
+  }
+  if (cat != NULL) {
+    for (int i = 0; i < SETTINGS_RANGE_COUNT; i++) {
+      const struct settings_range *r = &cat->ranges[i];
+      if (!r->present) {
+        continue;
+      }
+      // The value in the view comes from settings.c's own state; the document
+      // is honest even if that state is ever wrong — never a value the page
+      // cannot select.
+      int cur = v->range_value[i];
+      if (cur < r->min || cur > r->max) {
+        cur = r->def;
+      }
+      if (emitted) {
+        jw_raw(&w, ",");
+      }
+      jw_raw(&w, "{");
+      jw_kv_str(&w, "key", r->key);
+      jw_raw(&w, ",");
+      jw_kv_str(&w, "label", r->label);
+      jw_raw(&w, ",");
+      jw_kv_str(&w, "unit", r->unit);
+      jw_raw(&w, ",");
+      jw_kv_str(&w, "scope", "device");
+      jw_raw(&w, ",");
+      jw_kv_str(&w, "type", "range");
+      jw_raw(&w, ",");
+      jw_key(&w, "value");
+      jw_int(&w, cur);
+      jw_raw(&w, ",");
+      jw_key(&w, "min");
+      jw_int(&w, r->min);
+      jw_raw(&w, ",");
+      jw_key(&w, "max");
+      jw_int(&w, r->max);
+      jw_raw(&w, ",");
+      jw_key(&w, "step");
+      jw_int(&w, r->step);
+      jw_raw(&w, "}");
+      emitted = true;
+    }
   }
   jw_raw(&w, "]}");
 

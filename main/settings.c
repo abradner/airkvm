@@ -10,8 +10,10 @@
 #include "esp_idf_version.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "indicator.h"
 #include "nvs.h"
 #include "settings_schema.h"
+#include "status.h"
 #include "wifi.h"  // airkvm_nvs_init
 #if BOARD_HAS_PALETTE
 #include "theme.h"
@@ -33,12 +35,15 @@ static const char *TAG = "settings";
 // All state below is written on the main task (settings_init) before the
 // HTTP server exists, and thereafter only on the single esp_http_server task.
 // No lock, and that single-task assumption is load-bearing: a second server
-// serving /settings would need one.
+// serving /settings would need one. s_range[SCREEN] is the exception — read
+// by ui_task every tick — and an aligned int store is atomic on every target
+// here, so a reader sees the old value or the new one, never a mix.
 #if BOARD_HAS_PALETTE
 static const char *s_theme_names[DISPLAY_THEME_COUNT];
 #endif
 static struct settings_catalog s_cat;
 static int s_theme;
+static int s_range[SETTINGS_RANGE_COUNT];
 static int64_t s_last_write_us;
 
 static void catalog_build(void) {
@@ -57,6 +62,10 @@ static void catalog_build(void) {
   s_cat.theme_count = 0;
   s_cat.theme_default = 0;
 #endif
+  // Screen brightness exists wherever there is a panel: a backlight on the
+  // LCD, the contrast register on the OLED (display.h). LED brightness needs
+  // a LED.
+  settings_ranges_for_board(s_cat.ranges, BOARD_HAS_DISPLAY, BOARD_HAS_LED);
 }
 
 static void apply_theme(int index) {
@@ -67,22 +76,29 @@ static void apply_theme(int index) {
 #endif
 }
 
+// Pushes one range setting to its consumer. Screen brightness has no push:
+// ui_task pulls it (settings_screen_brightness), because the setup-mode
+// override lives there.
+static void apply_range(enum settings_range_id id, int value) {
+  switch (id) {
+    case SETTINGS_RANGE_LED:
+      indicator_set_brightness(value);
+      break;
+    case SETTINGS_RANGE_DEBUG_TIMEOUT:
+      status_set_debug_timeout_ms((uint32_t)value * 1000u);
+      break;
+    case SETTINGS_RANGE_SCREEN:
+    default:
+      break;
+  }
+}
+
 // Reads the stored theme name into `out`; false when there is none, or it is
 // unreadable, or the namespace has never been written. Every one of those is
 // "use the default", so they are not distinguished beyond the log.
-static bool read_theme(char *out, size_t cap) {
-  nvs_handle_t h;
-  esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &h);
-  if (err == ESP_ERR_NVS_NOT_FOUND) {
-    return false;  // fresh flash: nothing was ever written
-  }
-  if (err != ESP_OK) {
-    ESP_LOGW(TAG, "nvs_open: %s — using defaults", esp_err_to_name(err));
-    return false;
-  }
+static bool read_theme(nvs_handle_t h, char *out, size_t cap) {
   size_t len = cap;
-  err = nvs_get_str(h, KEY_THEME, out, &len);
-  nvs_close(h);
+  const esp_err_t err = nvs_get_str(h, KEY_THEME, out, &len);
   if (err == ESP_ERR_NVS_NOT_FOUND) {
     return false;
   }
@@ -96,16 +112,18 @@ static bool read_theme(char *out, size_t cap) {
   return true;
 }
 
-static esp_err_t write_theme(const char *name) {
-  nvs_handle_t h;
-  ESP_RETURN_ON_ERROR(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h), TAG,
-                      "nvs_open");
-  esp_err_t err = nvs_set_str(h, KEY_THEME, name);
+static bool read_u16(nvs_handle_t h, const char *key, int *out) {
+  uint16_t v;
+  const esp_err_t err = nvs_get_u16(h, key, &v);
   if (err == ESP_OK) {
-    err = nvs_commit(h);
+    *out = v;
+    return true;
   }
-  nvs_close(h);
-  return err;
+  if (err != ESP_ERR_NVS_NOT_FOUND) {
+    ESP_LOGW(TAG, "stored %s unreadable (%s) — using default", key,
+             esp_err_to_name(err));
+  }
+  return false;
 }
 
 esp_err_t settings_init(void) {
@@ -114,22 +132,57 @@ esp_err_t settings_init(void) {
   ESP_RETURN_ON_ERROR(airkvm_nvs_init(), TAG, "nvs init failed");
   catalog_build();
 
+  nvs_handle_t h = 0;
+  esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &h);
+  const bool opened = err == ESP_OK;
+  if (!opened && err != ESP_ERR_NVS_NOT_FOUND) {
+    // NOT_FOUND is a fresh flash and says nothing; anything else is worth a
+    // line, and either way every setting resolves to its default below.
+    ESP_LOGW(TAG, "nvs_open: %s — using defaults", esp_err_to_name(err));
+  }
+
   char stored[SETTINGS_THEME_NAME_MAX + 1];
-  const bool have = read_theme(stored, sizeof(stored));
-  s_theme = settings_resolve_theme(&s_cat, have ? stored : NULL);
+  const bool have_theme = opened && read_theme(h, stored, sizeof(stored));
+  s_theme = settings_resolve_theme(&s_cat, have_theme ? stored : NULL);
   if (s_cat.theme_count > 0) {
-    if (have && settings_theme_index(&s_cat, stored) < 0) {
+    if (have_theme && settings_theme_index(&s_cat, stored) < 0) {
       // Left in place deliberately: a later image may know it, and rewriting
       // it here would be a flash write to destroy information.
       ESP_LOGW(TAG, "stored theme \"%s\" unknown to this image — using %s",
                stored, s_cat.themes[s_theme]);
     } else {
       ESP_LOGI(TAG, "theme: %s (%s)", s_cat.themes[s_theme],
-               have ? "stored" : "default");
+               have_theme ? "stored" : "default");
     }
     apply_theme(s_theme);
   }
+
+  for (int i = 0; i < SETTINGS_RANGE_COUNT; i++) {
+    const struct settings_range *r = &s_cat.ranges[i];
+    int v = 0;
+    const bool have = opened && r->present && read_u16(h, r->key, &v);
+    s_range[i] =
+        settings_resolve_range(&s_cat, (enum settings_range_id)i, v, have);
+    if (!r->present) {
+      continue;
+    }
+    if (have && s_range[i] != v) {
+      ESP_LOGW(TAG, "stored %s=%d outside %d..%d — using %d (left in place)",
+               r->key, v, r->min, r->max, s_range[i]);
+    } else {
+      ESP_LOGI(TAG, "%s: %d%s (%s)", r->key, s_range[i], r->unit,
+               have ? "stored" : "default");
+    }
+    apply_range((enum settings_range_id)i, s_range[i]);
+  }
+  if (opened) {
+    nvs_close(h);
+  }
   return ESP_OK;
+}
+
+int settings_screen_brightness(void) {
+  return s_range[SETTINGS_RANGE_SCREEN];
 }
 
 size_t settings_document(char *buf, size_t cap) {
@@ -137,7 +190,7 @@ size_t settings_document(char *buf, size_t cap) {
   if (esp_flash_get_size(NULL, &flash_bytes) != ESP_OK) {
     flash_bytes = 0;  // reported as 0 rather than guessed
   }
-  const struct settings_view v = {
+  struct settings_view v = {
       .id =
           {
               .board = BOARD_NAME,
@@ -164,6 +217,7 @@ size_t settings_document(char *buf, size_t cap) {
       .cat = &s_cat,
       .theme = s_theme,
   };
+  memcpy(v.range_value, s_range, sizeof(v.range_value));
   return settings_json(&v, buf, cap);
 }
 
@@ -177,23 +231,64 @@ enum settings_apply_result settings_apply_form(const char *body, size_t len) {
     default:
       return SETTINGS_BAD_REQUEST;
   }
-  if (u.theme == s_theme) {
+
+  const bool theme_changed = u.theme >= 0 && u.theme != s_theme;
+  bool range_changed[SETTINGS_RANGE_COUNT];
+  bool any = theme_changed;
+  for (int i = 0; i < SETTINGS_RANGE_COUNT; i++) {
+    range_changed[i] = u.range[i] >= 0 && u.range[i] != s_range[i];
+    any = any || range_changed[i];
+  }
+  if (!any) {
     return SETTINGS_UNCHANGED;
   }
   const int64_t now = esp_timer_get_time();
   if (s_last_write_us != 0 && now - s_last_write_us < MIN_WRITE_INTERVAL_US) {
     return SETTINGS_TOO_SOON;
   }
-  // RAM and panel first, flash second: the visible effect never waits on a
-  // flash erase, and a failed write is reported rather than hidden.
-  s_theme = u.theme;
-  apply_theme(s_theme);
+
+  // RAM and consumers first, flash second: the visible effect never waits on
+  // a flash erase, and a failed write is reported rather than hidden.
+  if (theme_changed) {
+    s_theme = u.theme;
+    apply_theme(s_theme);
+  }
+  for (int i = 0; i < SETTINGS_RANGE_COUNT; i++) {
+    if (range_changed[i]) {
+      s_range[i] = u.range[i];
+      apply_range((enum settings_range_id)i, s_range[i]);
+    }
+  }
   s_last_write_us = now;
-  const esp_err_t err = write_theme(s_cat.themes[s_theme]);
+
+  nvs_handle_t h;
+  esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h);
+  if (err == ESP_OK) {
+    if (theme_changed) {
+      err = nvs_set_str(h, KEY_THEME, s_cat.themes[s_theme]);
+    }
+    for (int i = 0; err == ESP_OK && i < SETTINGS_RANGE_COUNT; i++) {
+      if (range_changed[i]) {
+        err = nvs_set_u16(h, s_cat.ranges[i].key, (uint16_t)s_range[i]);
+      }
+    }
+    if (err == ESP_OK) {
+      err = nvs_commit(h);
+    }
+    nvs_close(h);
+  }
   if (err != ESP_OK) {
-    ESP_LOGE(TAG, "storing theme failed: %s", esp_err_to_name(err));
+    ESP_LOGE(TAG, "storing settings failed: %s", esp_err_to_name(err));
     return SETTINGS_STORE_FAILED;
   }
-  ESP_LOGI(TAG, "theme: %s (stored)", s_cat.themes[s_theme]);
+  if (theme_changed) {
+    ESP_LOGI(TAG, "theme: %s (stored)", s_cat.themes[s_theme]);
+  }
+  for (int i = 0; i < SETTINGS_RANGE_COUNT; i++) {
+    if (range_changed[i]) {
+      ESP_LOGI(TAG, "%s: %d%s (stored)", s_cat.ranges[i].key, s_range[i],
+               s_cat.ranges[i].unit);
+    }
+  }
   return SETTINGS_APPLIED;
 }

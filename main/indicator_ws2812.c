@@ -112,6 +112,18 @@ static void emit(uint8_t r, uint8_t g, uint8_t b) {
   // until the next tick is three orders of magnitude longer than that.
 }
 
+static volatile int s_brightness = 100;
+
+void indicator_set_brightness(int percent) {
+  if (percent < 0) {
+    percent = 0;
+  }
+  if (percent > 100) {
+    percent = 100;
+  }
+  s_brightness = percent;
+}
+
 // Rounds rather than truncates: at these levels an off-by-one code is a
 // visible step, and truncation loses one consistently on every channel.
 static void scale(uint8_t *r, uint8_t *g, uint8_t *b, int level) {
@@ -257,6 +269,9 @@ enum indicator_state indicator_tick(const struct status_snapshot *snap) {
     b = (uint8_t)((b * (100 - mix) + dbg[2] * mix) / 100);
   }
 
+  // The operator's ceiling, applied last so the blip and the breath keep
+  // their shape underneath it.
+  level = (level * s_brightness) / 100;
   scale(&r, &g, &b, level);
   emit(r, g, b);
   return state;

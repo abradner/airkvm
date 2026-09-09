@@ -92,6 +92,15 @@ void display_set_hue(enum display_hue hue);
 struct display_theme;
 void display_set_theme(const struct display_theme *theme);
 
+// Panel brightness, percent, from any task; parked and applied at the next
+// flush for the same reason as the theme. What "brightness" drives is the
+// board's business — a PWM backlight on the LCD, the contrast register on the
+// OLED — and 100 is what each board shipped at, so the default is
+// byte-identical to the panel before this existed. The floor is not enforced
+// here: settings_schema.h refuses anything below SETTINGS_SCREEN_MIN on the
+// wire and defaults it from flash, and ui.c forces 100 in setup mode (R-009).
+void display_set_brightness(int percent);
+
 esp_err_t display_init(void);
 
 // True when init succeeded. Every draw call is a no-op otherwise, so a board

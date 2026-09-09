@@ -22,20 +22,26 @@
 // before display_init() is parked and painted at the first flush.
 esp_err_t settings_init(void);
 
+// The operator's panel brightness, percent. Read by ui_task every tick, which
+// is also where setup mode overrides it to full (R-009): the override lives
+// with the consumer so there is exactly one place that decides what the panel
+// is actually driven at.
+int settings_screen_brightness(void);
+
 // Writes the GET /settings document. Returns the length, or 0 if `cap` is too
 // small for the whole thing (see settings_json in settings_schema.h).
 size_t settings_document(char *buf, size_t cap);
 
 enum settings_apply_result {
-  SETTINGS_APPLIED,       // changed, applied, and stored
-  SETTINGS_UNCHANGED,     // already that value: no write, no rate-limit charge
-  SETTINGS_BAD_REQUEST,   // refused by the schema (400)
-  SETTINGS_TOO_SOON,      // a write landed less than a second ago (429)
+  SETTINGS_APPLIED,      // changed, applied, and stored
+  SETTINGS_UNCHANGED,    // already those values: no write, no rate-limit charge
+  SETTINGS_BAD_REQUEST,  // refused by the schema (400)
+  SETTINGS_TOO_SOON,     // a write landed less than a second ago (429)
   SETTINGS_STORE_FAILED,  // applied to RAM, but NVS refused it (500)
 };
 
 // Applies a POST /settings body. Runs on the HTTP task; the NVS commit is a
 // flash erase on that task and is bounded by the rate limit, which is what
 // stops an unauthenticated caller (R-001 applies here unchanged) from wearing
-// the partition out.
+// the partition out. Every changed key in one body is one commit.
 enum settings_apply_result settings_apply_form(const char *body, size_t len);

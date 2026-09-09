@@ -10,6 +10,9 @@ static SemaphoreHandle_t s_lock;
 static struct status_snapshot s_state;
 // When the button last turned debug mode on, for the R-006 expiry.
 static int64_t s_debug_enabled_at_us;
+// How long it stays on. Written under the lock by status_set_debug_timeout_ms
+// and never above the ceiling (status.h).
+static uint32_t s_debug_timeout_ms = STATUS_DEBUG_TIMEOUT_MS;
 
 #define LOCK() xSemaphoreTake(s_lock, portMAX_DELAY)
 #define UNLOCK() xSemaphoreGive(s_lock)
@@ -36,7 +39,8 @@ static void expire_debug_locked(void) {
   if (!s_state.debug) {
     return;
   }
-  if (!status_debug_is_expired(s_debug_enabled_at_us, esp_timer_get_time())) {
+  if (!status_debug_is_expired(s_debug_enabled_at_us, esp_timer_get_time(),
+                               s_debug_timeout_ms)) {
     return;
   }
   debug_off_locked();
@@ -135,6 +139,16 @@ void status_note_event(const char *describe) {
   if (s_state.debug && describe) {
     strlcpy(s_state.last_event, describe, sizeof(s_state.last_event));
   }
+  UNLOCK();
+}
+
+void status_set_debug_timeout_ms(uint32_t ms) {
+  LOCK();
+  s_debug_timeout_ms = status_debug_timeout_clamp(ms);
+  // A shorter window applies to a row that is already showing: if it has
+  // been on longer than the new limit, it goes off now rather than at the
+  // old deadline.
+  expire_debug_locked();
   UNLOCK();
 }
 

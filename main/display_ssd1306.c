@@ -178,6 +178,27 @@ void display_set_hue(enum display_hue hue) {
   (void)hue;
 }
 
+// Brightness on this panel is the SSD1306 contrast register (0x81). 0xCF is
+// what the init sequence has always set, so 100% is byte-identical to the
+// panel before this setting existed, and the floor the schema enforces keeps
+// it well above the value at which the OLED reads as off.
+static int s_brightness = 100;
+static volatile int s_pending_brightness = -1;
+
+void display_set_brightness(int percent) {
+  if (percent < 0) {
+    percent = 0;
+  }
+  if (percent > 100) {
+    percent = 100;
+  }
+  if (percent == s_brightness) {
+    return;  // called every tick by ui_task; only a change is parked
+  }
+  s_brightness = percent;
+  s_pending_brightness = percent;
+}
+
 void display_set_theme(const struct display_theme *theme) {
   // No palette to load into. settings.c never calls this on a board whose
   // BOARD_HAS_PALETTE is 0 — the catalogue it advertises is empty, so the
@@ -219,6 +240,16 @@ void display_bar(int col, int row, int width, int filled) {
 void display_flush(void) {
   if (!s_present) {
     return;
+  }
+  // Applied here, on the task that owns the I2C bus, like the LCD's theme:
+  // display.h's single-task rule covers the transport, not only the canvas.
+  const int brightness = s_pending_brightness;
+  if (brightness >= 0) {
+    s_pending_brightness = -1;
+    const uint8_t contrast[] = {0x81, (uint8_t)((0xCF * brightness) / 100)};
+    if (send_cmd(contrast, sizeof(contrast)) != ESP_OK) {
+      return;
+    }
   }
   for (int page = 0; page < PAGES; page++) {
     const uint8_t addr[] = {
@@ -276,6 +307,9 @@ void display_bar(int col, int row, int width, int filled) {
   (void)row;
   (void)width;
   (void)filled;
+}
+void display_set_brightness(int percent) {
+  (void)percent;
 }
 void display_flush(void) {}
 
