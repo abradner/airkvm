@@ -447,6 +447,25 @@ add rather than rewrite.
   same rule wants applying to any shell command you then reason from. Grep for the thing you care
   about instead of eyeballing a truncated list, and if you must truncate, say so in the sentence
   that reports the result.
+- **Merging a stacked PR with `--delete-branch` CLOSES the PR stacked on top of it.** GitHub does
+  not retarget a pull request whose base branch disappears; it closes it, and it then refuses both
+  `gh pr reopen` ("Could not open the pull request") and `gh pr edit --base` ("Cannot change the
+  base branch of a closed pull request"). The branch and its commits survive, so the work is not
+  lost — but the PR, its review history and its comment thread are, and the only way forward is a
+  fresh PR. Cost one PR in a three-deep stack on 2026-09-09.
+  **Retarget every child to `main` BEFORE merging its parent**, not after:
+  `gh pr edit <child> --base main`, confirm with `gh pr view <child> --json baseRefName`, and only
+  then merge the parent. Check the confirmation rather than the exit code — the failing
+  `gh pr edit` in that incident was inside an `&& echo` whose silence went unnoticed, which is the
+  shell-guard entry above biting a third time.
+  Second half of the same trap, and it is not optional either: after a **squash** merge the child
+  still carries the parent's individual commits while `main` has one squashed commit of the same
+  content, so the child reads as CONFLICTING even though nothing really disagrees. Merging `main`
+  into the child with `-X ours` is correct **only** once you have shown the child is a content
+  superset — `git log --oneline origin/main --not <child>` should list nothing but the parent's
+  squash commit — and the check that it worked is that the child's tree hash is *unchanged* by the
+  merge (`git rev-parse HEAD^{tree}` before and after). A changed tree there means the resolution
+  silently dropped something from `main`.
 - **`mise run lint` passing is not evidence CI's lint passes: they run different clang-format
   versions.** `mise.toml` pins `clang-format = "19"`; `.github/workflows/ci.yml` runs
   `apt-get install -y clang-format`, which on the `ubuntu-latest` image is whatever Ubuntu ships
