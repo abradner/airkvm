@@ -70,7 +70,13 @@ static void catalog_build(void) {
   // LCD, the contrast register on the OLED (display.h). LED brightness needs
   // a LED.
   settings_ranges_for_board(s_cat.ranges, BOARD_HAS_DISPLAY, BOARD_HAS_LED);
-#if CONFIG_AIRKVM_HID_BACKEND_USB
+// The composition is a choice only where there are two of them. That needs a
+// USB device controller AND mass storage compiled in: the 0.42" dongle's
+// image has TINYUSB_MSC_ENABLED off entirely, so "keyboard+mouse+disk" is not
+// a thing it could present however the setting is stored. Offering it there
+// would be exactly the implied support §4 forbids — and it did, until this
+// was found on the board rather than in review (2026-09-09).
+#if CONFIG_AIRKVM_HID_BACKEND_USB && CONFIG_TINYUSB_MSC_ENABLED
   settings_choices_for_board(s_cat.choices, true);
 #else
   settings_choices_for_board(s_cat.choices, false);
@@ -228,7 +234,15 @@ esp_err_t settings_init(void) {
 }
 
 bool settings_usb_disk_enabled(void) {
+#if CONFIG_TINYUSB_MSC_ENABLED
   return s_choice_running[SETTINGS_CHOICE_USB] == SETTINGS_USB_WITH_DISK;
+#else
+  // No mass storage in this image at all, so there is no disk to enable and
+  // the stored value cannot conjure one. Reported as false so the document
+  // and the hardware agree: the OLED dongle was advertising usb_disk=true
+  // while serving no media socket, which is how this was noticed.
+  return false;
+#endif
 }
 
 static void restart_now(void *arg) {

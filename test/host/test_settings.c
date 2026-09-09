@@ -31,6 +31,8 @@ static enum settings_parse_result parse(const struct settings_catalog *c,
   return settings_parse_form(c, body, strlen(body), u);
 }
 
+static struct settings_view view(const struct settings_catalog *c);
+
 static struct settings_update untouched(void) {
   struct settings_update u = {.theme = 99, .restart = true};
   for (int i = 0; i < SETTINGS_RANGE_COUNT; i++) {
@@ -217,6 +219,29 @@ static void a_board_refuses_a_setting_for_a_thing_it_lacks(void) {
 }
 
 // --- the USB composition: a reboot-scoped choice --------------------------------
+
+// A board can have a USB device controller and still have no disk to offer:
+// the 0.42" dongle's image is built without TINYUSB_MSC_ENABLED, so there is
+// exactly one composition and therefore no choice. Offering one would be a
+// control that provably does nothing (AGENTS.md §4) — which is what shipped
+// to that board on 2026-09-09 and was caught on the hardware, not here.
+static void a_board_without_mass_storage_offers_no_composition(void) {
+  struct settings_catalog no_msc = {.themes = NULL, .theme_count = 0};
+  settings_ranges_for_board(no_msc.ranges, true, false);
+  settings_choices_for_board(no_msc.choices, false);
+  CHECK(!no_msc.choices[SETTINGS_CHOICE_USB].present);
+  struct settings_update u = untouched();
+  CHECK_EQ_INT(parse(&no_msc, "usb=keyboard%2Bmouse", &u), SETTINGS_PARSE_BAD);
+  CHECK_EQ_INT(parse(&no_msc, "usb=keyboard%2Bmouse%2Bdisk", &u),
+               SETTINGS_PARSE_BAD);
+  CHECK_EQ_INT(u.choice[SETTINGS_CHOICE_USB], 99);
+  char buf[2048];
+  struct settings_view v = view(&no_msc);
+  v.feat.usb_disk = false;
+  CHECK(settings_json(&v, buf, sizeof(buf)) > 0);
+  CHECK(strstr(buf, "\"key\":\"usb\"") == NULL);
+  CHECK(strstr(buf, "\"usb_disk\":false") != NULL);
+}
 
 static void the_usb_choice_offers_exactly_the_two_with_product_ids(void) {
   const struct settings_choice *ch = &CAT.choices[SETTINGS_CHOICE_USB];
@@ -444,6 +469,7 @@ int main(void) {
   RUN(a_body_naming_nothing_we_know_is_not_a_success);
   RUN(a_board_refuses_a_setting_for_a_thing_it_lacks);
   RUN(the_usb_choice_offers_exactly_the_two_with_product_ids);
+  RUN(a_board_without_mass_storage_offers_no_composition);
   RUN(a_stored_choice_resolves_or_defaults);
   RUN(a_posted_choice_is_accepted_only_if_offered);
   RUN(restart_is_a_recognised_request_and_nothing_else);
