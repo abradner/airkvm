@@ -9,6 +9,7 @@
 #include "esp_flash.h"
 #include "esp_idf_version.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "indicator.h"
 #include "nvs.h"
@@ -44,7 +45,10 @@ static const char *s_theme_names[DISPLAY_THEME_COUNT];
 static struct settings_catalog s_cat;
 static int s_theme;
 static int s_range[SETTINGS_RANGE_COUNT];
+static int s_choice[SETTINGS_CHOICE_COUNT];          // stored
+static int s_choice_running[SETTINGS_CHOICE_COUNT];  // in effect since boot
 static int64_t s_last_write_us;
+static esp_timer_handle_t s_restart_timer;
 
 static void catalog_build(void) {
 #if BOARD_HAS_PALETTE
@@ -66,6 +70,17 @@ static void catalog_build(void) {
   // LCD, the contrast register on the OLED (display.h). LED brightness needs
   // a LED.
   settings_ranges_for_board(s_cat.ranges, BOARD_HAS_DISPLAY, BOARD_HAS_LED);
+// The composition is a choice only where there are two of them. That needs a
+// USB device controller AND mass storage compiled in: the 0.42" dongle's
+// image has TINYUSB_MSC_ENABLED off entirely, so "keyboard+mouse+disk" is not
+// a thing it could present however the setting is stored. Offering it there
+// would be exactly the implied support §4 forbids — and it did, until this
+// was found on the board rather than in review (2026-09-09).
+#if CONFIG_AIRKVM_HID_BACKEND_USB && CONFIG_TINYUSB_MSC_ENABLED
+  settings_choices_for_board(s_cat.choices, true);
+#else
+  settings_choices_for_board(s_cat.choices, false);
+#endif
 }
 
 static void apply_theme(int index) {
@@ -110,6 +125,21 @@ static bool read_theme(nvs_handle_t h, char *out, size_t cap) {
     return false;
   }
   return true;
+}
+
+// A stored choice value, or false when absent/unreadable (both "default").
+static bool read_choice(nvs_handle_t h, const char *key, char *out,
+                        size_t cap) {
+  size_t len = cap;
+  const esp_err_t err = nvs_get_str(h, key, out, &len);
+  if (err == ESP_OK) {
+    return true;
+  }
+  if (err != ESP_ERR_NVS_NOT_FOUND) {
+    ESP_LOGW(TAG, "stored %s unreadable (%s) — using default", key,
+             esp_err_to_name(err));
+  }
+  return false;
 }
 
 static bool read_u16(nvs_handle_t h, const char *key, int *out) {
@@ -175,10 +205,74 @@ esp_err_t settings_init(void) {
     }
     apply_range((enum settings_range_id)i, s_range[i]);
   }
+  for (int i = 0; i < SETTINGS_CHOICE_COUNT; i++) {
+    const struct settings_choice *ch = &s_cat.choices[i];
+    char name[SETTINGS_THEME_NAME_MAX + 1];
+    const bool have =
+        opened && ch->present && read_choice(h, ch->key, name, sizeof(name));
+    s_choice[i] = settings_resolve_choice(&s_cat, (enum settings_choice_id)i,
+                                          have ? name : NULL);
+    // What runs is what was stored at boot, resolved. The stored value may
+    // move later; this one does not until the next boot.
+    s_choice_running[i] = s_choice[i];
+    if (!ch->present) {
+      continue;
+    }
+    if (have &&
+        settings_choice_index(&s_cat, (enum settings_choice_id)i, name) < 0) {
+      ESP_LOGW(TAG, "stored %s=\"%s\" unknown to this image — using %s",
+               ch->key, name, ch->values[s_choice[i]]);
+    } else {
+      ESP_LOGI(TAG, "%s: %s (%s)", ch->key, ch->values[s_choice[i]],
+               have ? "stored" : "default");
+    }
+  }
   if (opened) {
     nvs_close(h);
   }
   return ESP_OK;
+}
+
+bool settings_usb_disk_enabled(void) {
+#if CONFIG_TINYUSB_MSC_ENABLED
+  return s_choice_running[SETTINGS_CHOICE_USB] == SETTINGS_USB_WITH_DISK;
+#else
+  // No mass storage in this image at all, so there is no disk to enable and
+  // the stored value cannot conjure one. Reported as false so the document
+  // and the hardware agree: the OLED dongle was advertising usb_disk=true
+  // while serving no media socket, which is how this was noticed.
+  return false;
+#endif
+}
+
+static void restart_now(void *arg) {
+  (void)arg;
+  ESP_LOGW(TAG, "restarting to apply the stored USB composition");
+  esp_restart();
+}
+
+// A restart is scheduled rather than done: the reply carrying the document
+// has to reach the browser first, and this runs on the HTTP task that would
+// send it. 750 ms is the same "one more beat so the reply is on the wire"
+// that setup_mode.c uses before it restarts.
+static esp_err_t schedule_restart(void) {
+  if (s_restart_timer == NULL) {
+    const esp_timer_create_args_t args = {.callback = restart_now,
+                                          .name = "settings_restart"};
+    ESP_RETURN_ON_ERROR(esp_timer_create(&args, &s_restart_timer), TAG,
+                        "restart timer");
+  }
+  return esp_timer_start_once(s_restart_timer, 750 * 1000);
+}
+
+static bool restart_pending(void) {
+  for (int i = 0; i < SETTINGS_CHOICE_COUNT; i++) {
+    if (s_cat.choices[i].present && s_cat.choices[i].apply != NULL &&
+        s_choice[i] != s_choice_running[i]) {
+      return true;
+    }
+  }
+  return false;
 }
 
 int settings_screen_brightness(void) {
@@ -210,14 +304,18 @@ size_t settings_document(char *buf, size_t cap) {
               .sdcard = BOARD_HAS_SDCARD,
 #if CONFIG_AIRKVM_HID_BACKEND_USB
               .usb_device = true,
+              .usb_disk = settings_usb_disk_enabled(),
 #else
               .usb_device = false,
+              .usb_disk = false,
 #endif
           },
       .cat = &s_cat,
       .theme = s_theme,
   };
   memcpy(v.range_value, s_range, sizeof(v.range_value));
+  memcpy(v.choice_value, s_choice, sizeof(v.choice_value));
+  memcpy(v.choice_running, s_choice_running, sizeof(v.choice_running));
   return settings_json(&v, buf, cap);
 }
 
@@ -234,12 +332,28 @@ enum settings_apply_result settings_apply_form(const char *body, size_t len) {
 
   const bool theme_changed = u.theme >= 0 && u.theme != s_theme;
   bool range_changed[SETTINGS_RANGE_COUNT];
+  bool choice_changed[SETTINGS_CHOICE_COUNT];
   bool any = theme_changed;
   for (int i = 0; i < SETTINGS_RANGE_COUNT; i++) {
     range_changed[i] = u.range[i] >= 0 && u.range[i] != s_range[i];
     any = any || range_changed[i];
   }
+  for (int i = 0; i < SETTINGS_CHOICE_COUNT; i++) {
+    choice_changed[i] = u.choice[i] >= 0 && u.choice[i] != s_choice[i];
+    any = any || choice_changed[i];
+  }
   if (!any) {
+    if (u.restart) {
+      // A bare restart: honoured only when a reboot-scoped change is waiting,
+      // so it cannot be used to knock the keyboard off the target for sport.
+      // (Setting the composition first and then restarting is still open to
+      // the same caller — R-001 — and is at least a state change.)
+      if (!restart_pending()) {
+        return SETTINGS_BAD_REQUEST;
+      }
+      return schedule_restart() == ESP_OK ? SETTINGS_RESTARTING
+                                          : SETTINGS_STORE_FAILED;
+    }
     return SETTINGS_UNCHANGED;
   }
   const int64_t now = esp_timer_get_time();
@@ -259,6 +373,11 @@ enum settings_apply_result settings_apply_form(const char *body, size_t len) {
       apply_range((enum settings_range_id)i, s_range[i]);
     }
   }
+  for (int i = 0; i < SETTINGS_CHOICE_COUNT; i++) {
+    if (choice_changed[i]) {
+      s_choice[i] = u.choice[i];  // reboot-scoped: nothing to apply now
+    }
+  }
   s_last_write_us = now;
 
   nvs_handle_t h;
@@ -270,6 +389,12 @@ enum settings_apply_result settings_apply_form(const char *body, size_t len) {
     for (int i = 0; err == ESP_OK && i < SETTINGS_RANGE_COUNT; i++) {
       if (range_changed[i]) {
         err = nvs_set_u16(h, s_cat.ranges[i].key, (uint16_t)s_range[i]);
+      }
+    }
+    for (int i = 0; err == ESP_OK && i < SETTINGS_CHOICE_COUNT; i++) {
+      if (choice_changed[i]) {
+        err = nvs_set_str(h, s_cat.choices[i].key,
+                          s_cat.choices[i].values[s_choice[i]]);
       }
     }
     if (err == ESP_OK) {
@@ -289,6 +414,16 @@ enum settings_apply_result settings_apply_form(const char *body, size_t len) {
       ESP_LOGI(TAG, "%s: %d%s (stored)", s_cat.ranges[i].key, s_range[i],
                s_cat.ranges[i].unit);
     }
+  }
+  for (int i = 0; i < SETTINGS_CHOICE_COUNT; i++) {
+    if (choice_changed[i]) {
+      ESP_LOGI(TAG, "%s: %s (stored; takes effect at the next boot)",
+               s_cat.choices[i].key, s_cat.choices[i].values[s_choice[i]]);
+    }
+  }
+  if (u.restart && restart_pending()) {
+    return schedule_restart() == ESP_OK ? SETTINGS_RESTARTING
+                                        : SETTINGS_STORE_FAILED;
   }
   return SETTINGS_APPLIED;
 }

@@ -81,12 +81,60 @@ void settings_ranges_for_board(struct settings_range out[SETTINGS_RANGE_COUNT],
 // What this image can offer. A board with no palette advertises zero themes,
 // and the page then shows no theme control — the OLED dongle is not given a
 // setting that provably does nothing (AGENTS.md §4, implied support).
+// --- choice settings -----------------------------------------------------------
+//
+// An enumerated setting whose values are fixed strings, like the theme but
+// with one difference the page has to know about: `apply`. A choice marked
+// "reboot" is stored now and takes effect at the next boot, and the document
+// carries both the stored value and the RUNNING one so the page can say
+// "restart to apply" honestly rather than pretending the change happened.
+//
+// USB composition is the first. Two compositions, because those are the two
+// that already have Espressif product IDs (hid_out_usb.c: hosts cache
+// descriptors per VID/PID, so each interface set needs its own): the full
+// keyboard+mouse+disk, and keyboard+mouse alone — the latter being, as it
+// happens, the exact descriptor that was verified on hardware first. A
+// keyboard-only composition needs a PID decision and is tracked, not offered.
+enum settings_choice_id {
+  SETTINGS_CHOICE_USB,
+  SETTINGS_CHOICE_COUNT,
+};
+
+#define SETTINGS_USB_WITH_DISK 0  // "keyboard+mouse+disk", the default
+#define SETTINGS_USB_HID_ONLY 1   // "keyboard+mouse"
+
+struct settings_choice {
+  const char *key;
+  const char *label;
+  const char *apply;  // NULL: live; "reboot": at the next boot
+  const char *const *values;
+  int count;
+  int def;
+  bool present;
+};
+
+void settings_choices_for_board(
+    struct settings_choice out[SETTINGS_CHOICE_COUNT], bool usb_device);
+
+// What this image can offer. A board with no palette advertises zero themes,
+// and the page then shows no theme control — the OLED dongle is not given a
+// setting that provably does nothing (AGENTS.md §4, implied support).
 struct settings_catalog {
   const char *const *themes;  // kebab-case names, theme_count of them
   int theme_count;
   int theme_default;  // index: the fresh-flash value (Kconfig chooses it)
   struct settings_range ranges[SETTINGS_RANGE_COUNT];
+  struct settings_choice choices[SETTINGS_CHOICE_COUNT];
 };
+
+// Exact-value lookup within one choice; -1 when absent.
+int settings_choice_index(const struct settings_catalog *c,
+                          enum settings_choice_id id, const char *name);
+
+// The value a STORED choice resolves to: the match, or the default when the
+// value is NULL, empty, or names nothing this image has. Never -1.
+int settings_resolve_choice(const struct settings_catalog *c,
+                            enum settings_choice_id id, const char *stored);
 
 // Exact-name lookup; -1 when absent.
 int settings_theme_index(const struct settings_catalog *c, const char *name);
@@ -104,8 +152,13 @@ int settings_resolve_range(const struct settings_catalog *c,
                            enum settings_range_id id, int stored, bool have);
 
 struct settings_update {
-  int theme;                        // catalogue index, or -1 if not mentioned
-  int range[SETTINGS_RANGE_COUNT];  // value, or -1 if not mentioned
+  int theme;                          // catalogue index, or -1 if not mentioned
+  int range[SETTINGS_RANGE_COUNT];    // value, or -1 if not mentioned
+  int choice[SETTINGS_CHOICE_COUNT];  // value index, or -1 if not mentioned
+  // "restart=1": apply whatever reboot-scoped changes are stored, now. Only a
+  // request here; settings.c refuses it when nothing is pending, so it cannot
+  // serve as a bare restart button for anyone on the LAN (R-010).
+  bool restart;
 };
 
 enum settings_parse_result {
@@ -141,6 +194,7 @@ struct settings_features {
   const char *led;  // "none", "single", "rgb"
   bool sdcard;
   bool usb_device;  // native USB OTG: the board can be a keyboard
+  bool usb_disk;    // the RUNNING composition includes the disk interface
 };
 
 struct settings_view {
@@ -148,8 +202,18 @@ struct settings_view {
   struct settings_features feat;
   const struct settings_catalog *cat;
   int theme;  // current catalogue index; ignored when theme_count is 0
-  int range_value[SETTINGS_RANGE_COUNT];  // current values; ignored if absent
+  int range_value[SETTINGS_RANGE_COUNT];    // current values; ignored if absent
+  int choice_value[SETTINGS_CHOICE_COUNT];  // stored
+  int choice_running[SETTINGS_CHOICE_COUNT];  // in effect since boot
 };
+
+// The buffer the device serves the document from, and therefore the size the
+// biggest document any board produces must stay under with margin. One number,
+// here, so net.c's buffer and the host test that pins the LCD147's document
+// against it cannot drift apart. Static BSS on the device; 1.5 KB is the
+// cost of every setting carrying its own bounds and labels, which is what
+// lets the page render a setting it has never heard of.
+#define SETTINGS_JSON_CAP 1536
 
 // Serialises the view as the /settings JSON document. Returns the length
 // written (NUL not counted), or 0 when `cap` cannot hold the whole document:

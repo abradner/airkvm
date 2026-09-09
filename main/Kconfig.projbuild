@@ -210,6 +210,12 @@ config AIRKVM_OTA_TEST_URL
     string "OTA test image URL (throwaway, dev only)"
     default ""
     help
+        Ending in "/" makes it a DIRECTORY and each board pulls
+        <hostname>.bin from it, where <hostname> is AIRKVM_MDNS_HOSTNAME
+        above — so several dongles can poll one server without pulling each
+        other's firmware. Naming a file directly still works and is what a
+        single board wants.
+
         If set, polled every 60s once WiFi associates: each poll reads only
         the served image's header and compares it against the running image,
         downloading and rebooting into it only on a real difference. Proves

@@ -630,3 +630,11 @@ body.soft dialog.settings {
 body.soft dialog.settings select {
   width: 100%;
 }
+
+.scope-note button.danger {
+  width: auto;
+  display: inline-block;
+  margin: 0.2rem 0 0;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.75rem;
+}

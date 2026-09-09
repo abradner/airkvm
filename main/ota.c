@@ -1,5 +1,6 @@
 #include "ota.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_app_desc.h"
@@ -12,6 +13,39 @@
 #include "status.h"
 
 static const char *TAG = "ota";
+
+// The image this board pulls. If AIRKVM_OTA_TEST_URL names a file, that file
+// is used as-is. If it ends in '/', it is a DIRECTORY and the board appends
+// its own mDNS hostname plus ".bin" — so two dongles polling one server pull
+// two different images.
+//
+// That is not a convenience. Both boards defaulted to the same hostname and
+// therefore the same URL, and on 2026-09-09 an OLED image was found being
+// served to an LCD board 700 times: the OTA path compares image hashes, sees
+// a difference, and applies it, so "the wrong board is listening" is not a
+// near miss, it is a flash. Deriving the name from the hostname makes the
+// collision impossible rather than a thing to remember, and the hostname is
+// already the name each board answers to (mDNS), so branding a board renames
+// its firmware with it.
+static char s_url[192];
+
+static const char *image_url(void) {
+  if (s_url[0] != '\0') {
+    return s_url;
+  }
+  const char *base = CONFIG_AIRKVM_OTA_TEST_URL;
+  const size_t n = strlen(base);
+  if (n == 0) {
+    return base;  // disabled; ota_task never gets here
+  }
+  if (base[n - 1] != '/') {
+    snprintf(s_url, sizeof(s_url), "%s", base);
+  } else {
+    snprintf(s_url, sizeof(s_url), "%s%s.bin", base,
+             CONFIG_AIRKVM_MDNS_HOSTNAME);
+  }
+  return s_url;
+}
 
 // How often the poll loop checks AIRKVM_OTA_TEST_URL for a different image.
 // Board-initiated, same as the one-shot version — nothing here is reachable
@@ -76,7 +110,7 @@ static void poll_once(void) {
   // logged as "could not reach ... (ESP_ERR_INVALID_ARG)" — which looks like
   // a network problem and is not one.
   esp_http_client_config_t http_config = {
-      .url = CONFIG_AIRKVM_OTA_TEST_URL,
+      .url = image_url(),
       .timeout_ms = 15000,
       .keep_alive_enable = true,
   };
@@ -87,8 +121,8 @@ static void poll_once(void) {
   esp_https_ota_handle_t handle = NULL;
   esp_err_t err = esp_https_ota_begin(&ota_config, &handle);
   if (err != ESP_OK) {
-    ESP_LOGW(TAG, "ota poll: could not reach %s (%s)",
-             CONFIG_AIRKVM_OTA_TEST_URL, esp_err_to_name(err));
+    ESP_LOGW(TAG, "ota poll: could not reach %s (%s)", image_url(),
+             esp_err_to_name(err));
     return;
   }
 
@@ -115,8 +149,7 @@ static void poll_once(void) {
     return;
   }
 
-  ESP_LOGW(TAG, "ota poll: different image at %s — downloading",
-           CONFIG_AIRKVM_OTA_TEST_URL);
+  ESP_LOGW(TAG, "ota poll: different image at %s — downloading", image_url());
   do {
     err = esp_https_ota_perform(handle);
   } while (err == ESP_ERR_HTTPS_OTA_IN_PROGRESS);

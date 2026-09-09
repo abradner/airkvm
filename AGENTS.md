@@ -80,7 +80,7 @@ A conflict with a principle is a stop-and-check, never something to quietly work
 |---|---|---|
 | Firmware language | C (C11) | ESP-IDF v5.5, installed by `mise run setup` into `.esp-idf/` |
 | Target hardware | ESP32-S3 (`esp32s3` target) | ESP32-S3-0.42 OLED supermini; native USB OTG is non-negotiable (§4) |
-| USB stack | TinyUSB via `esp_tinyusb` | Composite: boot keyboard + relative mouse + a mass-storage LUN (`main/msc_out.c`) whose medium is a browser-held image streamed over `/ws-media` (`main/media_ws.c`, `main/block_source_browser.c`) or, on the LCD147 board, the microSD card (`main/msc_src_sd.c`). Advertises USB remote wakeup so the console can wake a suspended target. Keyboard delivery was verified on hardware 2026-09-04 as a two-interface device; the three-interface composite, media, and wakeup are unverified |
+| USB stack | TinyUSB via `esp_tinyusb` | Composite: boot keyboard + relative mouse, plus a mass-storage LUN (`main/msc_out.c`) when the stored USB composition includes it — the default; keyboard+mouse alone is the other, chosen from the console and applied at the next boot (`main/settings.c`, `settings_usb_disk_enabled`) whose medium is a browser-held image streamed over `/ws-media` (`main/media_ws.c`, `main/block_source_browser.c`) or, on the LCD147 board, the microSD card (`main/msc_src_sd.c`). Advertises USB remote wakeup so the console can wake a suspended target. Keyboard delivery was verified on hardware 2026-09-04 as a two-interface device; the three-interface composite, media, and wakeup are unverified |
 | Network | `esp_http_server` (WebSocket) + `mdns` | Single origin serves console, socket, and the device's settings document (`GET/POST /settings`, `main/settings.c`; the device describes itself and the page renders what it is told). Credentials come from the radio's NVS store first, Kconfig on a fresh flash; a 5 s BOOT hold reboots into a softAP captive portal to change them (`main/setup_mode.c`), which on the S3 is also served over a USB NCM network device (`main/usb_net.c`, no route, no DNS) |
 | Console | Vanilla HTML/CSS/JS, no build step | Embedded in firmware via `EMBED_FILES`; no npm, no bundler, no CDN |
 | Display | SSD1306 72×40 over I2C, or ST7789 172×320 over SPI | One backend per board behind `main/display.h` (`display_ssd1306.c` / `display_st7789.c`), sharing the drawing layer in `main/canvas.h`. Status only (IP, mDNS name, link state). Both confirmed on real hardware: the OLED's pins and 180° rotation on 2026-08-31, the ST7789's pins, orientation and gap on 2026-09-06. The LCD's four ink roles are coloured by a theme (`main/theme.h`) chosen at runtime from the console's settings panel and kept in NVS (`main/settings.c`); `CONFIG_AIRKVM_THEME_*` names only the fresh-flash default. A per-section hue (`main/display_hue.h`) resolves SECONDARY and ACCENT per 8-row band at flush, so the panel gets more than four colours without a third bit plane. The signal gauge's colour is the one that carries meaning, and its weak/healthy threshold is `indicator_link_is_weak` — shared with the LED so the two cannot disagree, not a second set of constants. Themes and hues are a no-op on the 1bpp OLED, and every colour's contrast ratio is asserted by `test/host/test_theme.c` rather than eyeballed |
@@ -447,6 +447,19 @@ add rather than rewrite.
   same rule wants applying to any shell command you then reason from. Grep for the thing you care
   about instead of eyeballing a truncated list, and if you must truncate, say so in the sentence
   that reports the result.
+- **`mise run lint` passing is not evidence CI's lint passes: they run different clang-format
+  versions.** `mise.toml` pins `clang-format = "19"`; `.github/workflows/ci.yml` runs
+  `apt-get install -y clang-format`, which on the `ubuntu-latest` image is whatever Ubuntu ships
+  (18 at the time of writing). The two disagree about continuation alignment inside multi-line
+  macros: a `#define` with `\`-continued designated initialisers was accepted by 19 and rejected
+  by 18, so a locally-green branch reddened CI on a file nothing else had touched. Two ways to
+  settle it, and the first is the real fix: **pin the CI install to the same version mise does**,
+  so there is one formatter rather than two. Until then, code that avoids `\`-continued macros is
+  code neither version can argue about, and a suspect file can be checked against the other
+  version without waiting for CI — `pip install clang-format==18.1.8` into a throwaway venv ships
+  a binary wheel and takes seconds. General form: **a linter whose version is pinned in one place
+  and floating in another is two linters, and green from the pinned one proves nothing about the
+  floating one.**
 - **`main/indicator.c`'s LED body compiles on the C3 bench board and NOWHERE else — so the two S3
   builds are not coverage for it.** `BOARD_HAS_LED` is 1 on the C3, **0** on the S3 0.42" dongle,
   and 1 on the LCD147 — but the LCD147 selects `indicator_ws2812.c` instead

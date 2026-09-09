@@ -42,6 +42,7 @@
 #include "protocol.h"
 #include "session.h"
 #include "settings.h"
+#include "settings_schema.h"
 #include "status.h"
 #include "wifi.h"
 
@@ -107,9 +108,8 @@ static esp_err_t style_css_get(httpd_req_t *req) {
 // A static buffer rather than the stack: the TLS server task has stack to
 // spare, but the plain-HTTP build's default is 4KB, and the one server task
 // serialises requests, so there is never a second document in flight.
-#define SETTINGS_DOC_CAP 1024
 #define SETTINGS_BODY_MAX 256
-static char s_settings_doc[SETTINGS_DOC_CAP];
+static char s_settings_doc[SETTINGS_JSON_CAP];
 
 static esp_err_t send_settings_doc(httpd_req_t *req) {
   const size_t n = settings_document(s_settings_doc, sizeof(s_settings_doc));
@@ -117,7 +117,7 @@ static esp_err_t send_settings_doc(httpd_req_t *req) {
     // The document did not fit, which is a build-time mistake (the buffer is
     // sized for this image's catalogue), not a runtime condition. Say so
     // rather than serve a prefix the page would parse as a broken object.
-    ESP_LOGE(TAG, "settings document exceeds %d bytes", SETTINGS_DOC_CAP);
+    ESP_LOGE(TAG, "settings document exceeds %d bytes", SETTINGS_JSON_CAP);
     httpd_resp_set_status(req, "500 Internal Server Error");
     return httpd_resp_send(req, "settings document too large",
                            HTTPD_RESP_USE_STRLEN);
@@ -157,8 +157,11 @@ static esp_err_t settings_post(httpd_req_t *req) {
   switch (settings_apply_form(body, got)) {
     case SETTINGS_APPLIED:
     case SETTINGS_UNCHANGED:
+    case SETTINGS_RESTARTING:
       // The whole document back, so the page re-renders from what the device
-      // now holds rather than from what it asked for.
+      // now holds rather than from what it asked for. RESTARTING is the same
+      // reply: the restart is scheduled for after it is on the wire, and the
+      // page learns of it the way it learns of any restart — the socket drops.
       return send_settings_doc(req);
     case SETTINGS_TOO_SOON:
       return send_plain_status(req, "429 Too Many Requests",
@@ -646,10 +649,18 @@ esp_err_t net_start(void) {
   // The media socket is its own server instance (media_ws.h). Not fatal:
   // a console without mass-storage media is still a console, and saying so
   // beats taking the keyboard down with it.
-  const esp_err_t media_err = media_ws_start();
-  if (media_err != ESP_OK) {
-    ESP_LOGE(TAG, "media socket failed to start (%s) — no disk image support",
-             esp_err_to_name(media_err));
+  // Only in a composition that has the disk interface (settings.c): a socket
+  // that accepted an image the target could never see would be a lie the
+  // page has no way to detect. The port simply is not open, and the page
+  // hides the section from the same fact (features.usb_disk).
+  if (!settings_usb_disk_enabled()) {
+    ESP_LOGI(TAG, "media socket not started: disk interface is off this boot");
+  } else {
+    const esp_err_t media_err = media_ws_start();
+    if (media_err != ESP_OK) {
+      ESP_LOGE(TAG, "media socket failed to start (%s) — no disk image support",
+               esp_err_to_name(media_err));
+    }
   }
 #endif
   return ESP_OK;

@@ -1472,8 +1472,42 @@ function renderSetting(s) {
     postSetting(s.key, value);
   });
   wrap.append(input);
+  // A setting that takes effect at the next boot says so, and offers the
+  // restart only while the stored value differs from the running one — the
+  // device refuses a bare restart anyway (R-010); this is the page agreeing.
+  if (s.apply === "reboot") {
+    const note = document.createElement("p");
+    note.className = "scope-note";
+    if (s.running !== undefined && s.running !== s.value) {
+      note.textContent = `Running: ${s.running}. Takes effect after a restart. `;
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "danger";
+      btn.textContent = "Restart now";
+      btn.addEventListener("click", () => postSetting("restart", "1"));
+      note.append(btn);
+    } else {
+      note.textContent = "Takes effect after a restart.";
+    }
+    wrap.append(note);
+  }
   return wrap;
 }
+
+// Feature flags the page acts on outside the dialog. Fetched once at load —
+// PR 1 fetched only on open, but "is there a disk interface this boot" decides
+// whether the Disk image section exists at all, and a section that lets you
+// attach an image the target can never see is a lie the page must not tell.
+function applyFeatures(doc) {
+  const f = (doc && doc.features) || {};
+  const disk = document.getElementById("disk");
+  if (disk) disk.hidden = f.usb_disk === false;
+}
+
+fetch("/settings", { cache: "no-store" })
+  .then((r) => (r.ok ? r.json() : null))
+  .then((doc) => doc && applyFeatures(doc))
+  .catch(() => {});
 
 function renderSettings(doc) {
   renderDetails(doc);
@@ -1512,8 +1546,10 @@ async function postSetting(key, value) {
       cache: "no-store",
     });
     if (r.ok) {
-      renderSettings(await r.json());
-      settingsStatus("saved", "ok");
+      const doc = await r.json();
+      renderSettings(doc);
+      applyFeatures(doc);
+      settingsStatus(key === "restart" ? "restarting\u2026" : "saved", "ok");
       return;
     }
     // The device says why in plain text (400, 429, 500); show it and re-read

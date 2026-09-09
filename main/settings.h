@@ -11,6 +11,7 @@
 // normal NOT_FOUND path rather than a parse failure inside a blob.
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 
 #include "esp_err.h"
@@ -28,6 +29,12 @@ esp_err_t settings_init(void);
 // is actually driven at.
 int settings_screen_brightness(void);
 
+// Whether the USB composition IN EFFECT SINCE BOOT includes the disk
+// interface. Reboot-scoped: the stored value can differ until the next boot,
+// and this is the one hid_out_usb.c, the SD probe and the media socket act
+// on, so the descriptor, the LUN and everything that feeds it agree.
+bool settings_usb_disk_enabled(void);
+
 // Writes the GET /settings document. Returns the length, or 0 if `cap` is too
 // small for the whole thing (see settings_json in settings_schema.h).
 size_t settings_document(char *buf, size_t cap);
@@ -38,6 +45,7 @@ enum settings_apply_result {
   SETTINGS_BAD_REQUEST,  // refused by the schema (400)
   SETTINGS_TOO_SOON,     // a write landed less than a second ago (429)
   SETTINGS_STORE_FAILED,  // applied to RAM, but NVS refused it (500)
+  SETTINGS_RESTARTING,    // stored, and a restart is scheduled (200, then gone)
 };
 
 // Applies a POST /settings body. Runs on the HTTP task; the NVS commit is a
