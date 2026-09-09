@@ -102,12 +102,16 @@ static inline enum indicator_state indicator_state_for(
   // setup_active is true. Ranked the other way round, the light would report a
   // healthy keyboard about a device that is a network adapter — and worse, it
   // would say so on the one channel the operator trusts to mean "your input is
-  // reaching the target". The panel has the same bug for the same reason;
-  // see issue #55.
+  // reaching the target". The panel does NOT have the matching bug, though
+  // the symmetry is inviting: ui_task selects draw_setup ahead of draw(), so
+  // the row is never rendered in this mode (#55, closed as not-a-bug).
   if (s->setup_active) {
     return INDICATOR_SETUP;
   }
-  if (!s->wifi_connected || !s->usb_mounted) {
+  // The USB half on its own, and first: no keyboard attached is a fault
+  // whatever the network is doing, and it must not be masked by the WARN
+  // below.
+  if (!s->usb_mounted) {
     return INDICATOR_FAULT;
   }
   // No credentials at all: not a fault, because nothing is broken and the
@@ -115,8 +119,19 @@ static inline enum indicator_state indicator_state_for(
   // already means "works as far as it can, and here is why it is not doing
   // what you expected". A stable boolean set once at boot, so it cannot
   // flicker against the RSSI hysteresis below.
+  //
+  // This has to outrank the link check rather than sit under it, and that is
+  // the whole of the bug an earlier version of this file had: wifi_start()
+  // calls status_set_no_credentials() and returns before esp_wifi_start(), so
+  // wifi_connected is *always* false in this state. A combined
+  // "!wifi_connected || !usb_mounted" test therefore returned FAULT on every
+  // real no-credentials boot and this branch was unreachable — red for the one
+  // condition whose cause is known and whose remedy is already on the screen.
   if (s->no_credentials) {
     return INDICATOR_WARN;
+  }
+  if (!s->wifi_connected) {
+    return INDICATOR_FAULT;
   }
   // Ranked above WARN deliberately: if the target is asleep AND the link is
   // weak, being asleep is the thing actually stopping you. Note usb_mounted

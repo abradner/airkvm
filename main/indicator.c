@@ -132,7 +132,7 @@ enum indicator_state indicator_tick(const struct status_snapshot *snap) {
   // suspended blink and unlike the breathe of a bound session.
   if (state == INDICATOR_SETUP) {
     set_percent(((now / 1000000) % 2) ? 100 : 10);
-    return;
+    return state;
   }
   if (state == INDICATOR_SUSPENDED) {
     set_percent(((now / 250000) % 2) ? 60 : 0);

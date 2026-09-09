@@ -423,6 +423,21 @@ add rather than rewrite.
   same rule wants applying to any shell command you then reason from. Grep for the thing you care
   about instead of eyeballing a truncated list, and if you must truncate, say so in the sentence
   that reports the result.
+- **`main/indicator.c`'s LED body compiles on the C3 bench board and NOWHERE else — so the two S3
+  builds are not coverage for it.** `BOARD_HAS_LED` is 1 on the C3, **0** on the S3 0.42" dongle,
+  and 1 on the LCD147 — but the LCD147 selects `indicator_ws2812.c` instead
+  (`main/CMakeLists.txt`). So `mise run build` compiles the `#else` stub, `mise run build-lcd147`
+  compiles the other backend, and the whole `#if BOARD_HAS_LED` arm of `indicator.c` is built by
+  `mise run build-bench` alone. A session edited that arm, ran the two S3 builds, and wrote in a
+  PR body that this covered "both indicator backends" — the arm it had changed was compiled by
+  neither. The bug was a bare `return;` in a function returning `enum indicator_state`, which
+  `-Werror=all` catches as a hard error on the bench build in seconds, and which reached review
+  because that build was never run. (An automated reviewer then reported it as affecting the OLED
+  S3, which is also wrong, and for the same reason: it read the source without resolving the board
+  macros.) **General rule: run the build that compiles the lines you edited, and work that out
+  from the board macros rather than from which board the feature is "for".** This is §9 entry 8
+  from the build side — the board that cannot do the headline feature is again the one holding the
+  evidence.
 
 ## 7. CI & Deployment
 

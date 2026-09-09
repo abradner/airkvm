@@ -561,17 +561,20 @@ static void ui_task(void *arg) {
     }
 
     if (tick % DISPLAY_EVERY_TICKS == 0 && display_present()) {
-      // This order is load-bearing, not stylistic. draw() renders the target
+      // This chain is load-bearing, not stylistic. draw() renders the target
       // row from usb_mounted alone, and in setup mode the USB NCM device
       // enumerates, so usb_mounted is true while nothing that can type is
-      // attached — draw() would say "USB OK" about a network adapter. The line
-      // is safe only because draw_setup() runs first and clears the whole
-      // screen, NOT because anything downstream tests setup_active. So this is
-      // a positional guard: reordering these branches, or making draw_setup
-      // stop clearing, brings the bug back with nothing failing. The LED has
-      // the same hazard and solves it explicitly instead, by ranking
-      // INDICATOR_SETUP above the usb_mounted test (indicator.h). Filed and
-      // closed as #55 once the positional guard was confirmed to hold.
+      // attached — draw() would say "USB OK" about a network adapter. What
+      // stops it is the mutual exclusion right here: setup_active selects
+      // draw_setup, so draw() does not run at all. It is NOT draw_setup's
+      // display_clear() — that governs leftover content from before the mode
+      // began — and it is NOT a downstream test of setup_active, of which
+      // there is none. So only reordering or removing this branch brings the
+      // bug back, and nothing would fail if it did. The LED carries the
+      // identical hazard and answers it the other way, by ranking
+      // INDICATOR_SETUP above the usb_mounted test (indicator.h): worth
+      // contrasting, because one guard is structural and the other is a check.
+      // Investigated as #55, closed as not-a-bug once this chain was traced.
       if (s_hold_showing) {
         draw_hold(s_hold_fraction, s_hold_armed);
       } else if (snapshot.setup_active) {

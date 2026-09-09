@@ -150,20 +150,32 @@ static void setup_mode_outranks_everything(void) {
 // No credentials is WARN, not FAULT: nothing is broken, and the remedy is
 // printed on the panel.
 static void no_credentials_warns_rather_than_faults(void) {
+  // The production combination, and the only one that occurs: wifi_start()
+  // sets no_credentials and returns before esp_wifi_start(), so there is never
+  // a link, while HID starts regardless (airkvm_main.c, verified on the C3
+  // 2026-08-10). An earlier version of this test set exactly this state,
+  // asserted FAULT, and called the reachable case uninteresting — which made
+  // the WARN branch dead code that the suite then endorsed.
   struct status_snapshot s = healthy();
   s.no_credentials = true;
-  s.wifi_connected = false;  // a board with no credentials has no link...
-  // ...but no link is FAULT on its own, and that outranks WARN, so the
-  // interesting case is a board that somehow has a link and no stored
-  // credentials — assert the ranking explicitly rather than by implication.
+  s.wifi_connected = false;
+  CHECK_EQ_INT(indicator_state_for(&s, INDICATOR_IDLE), INDICATOR_WARN);
+
+  // It must not mask an absent target, which is why the USB half is checked
+  // ahead of it rather than beside the link.
+  s.usb_mounted = false;
   CHECK_EQ_INT(indicator_state_for(&s, INDICATOR_IDLE), INDICATOR_FAULT);
 
+  // A link that is down for any other reason is still a fault.
   s = healthy();
-  s.no_credentials = true;
-  CHECK_EQ_INT(indicator_state_for(&s, INDICATOR_IDLE), INDICATOR_WARN);
+  s.wifi_connected = false;
+  CHECK_EQ_INT(indicator_state_for(&s, INDICATOR_IDLE), INDICATOR_FAULT);
 
   // Stable across ticks: it is set once at boot, so it must not interact with
   // the RSSI hysteresis band.
+  s = healthy();
+  s.no_credentials = true;
+  s.wifi_connected = false;
   CHECK_EQ_INT(indicator_state_for(&s, INDICATOR_WARN), INDICATOR_WARN);
 }
 
