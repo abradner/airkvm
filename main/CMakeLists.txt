@@ -13,6 +13,9 @@ set(airkvm_srcs
     "setup_flag.c"
     "setup_mode.c"
     "provision.c"
+    "form.c"
+    "settings_schema.c"
+    "settings.c"
     "captive_dns.c"
     "ota.c"
     "logtap.c"
@@ -39,9 +42,13 @@ set(airkvm_srcs
 # and the C3 has no SDMMC host at all, but the requirement has to be visible
 # in the early pass. Both components register empty on targets without the
 # peripheral.
+# spi_flash is for settings.c's esp_flash_get_size(): the settings document
+# reports the MEASURED flash size, not the configured one, because the two can
+# disagree (a 4MB image on a 16MB part works and wastes 12MB, silently).
 set(airkvm_requires
     esp_http_server esp_https_server esp_wifi nvs_flash mdns driver esp_timer
-    esp_https_ota app_update esp_lcd esp_driver_rmt sdmmc esp_driver_sdmmc)
+    esp_https_ota app_update esp_lcd esp_driver_rmt sdmmc esp_driver_sdmmc
+    spi_flash)
 
 # Exactly one HID backend is compiled in (see main/hid_out.h). The USB backend
 # is only offered on targets with native USB OTG, so this never has to guard

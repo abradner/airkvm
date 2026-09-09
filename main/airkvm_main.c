@@ -8,6 +8,7 @@
 #include "hid_out.h"
 #include "http80.h"
 #include "logtap.h"
+#include "settings.h"
 #if CONFIG_AIRKVM_MSC_SD
 #include "msc_src_sd.h"
 #endif
@@ -25,6 +26,12 @@ void app_main(void) {
   // failure) for everything that follows rather than staying dark until the
   // network happens to come up.
   status_init();
+  // Stored preferences, before anything that could serve or paint them. The
+  // theme it applies is parked until the display's first flush, so this need
+  // not wait for the panel. Not fatal: a dongle with defaults is a dongle.
+  if (settings_init() != ESP_OK) {
+    ESP_LOGE(TAG, "settings unavailable — running on defaults");
+  }
   ui_start();
 
   // A 5 s BOOT hold in the previous run asked for setup mode (setup_flag.h).

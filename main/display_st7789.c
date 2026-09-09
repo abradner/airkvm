@@ -219,6 +219,12 @@ static uint32_t page_crc(const uint8_t *lo, const uint8_t *hi, int n,
 }
 static bool s_never_flushed = true;
 
+// A theme change parked by display_set_theme() until ui_task's next flush.
+// A pointer into display_themes[], which is const and static, so the value is
+// valid for as long as the image is; volatile because it is written from the
+// HTTP task and read here.
+static const struct display_theme *volatile s_pending_theme;
+
 static uint16_t *s_band;  // BAND_PIXELS entries, DMA-capable
 
 static struct canvas s_canvas = {
@@ -261,9 +267,9 @@ esp_err_t display_init(void) {
   // First, and unconditionally: every early return below leaves s_present
   // false so draws no-op, but a half-initialised palette would be a table of
   // zeroes, and zero is a valid colour rather than an obviously-broken one.
-  const struct display_theme *theme = &display_themes[DISPLAY_THEME_SELECTED];
+  const struct display_theme *theme = &display_themes[DISPLAY_THEME_DEFAULT];
   palette_load(theme);
-  ESP_LOGI(TAG, "theme: %s", theme->name);
+  ESP_LOGI(TAG, "theme: %s (build default)", theme->name);
 
   s_band_free = xSemaphoreCreateBinary();
   if (s_band_free == NULL) {
@@ -437,7 +443,23 @@ void display_bar(int col, int row, int width, int filled) {
   mark_bands(row * DISPLAY_CELL_H, DISPLAY_CELL_H);
 }
 
+void display_set_theme(const struct display_theme *theme) {
+  s_pending_theme = theme;
+}
+
 void display_flush(void) {
+  // A parked theme change is applied here, on this task, before the dirty
+  // check — see display_set_theme() in display.h for why it is not applied
+  // where it was requested. Forcing the full repaint is the substance: the CRC
+  // does not cover the palette, so with pixels unchanged every band would
+  // otherwise be skipped and the panel would keep its old colours.
+  const struct display_theme *pending = s_pending_theme;
+  if (pending != NULL) {
+    s_pending_theme = NULL;
+    palette_load(pending);
+    s_never_flushed = true;
+    ESP_LOGI(TAG, "theme: %s", pending->name);
+  }
   if (!s_present) {
     return;
   }
@@ -515,6 +537,9 @@ void display_bar(int col, int row, int width, int filled) {
   (void)row;
   (void)width;
   (void)filled;
+}
+void display_set_theme(const struct display_theme *theme) {
+  (void)theme;
 }
 void display_flush(void) {}
 
