@@ -1448,6 +1448,12 @@ function renderSetting(s) {
     input.max = s.max;
     input.step = s.step || 1;
     input.value = s.value;
+    const out = document.createElement("output");
+    out.textContent = `${s.value}${s.unit || ""}`;
+    label.append(" ", out);
+    input.addEventListener("input", () => {
+      out.textContent = `${input.value}${s.unit || ""}`;
+    });
   } else if (s.type === "bool") {
     input = document.createElement("input");
     input.type = "checkbox";

@@ -161,3 +161,9 @@ void indicator_init(void);
 // band does not wash out on the next tick — it latches, and the light and the
 // screen then disagree about the link indefinitely. One snapshot, one answer.
 enum indicator_state indicator_tick(const struct status_snapshot *s);
+
+// Overall LED brightness, percent, applied on top of whatever the policy
+// says: it scales the light, never the meaning. Written from the HTTP task
+// (settings.c), read on ui_task's tick; an aligned int store is atomic on
+// every target here. A no-op on a board with no LED.
+void indicator_set_brightness(int percent);

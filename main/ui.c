@@ -15,6 +15,7 @@
 #include "freertos/task.h"
 #include "hold_button.h"
 #include "indicator.h"
+#include "settings.h"
 #include "setup_flag.h"
 #include "status.h"
 #include "wifi.h"
@@ -559,6 +560,14 @@ static void ui_task(void *arg) {
         status_set_rssi((int8_t)ap.rssi);
       }
     }
+
+    // Setup mode's entire security argument is that someone is reading the
+    // panel (R-009: the passphrase on it is the proof of presence), so the
+    // operator's brightness never applies there. Decided here, by the
+    // consumer, so there is exactly one place that says what the panel is
+    // driven at; the backends only act on a change.
+    display_set_brightness(
+        snapshot.setup_active ? 100 : settings_screen_brightness());
 
     if (tick % DISPLAY_EVERY_TICKS == 0 && display_present()) {
       // This chain is load-bearing, not stylistic. draw() renders the target
