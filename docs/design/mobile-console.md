@@ -30,7 +30,7 @@ called `sendKey` directly without consulting `captured`.
 
 ## What was reused rather than rebuilt
 
-**`CHAR_MAP` (`web/app.js`) is the character → (`code`, shift) table.** It covers a–z, A–Z, 0–9,
+**`CHAR_MAP` (`packages/console/app.js`) is the character → (`code`, shift) table.** It covers a–z, A–Z, 0–9,
 and the full US punctuation set including shifted forms. The paste-box handler already walked a
 string through it, wrapped shifted characters in `ShiftLeft` down/up, refused unmapped characters
 wholesale rather than typing half of them, and paced at 8 ms. That path is now `pressKey` /
@@ -51,7 +51,7 @@ these. Modifiers are the one new attribute, `data-mod`, because they need to lat
 | Keyboard element | A visually hidden `<textarea rows=1>`, not an `<input>`. | Return in a single-line input is a submit gesture and fires no `beforeinput`; in a textarea it arrives as `insertLineBreak`. |
 | Character delivery | `beforeinput` with `preventDefault()`; the `input` handler only restores the box and reports leaks. | `beforeinput` says what happened (`insertText`, `deleteContentBackward`, `insertLineBreak`) instead of making the page infer it from a value diff, and cancelling it keeps the box fixed. The `input` handler never sends, so a browser that ignores the cancel can leave residue but cannot type twice. |
 | The box's contents | Always exactly one zero-width space, caret after it. | Backspace on an empty field fires no `beforeinput`; a space sentinel would trip iOS's double-space-to-period rewrite and type a Backspace on the target. |
-| Tap → click | `BUTTON 1`, dwell `TAP_CLICK_HOLD_MS`, `BUTTON 0`. | The dongle's report task drains every queued intent before emitting, and only keyboard intents are guarded against being applied on top of an unreported state (`main/hid_out_usb.c`, AGENTS.md §9 entry 19, issue #58). Two button frames inside the mouse endpoint's busy interval collapse into one report with nothing pressed. A human click never hit that. |
+| Tap → click | `BUTTON 1`, dwell `TAP_CLICK_HOLD_MS`, `BUTTON 0`. | The dongle's report task drains every queued intent before emitting, and only keyboard intents are guarded against being applied on top of an unreported state (`firmware/main/hid_out_usb.c`, AGENTS.md §9 entry 19, issue #58). Two button frames inside the mouse endpoint's busy interval collapse into one report with nothing pressed. A human click never hit that. |
 | Scroll direction | Natural (finger down → content down), behind `SCROLL_NATURAL`. | It is how the phone itself scrolls; the constant is the two-way door. |
 | What the phone hides | Video and the stage, and the disk image. Kept: macros, target/wake, sensitivity (doubles as trackpad gain), the paste box — the last three folded under "More". | A phone has no capture dongle; presenting boot media from a phone is a separate proposal. |
 
@@ -94,7 +94,7 @@ dongle deliberately released. A latched Shift is not wrapped a second time by `p
 ### 4. The session dies when the phone backgrounds — by design
 
 The console pings once a second and the device tears the session down after ~3 s of silence
-(`main/net.c`, `SESSION_TIMEOUT_MS`). A backgrounded mobile browser throttles timers, so
+(`firmware/main/net.c`, `SESSION_TIMEOUT_MS`). A backgrounded mobile browser throttles timers, so
 switching apps, taking a call or locking the screen ends the session. That is principle 4
 working: the device cannot distinguish "phone in a pocket" from "operator gone", and it prefers a
 spurious release-all to a held key.
@@ -108,15 +108,15 @@ a closed one, and the status line says which.
 
 An earlier version of this document said the protocol was one-directional. It no longer is: the
 dongle answers `WAKE` with `WAKE_RESULT` (0x80) and `STATUS_REQ` with `STATUS` (0x81)
-(`main/protocol.h`). It still sends no keystroke acknowledgement, no notice that a session is the
+(`firmware/main/protocol.h`). It still sends no keystroke acknowledgement, no notice that a session is the
 spectator rather than the owner (R-003), and no caps-lock or modifier read-back. So every
 indicator on the phone — the latch highlights, the dragging border — is a claim about what was
 *sent*, and is worded that way. Changing that is a protocol change and a separate proposal.
 
 ## Constants that are guesses
 
-All in one block at the top of `installSoftInput()` in `web/app.js`, each marked as unmeasured
-(principle 6). Tune them on a phone against a target with `tools/hid_listen.py --mouse` running,
+All in one block at the top of `installSoftInput()` in `packages/console/app.js`, each marked as unmeasured
+(principle 6). Tune them on a phone against a target with `firmware/tools/hid_listen.py --mouse` running,
 and record what was measured here (issue #59).
 
 | Constant | Start | What it does |
@@ -138,7 +138,7 @@ characters go out on `beforeinput` with no pacing, paste at the existing 8 ms pe
 
 ## Measured on hardware, 2026-09-08
 
-iPhone (iOS Safari) → dongle → Raspberry Pi target, read back with `tools/hid_listen.py` and a
+iPhone (iOS Safari) → dongle → Raspberry Pi target, read back with `firmware/tools/hid_listen.py` and a
 raw evdev transcript. Every line below is an observation, not a claim:
 
 - **Typing:** `hello, World! 123` + Return arrived exactly (18 of 18, `--expect` match), so
@@ -196,7 +196,7 @@ point where it matters:
 
 ## Verification
 
-- `tools/hid_listen.py --expect "…"` on the target for typed text; `tools/hid_listen.py --mouse`
+- `firmware/tools/hid_listen.py --expect "…"` on the target for typed text; `firmware/tools/hid_listen.py --mouse`
   for clicks, drags and wheel notches — so "typed on the phone, arrived on the target" is a
   machine check, and a button that goes down and never comes up is an exit code, not a thing
   someone has to notice.

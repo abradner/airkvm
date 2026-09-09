@@ -47,7 +47,7 @@
 // 16 KB, which makes a chunk exactly one DATA piece. Larger chunks amortise
 // the WiFi round trip over more USB reads, but every cache slot costs a chunk
 // of RAM, and until PSRAM is enabled the cache lives in internal RAM beside
-// two TLS sessions. The browser's copy of this number (web/app.js) ships in
+// two TLS sessions. The browser's copy of this number (packages/console/app.js) ships in
 // the same image, so the two cannot drift; raise both together with PSRAM.
 #define MEDIA_CHUNK_SIZE 16384u
 // The inbound TLS record payload (CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN, pinned in

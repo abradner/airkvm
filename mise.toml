@@ -1,4 +1,12 @@
-# Toolchain pins — run `mise install` before working in this repo.
+# Toolchain pins and tasks for the whole monorepo — run `mise install` first.
+#
+# Tasks are namespaced by tree, because a bare `build` in a repo holding
+# firmware, a Rails service and a marketing site names nothing:
+#   fw:*   firmware/       (ESP-IDF; every one runs with dir = "firmware")
+#   co:*   coordinator/    (Rails; not yet present)
+#   mk:*   marketing/      (Astro; not yet present)
+# The unnamespaced `test`, `lint` and `fmt` are umbrellas that run every tree's,
+# so "did I break anything" stays one command as trees are added.
 
 [tools]
 python = "3.14"
@@ -8,7 +16,7 @@ ruff = "0.9"
 clang-format = "19"
 
 # ESP-IDF itself is not a mise-managed tool: it is a git checkout plus its own
-# installer that fetches per-target compilers. `mise run setup` handles both and
+# installer that fetches per-target compilers. `mise run fw:setup` handles both and
 # is idempotent. IDF_PATH/IDF_TOOLS_PATH below point at that checkout.
 
 [env]
@@ -20,14 +28,15 @@ IDF_TOOLS_PATH = "{{config_root}}/.esp-idf-tools"
 # looks like a project bug rather than an env var. Each build carries its own.
 # Serial port for flashing. Written as a default-if-unset rather than a plain
 # value: mise's [env] overrides the inherited environment, so a bare assignment
-# silently ignores `PORT=... mise run flash` and flashes the wrong board — or,
+# silently ignores `PORT=... mise run fw:flash` and flashes the wrong board — or,
 # more confusingly, reports "port is busy" while naming a port you didn't ask
 # for. Overrides work per invocation:
-#   PORT=/dev/tty.usbmodem1101 mise run flash
-#   PORT=rfc2217://otherhost:4000 mise run flash-bench   (see tools/serial_bridge.py)
+#   PORT=/dev/tty.usbmodem1101 mise run fw:flash
+#   PORT=rfc2217://otherhost:4000 mise run fw:flash-bench  (firmware/tools/serial_bridge.py)
 PORT = "{{ env.PORT | default(value='/dev/ttyACM0') }}"
 
-[tasks.setup]
+[tasks."fw:setup"]
+dir = "firmware"
 shell = "bash -c"
 description = "Clone and install ESP-IDF v5.5 + toolchains (one-time, idempotent, ~4GB)"
 run = """
@@ -42,12 +51,14 @@ fi
 echo "ESP-IDF ready. Subsequent tasks source it automatically."
 """
 
-[tasks.config]
+[tasks."fw:config"]
+dir = "firmware"
 shell = "bash -c"
 description = "Open menuconfig (WiFi credentials live under the 'airkvm' menu)"
 run = '. "$IDF_PATH/export.sh" >/dev/null && idf.py menuconfig'
 
-[tasks.build]
+[tasks."fw:build"]
+dir = "firmware"
 shell = "bash -c"
 description = "Build the ESP32-S3 firmware image (the real dongle)"
 run = """
@@ -56,7 +67,8 @@ idf.py -B build \
   -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.local" build
 """
 
-[tasks.build-bench]
+[tasks."fw:build-bench"]
+dir = "firmware"
 shell = "bash -c"
 description = "Build the ESP32-C3 bench image — no USB HID, logs intents instead"
 # Separate build dir: switching IDF_TARGET in one directory forces a full
@@ -68,7 +80,8 @@ idf.py -B build-bench -DIDF_TARGET=esp32c3 \
   -DSDKCONFIG=sdkconfig.bench.generated build
 """
 
-[tasks.flash-bench]
+[tasks."fw:flash-bench"]
+dir = "firmware"
 shell = "bash -c"
 description = "Flash + monitor the ESP32-C3 bench board"
 run = """
@@ -76,7 +89,8 @@ run = """
 idf.py -B build-bench -DSDKCONFIG=sdkconfig.bench.generated -p "$PORT" flash monitor
 """
 
-[tasks.build-lcd147]
+[tasks."fw:build-lcd147"]
+dir = "firmware"
 shell = "bash -c"
 description = "Build the Waveshare ESP32-S3-LCD-1.47B image (ST7789, 16MB)"
 # Same shape as build-bench, minus -DIDF_TARGET: both S3 boards are esp32s3, so
@@ -91,7 +105,8 @@ idf.py -B build-lcd147 \
   -DSDKCONFIG=sdkconfig.lcd147.generated build
 """
 
-[tasks.flash-lcd147]
+[tasks."fw:flash-lcd147"]
+dir = "firmware"
 shell = "bash -c"
 description = "Flash + monitor the ESP32-S3-LCD-1.47B"
 run = """
@@ -99,39 +114,43 @@ run = """
 idf.py -B build-lcd147 -DSDKCONFIG=sdkconfig.lcd147.generated -p "$PORT" flash monitor
 """
 
-[tasks.flash]
+[tasks."fw:flash"]
+dir = "firmware"
 shell = "bash -c"
 description = "Flash and monitor (board must be in bootloader mode — see AGENTS.md §6.1)"
 run = '. "$IDF_PATH/export.sh" >/dev/null && idf.py -p "$PORT" flash monitor'
 
-[tasks.clean]
+[tasks."fw:clean"]
+dir = "firmware"
 shell = "bash -c"
 description = "Remove build artifacts"
 run = '. "$IDF_PATH/export.sh" >/dev/null && idf.py fullclean'
 
-[tasks.test]
+[tasks."fw:test"]
 description = "Host-side unit tests for pure logic (keymap, protocol) — no hardware needed"
-dir = "test/host"
+dir = "firmware/test/host"
 run = """
 cmake -B build -G Ninja
 cmake --build build
 ctest --test-dir build --output-on-failure
 """
 
-[tasks.lint]
+[tasks."fw:lint"]
+dir = "firmware"
 description = "Check formatting and lint (firmware C, tools Python)"
 run = """
 set -e
 # `-name build -prune` matters: CMake generates its own .c files under
-# test/host/build, and formatting those fails lint on any machine that has run
-# the tests. CI never saw it because a fresh checkout has no build dir.
+# firmware/test/host/build, and formatting those fails lint on any machine that
+# has run the tests. CI never saw it because a fresh checkout has no build dir.
 find main test -name build -prune -o \\( -name '*.c' -o -name '*.h' \\) -print \\
   | xargs -r clang-format --dry-run --Werror
 ruff check tools
 ruff format --check tools
 """
 
-[tasks.fmt]
+[tasks."fw:fmt"]
+dir = "firmware"
 description = "Apply formatting"
 run = """
 set -e
@@ -139,3 +158,25 @@ find main test -name build -prune -o \\( -name '*.c' -o -name '*.h' \\) -print \
   | xargs -r clang-format -i
 ruff format tools
 """
+
+# --- umbrellas ---------------------------------------------------------------
+# One entry per tree as trees land. Listed as `depends` rather than chained in a
+# shell: a chain reports the exit status of the last command in it, which is the
+# shape AGENTS.md §6.1 records twice as having eaten real work.
+#
+# They name what they actually cover rather than claiming "everything": today
+# packages/console has neither a linter nor a test runner, so an umbrella that
+# said "every tree" would be asserting coverage that does not exist (§2
+# principle 1). Add the entry in the same change that adds the tooling.
+
+[tasks.test]
+description = "Every tree that has tests (today: firmware)"
+depends = ["fw:test"]
+
+[tasks.lint]
+description = "Every tree that has a linter (today: firmware C + its Python)"
+depends = ["fw:lint"]
+
+[tasks.fmt]
+description = "Apply formatting in every tree that has a formatter (today: firmware)"
+depends = ["fw:fmt"]

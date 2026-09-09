@@ -119,10 +119,17 @@ endif()
 # compressed and handed to the browser as-is.
 #
 # Generated via a custom command rather than at configure time so that editing
-# web/ rebuilds the embedded copy. Baking it at configure time would silently
-# serve stale assets after every console edit, which is exactly the sort of
-# thing that eats an afternoon.
-set(WEB_SRC "${CMAKE_CURRENT_LIST_DIR}/../web")
+# the console rebuilds the embedded copy. Baking it at configure time would
+# silently serve stale assets after every console edit, which is exactly the
+# sort of thing that eats an afternoon.
+#
+# The console lives outside the firmware tree, in packages/console, because the
+# coordinator serves the same page (docs/design/fleet.md). A cache variable
+# rather than a literal so a consumer can point this at a staged copy without
+# editing the build.
+set(AIRKVM_CONSOLE_DIR "${CMAKE_CURRENT_LIST_DIR}/../../packages/console"
+    CACHE PATH "Directory holding the shared console assets")
+set(WEB_SRC "${AIRKVM_CONSOLE_DIR}")
 set(WEB_GZ "${CMAKE_CURRENT_BINARY_DIR}/web")
 file(MAKE_DIRECTORY "${WEB_GZ}")
 

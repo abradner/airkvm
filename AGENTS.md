@@ -23,6 +23,38 @@ the web page the dongle serves; a **combo** is a multi-key chord sent as one act
 Ctrl-Alt-Del); **release-all** is the safety action that clears every held key and mouse button
 on the target. "KVM" here means the K and M only — see the video note above.
 
+### Repository layout
+
+This repo holds more than the firmware. The trees, and what each is:
+
+| Tree | What | Toolchain |
+|---|---|---|
+| `firmware/` | The ESP-IDF firmware — `main/`, its host tests, its dev tools, its sdkconfigs | ESP-IDF v5.5, CMake/ninja |
+| `packages/console/` | The browser console the dongle serves. Shared, because the fleet coordinator will serve the same page (`docs/design/fleet.md`) | None — plain files, no build step (§4) |
+| `docs/` | Repo-wide: the boundary map and the design docs | — |
+
+Two more trees are coming and are not built yet: `coordinator/` (the fleet coordination service,
+a Rails app — `docs/design/fleet.md`) and `marketing/` (a static site). **The layout rule, stated
+because this repo had no convention for it and one was needed:** a deployable application gets a
+top-level directory; something two applications share goes under `packages/`. That is why the
+console sits in `packages/console` while the coordinator will not — it mirrors the sibling repo
+this shape is borrowed from. It is a proposal until reviewed; correct it here rather than in a
+PR thread if it is wrong.
+
+Everything below §3 currently describes the firmware, because until 2026-09-09 that was the whole
+repo. When the other trees land, this file splits so each tree carries its own §3/§4/§6 and only
+the cross-cutting rules stay here.
+
+Two structural facts worth knowing before you touch a path:
+
+- **`mise.toml` stays at the repo root and firmware tasks are namespaced `fw:`** (`mise run
+  fw:build`), each running with `dir = "firmware"`. It stayed at the root deliberately: mise
+  derives `IDF_PATH` from `{{config_root}}`, so moving it would have invalidated the `.esp-idf`
+  symlink in every existing worktree (§6.1).
+- **The console is outside the firmware tree**, reached by `AIRKVM_CONSOLE_DIR` in
+  `firmware/main/CMakeLists.txt`. It is still gzipped into the image at build time and served
+  from flash; nothing about the no-build-step rule changed.
+
 ## 2. Purpose & Principles
 
 **Purpose:** Make "I need to press some keys on that machine" a 30-second job — walk up, plug in,
@@ -78,15 +110,15 @@ A conflict with a principle is a stop-and-check, never something to quietly work
 
 | Layer | Technology | Notes |
 |---|---|---|
-| Firmware language | C (C11) | ESP-IDF v5.5, installed by `mise run setup` into `.esp-idf/` |
+| Firmware language | C (C11) | ESP-IDF v5.5, installed by `mise run fw:setup` into `.esp-idf/` |
 | Target hardware | ESP32-S3 (`esp32s3` target) | ESP32-S3-0.42 OLED supermini; native USB OTG is non-negotiable (§4) |
-| USB stack | TinyUSB via `esp_tinyusb` | Composite: boot keyboard + relative mouse + a mass-storage LUN (`main/msc_out.c`) whose medium is a browser-held image streamed over `/ws-media` (`main/media_ws.c`, `main/block_source_browser.c`) or, on the LCD147 board, the microSD card (`main/msc_src_sd.c`). Advertises USB remote wakeup so the console can wake a suspended target. Keyboard delivery was verified on hardware 2026-09-04 as a two-interface device; the three-interface composite, media, and wakeup are unverified |
-| Network | `esp_http_server` (WebSocket) + `mdns` | Single origin serves console and socket. Credentials come from the radio's NVS store first, Kconfig on a fresh flash; a 5 s BOOT hold reboots into a softAP captive portal to change them (`main/setup_mode.c`), which on the S3 is also served over a USB NCM network device (`main/usb_net.c`, no route, no DNS) |
+| USB stack | TinyUSB via `esp_tinyusb` | Composite: boot keyboard + relative mouse + a mass-storage LUN (`firmware/main/msc_out.c`) whose medium is a browser-held image streamed over `/ws-media` (`firmware/main/media_ws.c`, `firmware/main/block_source_browser.c`) or, on the LCD147 board, the microSD card (`firmware/main/msc_src_sd.c`). Advertises USB remote wakeup so the console can wake a suspended target. Keyboard delivery was verified on hardware 2026-09-04 as a two-interface device; the three-interface composite, media, and wakeup are unverified |
+| Network | `esp_http_server` (WebSocket) + `mdns` | Single origin serves console and socket. Credentials come from the radio's NVS store first, Kconfig on a fresh flash; a 5 s BOOT hold reboots into a softAP captive portal to change them (`firmware/main/setup_mode.c`), which on the S3 is also served over a USB NCM network device (`firmware/main/usb_net.c`, no route, no DNS) |
 | Console | Vanilla HTML/CSS/JS, no build step | Embedded in firmware via `EMBED_FILES`; no npm, no bundler, no CDN |
-| Display | SSD1306 72×40 over I2C, or ST7789 172×320 over SPI | One backend per board behind `main/display.h` (`display_ssd1306.c` / `display_st7789.c`), sharing the drawing layer in `main/canvas.h`. Status only (IP, mDNS name, link state). Both confirmed on real hardware: the OLED's pins and 180° rotation on 2026-08-31, the ST7789's pins, orientation and gap on 2026-09-06. The LCD's four ink roles are coloured by a build-time theme (`main/theme.h`, `CONFIG_AIRKVM_THEME_*`), and a per-section hue (`main/display_hue.h`) resolves SECONDARY and ACCENT per 8-row band at flush, so the panel gets more than four colours without a third bit plane. The signal gauge's colour is the one that carries meaning, and its weak/healthy threshold is `indicator_link_is_weak` — shared with the LED so the two cannot disagree, not a second set of constants. Themes and hues are a no-op on the 1bpp OLED, and every colour's contrast ratio is asserted by `test/host/test_theme.c` rather than eyeballed |
-| Host tooling | Python 3 (stdlib only) | `tools/poke.py` drives a dongle from a terminal; not shipped to users |
-| Testing | CMake/ctest + plain C assertions | Keymap, protocol codec, and HID state are pure and host-tested — `test/host/` |
-| Deployment | `idf.py flash` over USB-C | No shipping OTA path yet — `main/ota.c` is a throwaway, URL-gated dev test hook, empty (no-op) in every real build. See §7 |
+| Display | SSD1306 72×40 over I2C, or ST7789 172×320 over SPI | One backend per board behind `firmware/main/display.h` (`display_ssd1306.c` / `display_st7789.c`), sharing the drawing layer in `firmware/main/canvas.h`. Status only (IP, mDNS name, link state). Both confirmed on real hardware: the OLED's pins and 180° rotation on 2026-08-31, the ST7789's pins, orientation and gap on 2026-09-06. The LCD's four ink roles are coloured by a build-time theme (`firmware/main/theme.h`, `CONFIG_AIRKVM_THEME_*`), and a per-section hue (`firmware/main/display_hue.h`) resolves SECONDARY and ACCENT per 8-row band at flush, so the panel gets more than four colours without a third bit plane. The signal gauge's colour is the one that carries meaning, and its weak/healthy threshold is `indicator_link_is_weak` — shared with the LED so the two cannot disagree, not a second set of constants. Themes and hues are a no-op on the 1bpp OLED, and every colour's contrast ratio is asserted by `firmware/test/host/test_theme.c` rather than eyeballed |
+| Host tooling | Python 3 (stdlib only) | `firmware/tools/poke.py` drives a dongle from a terminal; not shipped to users |
+| Testing | CMake/ctest + plain C assertions | Keymap, protocol codec, and HID state are pure and host-tested — `firmware/test/host/` |
+| Deployment | `idf.py flash` over USB-C | No shipping OTA path yet — `firmware/main/ota.c` is a throwaway, URL-gated dev test hook, empty (no-op) in every real build. See §7 |
 
 ## 4. Critical Architectural Rules
 
@@ -100,12 +132,12 @@ into silicon — no amount of firmware makes them enumerate as a keyboard. Do no
 target, a `Kconfig` option, or a README line implying otherwise. (This cost a real evaluation
 round at design time: the C6 variant of this exact board was on the shortlist until the
 peripheral difference surfaced.) The intended path for non-OTG boards is a **CH9329 UART-to-HID
-module** sitting behind the same interface `main/usb_hid.h` defines — planned, not built. No
+module** sitting behind the same interface `firmware/main/usb_hid.h` defines — planned, not built. No
 such backend exists today and no doc should imply otherwise.
 
 ### One HID state owner; the socket layer never touches USB
 
-All USB HID reports originate from a single owner module (`main/hid_state.c`) that holds the
+All USB HID reports originate from a single owner module (`firmware/main/hid_state.c`) that holds the
 authoritative keyboard bitmap, modifier byte, and button mask. The WebSocket handler parses
 frames into intent structs and hands them over; it never calls `tud_hid_*` directly. Reports go
 out from one task, serialized through a queue.
@@ -120,10 +152,10 @@ Two things depend on this and would each be a real-world bug if it were violated
 
 ### One LUN owner; block sources and sockets never touch TinyUSB
 
-The HID rule above, applied to mass storage. `main/msc_lun.c` is the single owner of "is there a
+The HID rule above, applied to mass storage. `firmware/main/msc_lun.c` is the single owner of "is there a
 medium, how big, may it be written, has it changed since the host last asked", and
-`main/msc_out.c` is the only thing that calls it, from TinyUSB's callbacks. A block source
-(`main/msc_source.h`) supplies bytes and nothing else; the transport that feeds a source checks
+`firmware/main/msc_out.c` is the only thing that calls it, from TinyUSB's callbacks. A block source
+(`firmware/main/msc_source.h`) supplies bytes and nothing else; the transport that feeds a source checks
 frame shape and nothing else; range is enforced once, in the LUN. Detach is the storage
 release-all: total, and run on every terminal event, so an in-flight transfer against a gone
 medium fails with NOT READY instead of delivering stale bytes.
@@ -142,9 +174,9 @@ Two mechanics that are not preferences:
 
 ### The keymap is a pure lookup table with no I/O, and it is host-tested
 
-Browser `KeyboardEvent.code` → HID usage code is a table (`main/keymap.c`), not a chain of
+Browser `KeyboardEvent.code` → HID usage code is a table (`firmware/main/keymap.c`), not a chain of
 conditionals, and it neither logs, allocates, nor touches hardware. Same for the protocol codec
-(`main/protocol.c`). These two files must compile and run on the host so their tests execute in
+(`firmware/main/protocol.c`). These two files must compile and run on the host so their tests execute in
 CI without an ESP32 (see §7). Anything requiring `esp_` headers belongs elsewhere. Keymaps are
 layout-independent: the browser reports **physical key positions** (`event.code`), which is
 exactly what HID usage codes mean — never map `event.key`, which is layout- and modifier-shifted
@@ -155,7 +187,7 @@ and will send the wrong key on any non-US layout.
 No CDN links, no npm, no build step, no framework. The dongle serves everything the console
 needs, because a machine you walked up to may be on a network with no internet at all — and
 because the console must not phone anywhere (§2, principle 5). It is embedded in the firmware
-image (`EMBED_FILES` in `main/CMakeLists.txt`), gzipped at build time and served straight from
+image (`EMBED_FILES` in `firmware/main/CMakeLists.txt`), gzipped at build time and served straight from
 flash. If a dependency seems necessary, that is a proposal for review (§8, no-stated-convention
 rule), not a default.
 
@@ -195,29 +227,29 @@ Toolchain is pinned in `mise.toml`. From a fresh shell:
 
 ```sh
 mise install                    # cmake, ninja, python, ruff, clang-format
-mise run setup                  # one-time: clone ESP-IDF v5.5 into .esp-idf/ and install its
+mise run fw:setup               # one-time: clone ESP-IDF v5.5 into .esp-idf/ and install its
                                 # esp32s3 toolchain (several GB; not mise-managed)
 ```
 
 Then, per task:
 
 ```sh
-mise run config                 # idf.py menuconfig — WiFi credentials, under "airkvm"
-mise run build                  # idf.py build (target pinned in sdkconfig.defaults)
-mise run flash                  # idf.py -p $PORT flash monitor   (see gotchas re: PORT)
-mise run clean                  # idf.py fullclean
-mise run test                   # host-side unit tests — no hardware required
-mise run lint                   # clang-format --dry-run --Werror + ruff check/format --check
-mise run fmt                    # clang-format -i + ruff format
+mise run fw:config              # idf.py menuconfig — WiFi credentials, under "airkvm"
+mise run fw:build               # idf.py build (target pinned in sdkconfig.defaults)
+mise run fw:flash               # idf.py -p $PORT flash monitor   (see gotchas re: PORT)
+mise run fw:clean               # idf.py fullclean
+mise run fw:test                # host-side unit tests — no hardware required
+mise run fw:lint                # clang-format --dry-run --Werror + ruff check/format --check
+mise run fw:fmt                 # clang-format -i + ruff format
 ```
 
-`mise run test` is the gate that matters day to day: the keymap and protocol codec are pure and
+`mise run fw:test` is the gate that matters day to day: the keymap and protocol codec are pure and
 compile on the host (§4), so their tests run in seconds with no board attached. Everything else
 about this project currently cannot be verified without hardware — say so rather than implying
 a passing build means working firmware (§8, verify the output not the instrument).
 
-Console development: the console is plain static files under `web/`. Edit and reload against a
-flashed board, or serve `web/` with `python3 -m http.server` and point it at a board's WebSocket
+Console development: the console is plain static files under `packages/console/`. Edit and reload against a
+flashed board, or serve `packages/console/` with `python3 -m http.server` and point it at a board's WebSocket
 via the `?ws=` query parameter for UI-only iteration.
 
 ### 6.1 Known Environment Gotchas
@@ -240,13 +272,13 @@ add rather than rewrite.
   # once, on the machine holding the board — pyserial is pure Python, so copy it
   # rather than installing anything (no apt, no sudo, ~215KB):
   #   tar -C <site-packages> -czf - serial | ssh host 'mkdir -p ~/.airkvm-tools && tar -xzf - -C ~/.airkvm-tools'
-  #   scp tools/serial_bridge.py host:~/.airkvm-tools/
+  #   scp firmware/tools/serial_bridge.py host:~/.airkvm-tools/
   PYTHONPATH=~/.airkvm-tools python3 ~/.airkvm-tools/serial_bridge.py /dev/ttyACM0 4000
   # here:
-  PORT=rfc2217://thathost:4000 mise run flash-bench
+  PORT=rfc2217://thathost:4000 mise run fw:flash-bench
   ```
 
-  Three things that each cost a debugging round, all handled in `tools/serial_bridge.py`:
+  Three things that each cost a debugging round, all handled in `firmware/tools/serial_bridge.py`:
   - RFC2217, not a raw socket: esptool drives the board into its bootloader with DTR/RTS, which a
     plain TCP pipe does not carry. Over a raw socket the flash hangs on a reset that never lands.
   - `python -m serial.rfc2217_server` does not exist — pyserial ships that as an example, not an
@@ -286,15 +318,15 @@ add rather than rewrite.
   lands the C3 in download mode (`boot:0x4 (DOWNLOAD)`) because DTR is the boot-mode line there.
   Use `esptool ... --after hard_reset run`, which knows the chip-specific sequence.
 - **The red LED on the C3 bench board is not controllable.** It is a hardwired power indicator;
-  `tools/led_scan` walked every free GPIO in both polarities and it never changed. GPIO8 (blue) is
-  the only software LED. Settled — see the note in `main/board.h` rather than re-running the hunt.
+  `firmware/tools/led_scan` walked every free GPIO in both polarities and it never changed. GPIO8 (blue) is
+  the only software LED. Settled — see the note in `firmware/main/board.h` rather than re-running the hunt.
 - **Published pinouts for this board family tag GPIO8/9 as I2C.** Those are the chip's default
   alternate-function labels, not the wiring: GPIO8 is physically the LED, and the OLED is on
   GPIO5/6. Trust a working config over a pinout diagram.
 - **Renaming the project directory breaks the ESP-IDF toolchain and every build directory.** The
   Python venv holds absolute shebangs and CMake caches the source path, so a rename needs
-  `rm -rf .esp-idf-tools/python_env build build-bench test/host/build tools/led_scan/build &&
-  mise run setup`. The symptom is a build complaining it was "configured for project /old/path" —
+  `rm -rf .esp-idf-tools/python_env firmware/build firmware/build-bench firmware/test/host/build firmware/tools/led_scan/build &&
+  mise run fw:setup`. The symptom is a build complaining it was "configured for project /old/path" —
   and it bites the host tests too, which is easy to miss because they have nothing to do with
   ESP-IDF.
 - **Board pinout is vendor-documented, not datasheet-derived.** The 0.42" OLED's I2C pins differ
@@ -313,7 +345,7 @@ add rather than rewrite.
   the API — `gh api repos/abradner/airkvm/pulls/N/comments` — not the web summary. Related: Copilot
   reviews each PR against *its own base*, so in a stack it objects to things a later interstitial
   already fixed; check the cap of the stack before actioning a finding raised low in it.
-- **After `mise run fmt`, an exact-string edit that no longer matches fails
+- **After `mise run fw:fmt`, an exact-string edit that no longer matches fails
   SILENTLY — and clang-format realigning one trailing comment is enough to cause
   it.** This is the reflow entry below biting a second way, and it has now cost
   three rounds in one session. Twice the edit did nothing and the session
@@ -326,7 +358,7 @@ add rather than rewrite.
   cross-check), never by the edit itself. So: after any scripted edit to a
   formatted file, assert the new text is present — or have the edit fail loudly
   (`assert old in s`) rather than silently no-op.
-- **`mise run fmt` (clang-format) reflows across comment boundaries and can orphan a doc comment
+- **`mise run fw:fmt` (clang-format) reflows across comment boundaries and can orphan a doc comment
   above the wrong function.** It happened in the keepalive PR, and the result compiles and lints
   clean — nothing catches it but reading. Re-read any region you formatted.
 - **A config change can silently not reach the image, in two different ways. Read the generated
@@ -334,35 +366,58 @@ add rather than rewrite.
   in one evening, and neither produces a warning — the build goes green around the unchanged
   value, so it presents as "the feature doesn't work".
   - *New symbol, stale generated file.* Adding a `CONFIG_` symbol to `Kconfig.projbuild` and
-    running `mise run build` produced an image where the symbol was *absent* from `sdkconfig`
+    running `mise run fw:build` produced an image where the symbol was *absent* from `sdkconfig`
     entirely — not "is not set" — so every `#if CONFIG_X` took the off branch. A
     `CMakeLists.txt` edit triggers a reconfigure on its own; a Kconfig-only edit does not. Force
-    it: `mise x -- bash -c '. "$IDF_PATH/export.sh" >/dev/null && idf.py -B build
+    it — note `-C firmware`, because `mise x` runs in the current directory rather than in a
+    task's `dir`, and the project root is `firmware/` now: `mise x -C firmware -- bash -c
+    '. "$IDF_PATH/export.sh" >/dev/null && idf.py -B build
     -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.local" reconfigure'`.
   - *Existing symbol — a defaults file cannot change it, and `reconfigure` will not help.*
     `SDKCONFIG_DEFAULTS` files only **seed** symbols that `sdkconfig` does not already contain.
     Putting `CONFIG_AIRKVM_TLS=n` in `sdkconfig.local` and reconfiguring left `sdkconfig` saying
     `=y`, with no diagnostic of any kind. This is why the first trap is easy to misdiagnose: a
     *new* symbol appears to prove defaults files work, because for new symbols they do. To flip
-    an existing value, edit `sdkconfig` directly (or `mise run config`), then confirm in
+    an existing value, edit `sdkconfig` directly (or `mise run fw:config`), then confirm in
     `build/config/sdkconfig.h` — the header the compiler actually reads is the only real proof.
 - **A git worktree does not get its own ESP-IDF, and must not clone one.** `mise.toml` derives
   `IDF_PATH` from `{{config_root}}`, which in a worktree is the worktree — so `export.sh` fails
-  with "No such file or directory" and `mise run setup` would happily clone a second ~4GB
+  with "No such file or directory" and `mise run fw:setup` would happily clone a second ~4GB
   toolchain. Symlink the main checkout's instead, once per worktree:
 
   ```sh
   ln -sfn ~/code/airkvm/.esp-idf .esp-idf && ln -sfn ~/code/airkvm/.esp-idf-tools .esp-idf-tools
   ```
 
+  Still the **repo root**, not `firmware/`, after the monorepo move: `mise.toml` deliberately
+  stayed at the root so `{{config_root}}` — and therefore every existing worktree's symlinks —
+  did not move. Firmware tasks reach their tree with `dir = "firmware"` instead.
+
   Both are gitignored. The build then prints a harmless `IDF_PATH is changed from ...` warning as
-  it resolves the symlink. Worktrees also need `mise trust` and their own `sdkconfig.local`
-  (credentials are per-machine and gitignored, so a fresh worktree has none). One more, found a
-  configure cycle later (2026-09-06): `certs/` (key material, gitignored — symlink it or run
-  `tools/make_certs.sh`). Do **not** symlink `managed_components/`: the component manager prunes
+  it resolves the symlink. Worktrees also need `mise trust` and their own
+  `firmware/sdkconfig.local` (credentials are per-machine and gitignored, so a fresh worktree has
+  none). One more, found a
+  configure cycle later (2026-09-06): `firmware/certs/` (key material, gitignored — symlink it or run
+  `firmware/tools/make_certs.sh`). Do **not** symlink `firmware/managed_components/`: the component manager prunes
   it per target, so a C3 bench build deletes `esp_tinyusb` from whatever directory the symlink
   points at, and the main checkout's next S3 build has to re-fetch. Let each worktree resolve
   its own; the download comes from `~/.cache/Espressif/ComponentManager` and costs seconds.
+- **A task name that exists in the parent checkout but not in your worktree silently runs the
+  PARENT's copy — in the parent's directory.** mise merges every `mise.toml` it finds walking up
+  from the cwd, and this repo's worktrees live *inside* the main checkout
+  (`.claude/worktrees/<name>/`), so the main checkout's config is always an ancestor of theirs.
+  While both files defined `[tasks.build]` the worktree's own shadowed it and nothing showed.
+  The monorepo move renamed them to `fw:*`, and until `main` carries that rename too, a bare
+  `mise run build` — or, much worse, `mise run flash` — inside a worktree resolves to the main
+  checkout's task and runs with `dir` set to the main checkout. It does not error: it builds, or
+  flashes a board, from a different tree than the one you are editing, and says nothing.
+  `mise tasks --json` prints each task's `dir` and `source`, which is the one-command way to see
+  which file a name came from. The general rule: **in a nested checkout, a task name resolving is
+  not the same as it resolving to yours** — check `source` before trusting a bare name, and prefer
+  the namespaced one (`fw:flash`), which cannot be satisfied by an ancestor that predates it.
+  (Found by review of the monorepo move, 2026-09-09; not observed on hardware, and it self-heals
+  for `build` once `main` has the rename — but the shape recurs for every future task name that
+  exists in one checkout and not another.)
 - **An S3 that boots to `waiting for download` has one of two unrelated causes, and the
   strapping register tells you which in one command.** Do not guess, and do not assume it is the
   flash — a verified write plus `boot:0x0 (DOWNLOAD(USB/UART0))` is the ROM reading GPIO0 at
@@ -407,7 +462,7 @@ add rather than rewrite.
   `NotFoundError` for a pointer the browser does not consider active, and Firefox draws the
   scrollbars that iOS overlays, so a horizontally scrolling row needs `scrollbar-width: none`
   or it renders as a white stripe.
-- **`tools/serial_bridge.py` goes stale every time the board changes USB mode — restart it.**
+- **`firmware/tools/serial_bridge.py` goes stale every time the board changes USB mode — restart it.**
   Seen ~8 times in one evening: after any flash whose image moved the board between USB HID
   (TinyUSB) and USB-Serial/JTAG, in either direction, the next esptool connect failed with
   *connection refused* or *"Remote does not seem to support RFC2217"*, and restarting the bridge
@@ -447,12 +502,12 @@ add rather than rewrite.
   same rule wants applying to any shell command you then reason from. Grep for the thing you care
   about instead of eyeballing a truncated list, and if you must truncate, say so in the sentence
   that reports the result.
-- **`main/indicator.c`'s LED body compiles on the C3 bench board and NOWHERE else — so the two S3
+- **`firmware/main/indicator.c`'s LED body compiles on the C3 bench board and NOWHERE else — so the two S3
   builds are not coverage for it.** `BOARD_HAS_LED` is 1 on the C3, **0** on the S3 0.42" dongle,
   and 1 on the LCD147 — but the LCD147 selects `indicator_ws2812.c` instead
-  (`main/CMakeLists.txt`). So `mise run build` compiles the `#else` stub, `mise run build-lcd147`
+  (`firmware/main/CMakeLists.txt`). So `mise run fw:build` compiles the `#else` stub, `mise run fw:build-lcd147`
   compiles the other backend, and the whole `#if BOARD_HAS_LED` arm of `indicator.c` is built by
-  `mise run build-bench` alone. A session edited that arm, ran the two S3 builds, and wrote in a
+  `mise run fw:build-bench` alone. A session edited that arm, ran the two S3 builds, and wrote in a
   PR body that this covered "both indicator backends" — the arm it had changed was compiled by
   neither. The bug was a bare `return;` in a function returning `enum indicator_state`, which
   `-Werror=all` catches as a hard error on the bench build in seconds, and which reached review
@@ -473,11 +528,11 @@ repo is small; filtering would buy seconds and cost trust):
 - **firmware-build** — builds the ESP32-S3 image in the official `espressif/idf:release-v5.5`
   container. Proves it compiles and links; proves nothing about behavior.
 - **lint** — `clang-format` on firmware sources; `ruff check` and `ruff format --check` on
-  `tools/`. The format check is the one most likely to redden an otherwise-clean PR: run
-  `mise run fmt` before pushing.
+  `firmware/tools/`. The format check is the one most likely to redden an otherwise-clean PR: run
+  `mise run fw:fmt` before pushing.
 
 Deployment is `idf.py flash` over USB by a human holding the board. There is no shipping OTA path
-and no release artifact — don't build those until asked. What does exist is `main/ota.c`: a
+and no release artifact — don't build those until asked. What does exist is `firmware/main/ota.c`: a
 throwaway, dev-only proof that the underlying `esp_https_ota` mechanism (fetch, write the inactive
 slot, switch boot partition, roll back on failure) works on real hardware, gated on a build-time-
 only URL that's empty in every real build — not the fleet delivery mechanism, no signing, no
@@ -628,7 +683,7 @@ code is written.*
    handle the discrimination first, before any I/O that assumes which event it is.**
    Root cause was found by enabling `httpd_ws`/`httpd_parse` DEBUG logging and noticing the
    *absence* of a `httpd_ws_get_frame_type` line before the first handler call — the missing log
-   line was the evidence, not any present one. Fixed in `main/net.c` (`req->method == HTTP_GET`).
+   line was the evidence, not any present one. Fixed in `firmware/main/net.c` (`req->method == HTTP_GET`).
 
 2. **A code review claim about a framework is a hypothesis until hardware rules on it.** The
    handshake branch in entry 1 was *removed* on a reviewer's well-argued, source-cited finding
@@ -685,7 +740,7 @@ code is written.*
    The loud failure is also the *lucky* case: when something else already supplies the dependency,
    a dead conditional REQUIRES links fine and looks load-bearing indefinitely.
    `list(APPEND airkvm_requires esp_tinyusb)` sat inside the USB-backend `if()` from the first
-   commit and never had an effect, because `main/idf_component.yml` had been supplying TinyUSB the
+   commit and never had an effect, because `firmware/main/idf_component.yml` had been supplying TinyUSB the
    whole time. Two things are needed to see it. **State the mechanism precisely:** the `if()` does
    run in the real pass — it also picks the backend's source file — and what is dead is the
    append, because `REQUIRES` is read only from the early pass. **Use the right instrument:**
@@ -698,7 +753,7 @@ code is written.*
 
 8. **Bench hardware that cannot do the headline feature still finds the headline bugs.** Entries
    1-3 above were found on an ESP32-C3, a board that physically cannot be a USB keyboard, via
-   the `log` HID backend (`main/hid_out_log.c`). None were reachable from host tests or a green
+   the `log` HID backend (`firmware/main/hid_out_log.c`). None were reachable from host tests or a green
    firmware build. When the real board is late, ask what fraction of the system the wrong board
    can still exercise — here it was everything except the last inch.
 
@@ -794,7 +849,7 @@ code is written.*
     tick rate then had to be raised to 1kHz deliberately (`sdkconfig.defaults`) to buy back
     granularity the spin had been providing by accident. Ask what a wasteful thing was doing
     before deleting it, and re-measure the thing it was near.
-    *(c) The instrument for all of this was new.* `tools/hid_listen.py` reads the dongle's own
+    *(c) The instrument for all of this was new.* `firmware/tools/hid_listen.py` reads the dongle's own
     evdev node on the host it is plugged into, so "did it type correctly" became a machine check
     instead of a question for a human — which is what made a throughput regression visible at all
     rather than being discovered weeks later as "typing feels slow".
@@ -848,10 +903,10 @@ code is written.*
     distinct quantity that literal was standing for, and check the ones that are equal by
     coincidence — those are where the next board diverges silently.* *(2) For anything whose
     correctness is visual, build a host renderer before building the hardware.*
-    `tools/preview_ui.py` draws the real font tables at the real layout offsets into a PNG; it
+    `firmware/tools/preview_ui.py` draws the real font tables at the real layout offsets into a PNG; it
     found (c) in one look, and it exists because the panel was unavailable, which turned out to
     be the more useful constraint. *(3) A golden test against the pre-change implementation is
-    what makes an extraction like this safe to do at all* — `test/host/test_canvas.c` compares
+    what makes an extraction like this safe to do at all* — `firmware/test/host/test_canvas.c` compares
     against a framebuffer captured by compiling the ORIGINAL `display.c` from git, so "the
     refactor changed no pixel on the working board" is a check rather than a claim.
 
@@ -865,7 +920,7 @@ code is written.*
     builds, enumerates, mounts, and the only symptom is a key that stays held after the cable is
     pulled, with nothing in any log. Mechanism, not care (§10 meta-rule 5): `main` is linked
     `WHOLE_ARCHIVE` so no reference survives for that object to satisfy, and
-    `tools/check_msc_symbols.cmake` fails the build if that object entered the link. It reads the
+    `firmware/tools/check_msc_symbols.cmake` fails the build if that object entered the link. It reads the
     linker *map*, not `nm`: with `--gc-sections` an unreferenced function in the offending object
     is discarded, so an `nm` sentinel is absent in exactly the case that matters — the first
     version of the script had that hole, and a review caught it. Seen to fail on synthetic maps
@@ -902,9 +957,9 @@ code is written.*
     *everything else* in SECONDARY, and Solarized's SECONDARY was base01 — the scheme's **comment**
     tone — at 2.87:1 against the background. So the bug was a role misassignment, not a palette
     choice, and the whole class became preventable by making contrast a number a test can fail on
-    (`test/host/test_theme.c`). That much is unambiguous progress. What is worth recording is what
+    (`firmware/test/host/test_theme.c`). That much is unambiguous progress. What is worth recording is what
     happened *next*: a rule was stated ("default to the theme with the highest weakest ratio"),
-    applied, and it picked Tokyo Night — and then `tools/preview_ui.py` rendered the five themes
+    applied, and it picked Tokyo Night — and then `firmware/tools/preview_ui.py` rendered the five themes
     and the picture disagreed. Tokyo Night clears every floor by a mile and still reads flat,
     because its PRIMARY and SECONDARY are only 2.66 apart, so the hierarchy the four ink roles
     exist to create is present in the numbers and absent to the eye. The default is Monokai Machine
@@ -948,7 +1003,7 @@ code is written.*
 
 19. **A state-coalescing drain is only safe for states that carry no information — and gotcha 11
     had only been applied to the keyboard.** The report task drains every queued intent before
-    emitting (`main/hid_out_usb.c`), and #25 guarded keyboard intents against being applied on
+    emitting (`firmware/main/hid_out_usb.c`), and #25 guarded keyboard intents against being applied on
     top of a state whose report has not gone out, because a down and its up applied together
     leave the bitmap untouched and the keypress lost. `MOUSE_BUTTON` got no such guard: two
     button frames applied before a report goes out collapse into one report with nothing

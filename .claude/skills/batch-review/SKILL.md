@@ -28,10 +28,10 @@ when green) remains correct for one PR at a time; this skill exists for the mult
 **Validation commands** (pre-push gate, from a fresh shell):
 
 ```sh
-mise run lint && mise run test && mise run build
+mise run lint && mise run test && mise run fw:build
 ```
 
-`mise run test` is the only one that can fail for a behavioral bug; `build` proves compilation
+`mise run test` is the only one that can fail for a behavioral bug; `fw:build` proves compilation
 only. Neither observes USB, HID delivery, or latency — no batch may claim hardware behavior was
 validated by CI (AGENTS.md §4, last rule).
 

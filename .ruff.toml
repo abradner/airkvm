@@ -1,4 +1,4 @@
-# Ruff's rule set is pinned here so that `mise run lint` and CI enforce the same
+# Ruff's rule set is pinned here so that `mise run fw:lint` and CI enforce the same
 # thing. They did not: mise pins ruff 0.9, while astral-sh/ruff-action installs
 # the latest ruff when nothing tells it otherwise, and the default selection
 # widened in between. The result was a lint that passed locally and failed in

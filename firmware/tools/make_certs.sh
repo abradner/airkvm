@@ -95,4 +95,4 @@ echo "           -k /Library/Keychains/System.keychain $CA_CERT"
 echo "  Linux: sudo cp $CA_CERT /usr/local/share/ca-certificates/airkvm-ca.crt \\"
 echo "           && sudo update-ca-certificates"
 echo
-echo "Then: mise run build && mise run flash"
+echo "Then: mise run fw:build && mise run fw:flash"

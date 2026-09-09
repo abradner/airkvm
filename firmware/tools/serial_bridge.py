@@ -9,7 +9,7 @@ wherever the toolchain lives:
     PYTHONPATH=~/.airkvm-tools ./serial_bridge.py /dev/ttyACM0 4000
 
     # on the machine with ESP-IDF:
-    PORT=rfc2217://thathost:4000 mise run flash-bench
+    PORT=rfc2217://thathost:4000 mise run fw:flash-bench
 
 RFC2217 rather than a plain TCP pipe because esptool drives the board into its
 bootloader by toggling DTR/RTS. A raw socket carries the data but not those

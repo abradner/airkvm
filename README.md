@@ -48,11 +48,11 @@ path is a CH9329 UART-to-HID module — not built yet.
 
 ```sh
 mise install        # toolchain
-mise run setup      # ESP-IDF v5.5 + esp32s3 compilers (one-time, several GB)
-mise run config     # set WiFi SSID/password under "airkvm" — required, no default
-./tools/make_certs.sh   # TLS cert + a local CA (see "HTTPS" below)
-mise run build
-PORT=/dev/tty.usbmodem1101 mise run flash
+mise run fw:setup   # ESP-IDF v5.5 + esp32s3 compilers (one-time, several GB)
+mise run fw:config  # set WiFi SSID/password under "airkvm" — required, no default
+./firmware/tools/make_certs.sh   # TLS cert + a local CA (see "HTTPS" below)
+mise run fw:build
+PORT=/dev/tty.usbmodem1101 mise run fw:flash
 ```
 
 The dongle shows its address on the OLED (and logs it on boot) — `http://<ip>/`, also
@@ -81,14 +81,14 @@ no network path to it. While it is off, keystroke text is never stored at all.
 To reflash after the first flash, hold **BOOT** and tap **RESET** first: once the firmware claims
 USB for HID, the board stops being a serial device until you put it back in bootloader mode.
 
-No browser handy? `tools/poke.py` speaks the same protocol from a terminal:
+No browser handy? `firmware/tools/poke.py` speaks the same protocol from a terminal:
 
 ```sh
-./tools/poke.py airkvm.local type "hello world"
-./tools/poke.py airkvm.local key ControlLeft+AltLeft+Delete
+./firmware/tools/poke.py airkvm.local type "hello world"
+./firmware/tools/poke.py airkvm.local key ControlLeft+AltLeft+Delete
 ```
 
-`mise run test` runs the host-side unit tests for the keymap, protocol codec, and HID state
+`mise run fw:test` runs the host-side unit tests for the keymap, protocol codec, and HID state
 machine — no board required, and the only check here that proves behavior rather than compilation.
 
 ## HTTPS
@@ -97,7 +97,7 @@ The console is served over HTTPS, for two reasons. Without it your keystrokes cr
 plaintext for anyone on the LAN to read, and browsers refuse camera access to non-secure origins —
 so over plain HTTP the capture-device dropdown is simply empty.
 
-`./tools/make_certs.sh` issues the device certificate, creating a local CA the first time (pass
+`./firmware/tools/make_certs.sh` issues the device certificate, creating a local CA the first time (pass
 `--ca-cert`/`--ca-key` to use one you already run). Install that CA once per machine you browse
 from; the script prints the command. Deliberately *not* a self-signed device certificate: Chrome
 now resists those by default and restricts some powerful APIs even after a click-through, so a

@@ -56,7 +56,7 @@ function setWakeStatus(text, kind) {
 }
 
 // `?ws=host:port` points the console at a dongle while serving this page from
-// somewhere else (`python3 -m http.server` in web/) for UI-only work.
+// somewhere else (`python3 -m http.server` in packages/console/) for UI-only work.
 const wsOverride = new URLSearchParams(location.search).get("ws");
 // Scheme follows the page: a wss page may not open a ws socket, and browsers
 // block that as mixed content with an error that says nothing about the cause.
