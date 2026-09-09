@@ -41,6 +41,7 @@
 #endif
 #include "protocol.h"
 #include "session.h"
+#include "settings.h"
 #include "status.h"
 #include "wifi.h"
 
@@ -88,6 +89,92 @@ static esp_err_t app_js_get(httpd_req_t *req) {
 
 static esp_err_t style_css_get(httpd_req_t *req) {
   return send_static(req, "text/css", style_css_start, style_css_end);
+}
+
+// --- /settings ----------------------------------------------------------------
+//
+// The device describes itself (identity, features, and every setting with its
+// current value and what it may become), and the page renders what it is
+// told — so a board with no palette gets a panel with no theme control, from
+// the same page, with no board-conditional JavaScript. HTTP rather than a
+// /ws frame: the socket's fixed-length binary frames exist for keystroke
+// latency, and settings are neither latency-sensitive nor fixed-length. The
+// reply is generated JSON; the request is form-urlencoded, because that is
+// the half that parses attacker-controlled bytes and form.c is a far smaller
+// surface than a JSON parser. Unauthenticated, like everything on this
+// origin: R-001, and R-010 for what this one can and cannot reach.
+//
+// A static buffer rather than the stack: the TLS server task has stack to
+// spare, but the plain-HTTP build's default is 4KB, and the one server task
+// serialises requests, so there is never a second document in flight.
+#define SETTINGS_DOC_CAP 1024
+#define SETTINGS_BODY_MAX 256
+static char s_settings_doc[SETTINGS_DOC_CAP];
+
+static esp_err_t send_settings_doc(httpd_req_t *req) {
+  const size_t n = settings_document(s_settings_doc, sizeof(s_settings_doc));
+  if (n == 0) {
+    // The document did not fit, which is a build-time mistake (the buffer is
+    // sized for this image's catalogue), not a runtime condition. Say so
+    // rather than serve a prefix the page would parse as a broken object.
+    ESP_LOGE(TAG, "settings document exceeds %d bytes", SETTINGS_DOC_CAP);
+    httpd_resp_set_status(req, "500 Internal Server Error");
+    return httpd_resp_send(req, "settings document too large",
+                           HTTPD_RESP_USE_STRLEN);
+  }
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+  return httpd_resp_send(req, s_settings_doc, n);
+}
+
+static esp_err_t settings_get(httpd_req_t *req) {
+  return send_settings_doc(req);
+}
+
+static esp_err_t send_plain_status(httpd_req_t *req, const char *status,
+                                   const char *text) {
+  httpd_resp_set_status(req, status);
+  httpd_resp_set_type(req, "text/plain");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+  return httpd_resp_send(req, text, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t settings_post(httpd_req_t *req) {
+  if (req->content_len == 0 || req->content_len > SETTINGS_BODY_MAX) {
+    return send_plain_status(req, "400 Bad Request", "body empty or too large");
+  }
+  char body[SETTINGS_BODY_MAX + 1];
+  size_t got = 0;
+  while (got < req->content_len) {
+    const int n = httpd_req_recv(req, body + got, req->content_len - got);
+    if (n <= 0) {
+      return ESP_FAIL;  // socket gone; nothing to say to nobody
+    }
+    got += (size_t)n;
+  }
+  body[got] = '\0';
+
+  switch (settings_apply_form(body, got)) {
+    case SETTINGS_APPLIED:
+    case SETTINGS_UNCHANGED:
+      // The whole document back, so the page re-renders from what the device
+      // now holds rather than from what it asked for.
+      return send_settings_doc(req);
+    case SETTINGS_TOO_SOON:
+      return send_plain_status(req, "429 Too Many Requests",
+                               "settings are written at most once a second");
+    case SETTINGS_STORE_FAILED:
+      return send_plain_status(req, "500 Internal Server Error",
+                               "applied, but could not be stored");
+    case SETTINGS_BAD_REQUEST:
+    default:
+      // The page's own controls only offer values from the document; this is
+      // the server saying it too (AGENTS.md §8: enforcement here, the page is
+      // politeness).
+      return send_plain_status(req, "400 Bad Request",
+                               "no setting this device knows, or a value it "
+                               "cannot use");
+  }
 }
 
 // Session transitions run from two tasks — the HTTP server task (the WebSocket
@@ -451,6 +538,8 @@ static esp_err_t start_http(void) {
       {.uri = "/", .method = HTTP_GET, .handler = index_get},
       {.uri = "/app.js", .method = HTTP_GET, .handler = app_js_get},
       {.uri = "/style.css", .method = HTTP_GET, .handler = style_css_get},
+      {.uri = "/settings", .method = HTTP_GET, .handler = settings_get},
+      {.uri = "/settings", .method = HTTP_POST, .handler = settings_post},
       {.uri = "/ws",
        .method = HTTP_GET,
        .handler = ws_handler,

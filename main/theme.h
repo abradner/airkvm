@@ -383,7 +383,9 @@ static const struct display_theme display_themes[DISPLAY_THEME_COUNT] = {
          }},
 };
 
-// Which theme this image is built with.
+// The theme a fresh flash starts on. The Kconfig choice names the DEFAULT, not
+// the selection: settings.c reads the operator's choice from NVS at boot and
+// falls back to this when there is none (settings_schema.h says how).
 //
 // The final #else is for the host test, which compiles this header with no
 // sdkconfig.h at all — and for the 0.42" OLED build, where the Kconfig choice
@@ -392,35 +394,41 @@ static const struct display_theme display_themes[DISPLAY_THEME_COUNT] = {
 // Kconfig choice has a `default`, so on the board that has a palette one of
 // these is always defined.
 #if defined(CONFIG_AIRKVM_THEME_TOKYO_NIGHT)
-#define DISPLAY_THEME_SELECTED DISPLAY_THEME_TOKYO_NIGHT
+#define DISPLAY_THEME_DEFAULT DISPLAY_THEME_TOKYO_NIGHT
 #elif defined(CONFIG_AIRKVM_THEME_MONOKAI_MACHINE)
-#define DISPLAY_THEME_SELECTED DISPLAY_THEME_MONOKAI_MACHINE
+#define DISPLAY_THEME_DEFAULT DISPLAY_THEME_MONOKAI_MACHINE
 #elif defined(CONFIG_AIRKVM_THEME_ONE_DARK_NIGHT_FLAT)
-#define DISPLAY_THEME_SELECTED DISPLAY_THEME_ONE_DARK_NIGHT_FLAT
+#define DISPLAY_THEME_DEFAULT DISPLAY_THEME_ONE_DARK_NIGHT_FLAT
 #elif defined(CONFIG_AIRKVM_THEME_MONOKAI_LIGHT)
-#define DISPLAY_THEME_SELECTED DISPLAY_THEME_MONOKAI_LIGHT
+#define DISPLAY_THEME_DEFAULT DISPLAY_THEME_MONOKAI_LIGHT
 #elif defined(CONFIG_AIRKVM_THEME_SOLARIZED_DARK)
-#define DISPLAY_THEME_SELECTED DISPLAY_THEME_SOLARIZED_DARK
+#define DISPLAY_THEME_DEFAULT DISPLAY_THEME_SOLARIZED_DARK
 #else
-#define DISPLAY_THEME_SELECTED DISPLAY_THEME_MONOKAI_MACHINE
+#define DISPLAY_THEME_DEFAULT DISPLAY_THEME_MONOKAI_MACHINE
 #endif
 
-// PROPOSAL, per AGENTS.md §8's no-stated-convention rule. There is no stated
-// convention for how a display preference is selected on this device, and this
-// change picks one: BUILD TIME, via Kconfig, the same axis the board itself is
-// chosen on. Codify or correct.
+// DECISION (2026-09-09), answering the proposal that stood here. The proposal
+// chose BUILD TIME for a display preference, rejected runtime selection, and
+// closed with "codify or correct". The correction arrived the day after it
+// landed: the operator asked to change the theme without a rebuild. Two things
+// in the original argument are worth keeping, because both still hold.
 //
-// The alternative considered and rejected for now is runtime selection, and
-// the reason is not cost — it is the button. The BOOT button already does two
-// things whose meanings are disambiguated by what is on screen at the moment
-// of the press, and R-006 (docs/repo-map.md) leans on that press being latched
-// at press time so a client HID event cannot retarget it. A third meaning is
-// not a third `if`; it is a re-argument of a security mitigation. A console
-// control avoids the button entirely but costs a protocol frame, a UI, and NVS
-// persistence — real surface for a preference nobody has yet said they want to
-// change without a rebuild.
+// First, the rejection was about the BUTTON, not about runtime selection. A
+// third meaning for BOOT would re-argue R-006's press-latching mitigation, and
+// that is still true — so the button gained nothing, and the theme is chosen
+// from the console (GET/POST /settings, net.c) and persisted in NVS
+// (settings.c). The three costs the proposal named — a route, a UI, and NVS —
+// are exactly what was paid.
 //
-// What this change deliberately does buy is the option: the table above is
-// data, every theme is present in the image, and the backend reads a selected
-// entry rather than a compile-time constant. Making the selection runtime is
-// changing where the index comes from, not restructuring the colour path.
+// Second, "the table above is data, every theme is present in the image, and
+// the backend reads a selected entry rather than a compile-time constant" was
+// the design buying this option on purpose. Making the selection runtime was
+// one indirection: display_st7789.c reloads its palette from a different row
+// and repaints. The Kconfig choice survives as the value a fresh flash starts
+// on, which is what a build-time knob is honestly for.
+//
+// What runtime selection did NOT change: the LED. palette.h's SOL_LED_* hues
+// are deliberately outside the theme, because a theme changes what the panel
+// looks like and must not change what the light MEANS. A network caller can
+// now recolour the screen; red still means fault, everywhere, and nothing on
+// this surface can alter that.

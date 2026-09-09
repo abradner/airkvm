@@ -2,41 +2,7 @@
 
 #include <string.h>
 
-static int hexval(char c) {
-  if (c >= '0' && c <= '9') return c - '0';
-  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-  return -1;
-}
-
-// Decodes one form value in place into dst (cap bytes incl. NUL). Returns the
-// decoded length, or -1 on bad encoding or overflow.
-static int decode_value(const char *src, size_t len, char *dst, size_t cap) {
-  size_t n = 0;
-  for (size_t i = 0; i < len; i++) {
-    char c = src[i];
-    if (c == '+') {
-      c = ' ';
-    } else if (c == '%') {
-      if (i + 2 >= len) {
-        return -1;  // "%x" or "%" at the end: not an encoding
-      }
-      const int hi = hexval(src[i + 1]);
-      const int lo = hexval(src[i + 2]);
-      if (hi < 0 || lo < 0) {
-        return -1;
-      }
-      c = (char)((hi << 4) | lo);
-      i += 2;
-    }
-    if (c == '\0' || n + 1 >= cap) {
-      return -1;  // a NUL would silently truncate the value downstream
-    }
-    dst[n++] = c;
-  }
-  dst[n] = '\0';
-  return (int)n;
-}
+#include "form.h"
 
 bool provision_parse_form(const char *body, size_t len,
                           struct provision_form *out) {
@@ -48,36 +14,19 @@ bool provision_parse_form(const char *body, size_t len,
   bool have_ssid = false;
   bool have_psk = false;
 
-  size_t i = 0;
-  while (i < len) {
-    // key=value&key=value ...
-    size_t key_start = i;
-    while (i < len && body[i] != '=' && body[i] != '&') {
-      i++;
-    }
-    const size_t key_len = i - key_start;
-    size_t val_start = i;
-    size_t val_len = 0;
-    if (i < len && body[i] == '=') {
-      val_start = ++i;
-      while (i < len && body[i] != '&') {
-        i++;
-      }
-      val_len = i - val_start;
-    }
-    if (i < len && body[i] == '&') {
-      i++;
-    }
-    if (key_len == 4 && memcmp(body + key_start, "ssid", 4) == 0) {
-      const int n = decode_value(body + val_start, val_len, scratch.ssid,
-                                 sizeof(scratch.ssid));
+  size_t pos = 0;
+  struct form_pair p;
+  while (form_next(body, len, &pos, &p)) {
+    if (form_key_is(&p, "ssid")) {
+      const int n =
+          form_decode(p.value, p.value_len, scratch.ssid, sizeof(scratch.ssid));
       if (n < 1) {
         return false;  // empty, over-long, or bad encoding
       }
       have_ssid = true;
-    } else if (key_len == 3 && memcmp(body + key_start, "psk", 3) == 0) {
-      const int n = decode_value(body + val_start, val_len, scratch.psk,
-                                 sizeof(scratch.psk));
+    } else if (form_key_is(&p, "psk")) {
+      const int n =
+          form_decode(p.value, p.value_len, scratch.psk, sizeof(scratch.psk));
       if (n < 0 || (n > 0 && n < PROVISION_PSK_MIN)) {
         return false;
       }

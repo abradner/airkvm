@@ -505,3 +505,128 @@ body.soft #wake-target,
 body.soft select {
   width: 100%;
 }
+
+/* --- settings ---------------------------------------------------------------
+   The console's first dialog. A native <dialog> for the focus trap, Esc, and
+   the backdrop, styled from the same eight variables as everything else. Full
+   screen on a phone, a centred sheet on a desktop. */
+
+button.icon {
+  width: auto;
+  margin: 0 0 0 auto;
+  padding: 0.3rem 0.6rem;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+dialog.settings {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0;
+  width: min(34rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+}
+
+dialog.settings::backdrop {
+  background: rgba(20, 22, 26, 0.72);
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+}
+
+.settings-head h2 {
+  margin: 0;
+}
+
+.settings-head button {
+  width: auto;
+  margin: 0;
+  padding: 0.3rem 0.6rem;
+}
+
+dialog.settings section {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--line);
+}
+
+dialog.settings section:last-child {
+  border-bottom: 0;
+}
+
+dialog.settings #settings-status {
+  padding: 0.4rem 1rem 0;
+  min-height: 1.4rem;
+}
+
+.details {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.2rem 1rem;
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.details dt {
+  color: var(--muted);
+}
+
+.details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.scope-note {
+  color: var(--muted);
+  font-size: 0.75rem;
+  margin: 0 0 0.5rem;
+}
+
+.scope-note a {
+  color: var(--text);
+}
+
+.fields label {
+  margin-top: 0.4rem;
+}
+
+.fields label output {
+  color: var(--text);
+  margin-left: 0.3rem;
+}
+
+@media (max-width: 800px) {
+  dialog.settings {
+    width: 100vw;
+    max-width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+  }
+}
+
+/* In soft mode the body is fixed and cancels every touchmove outside the
+   scrollable regions (app.js); the dialog is one of those regions. It sits in
+   the top layer, so the body's transform does not move it. */
+body.soft dialog.settings {
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+
+body.soft dialog.settings select {
+  width: 100%;
+}

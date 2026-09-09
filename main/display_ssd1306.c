@@ -178,6 +178,14 @@ void display_set_hue(enum display_hue hue) {
   (void)hue;
 }
 
+void display_set_theme(const struct display_theme *theme) {
+  // No palette to load into. settings.c never calls this on a board whose
+  // BOARD_HAS_PALETTE is 0 — the catalogue it advertises is empty, so the
+  // page offers no theme and the parser refuses one — but the symbol exists
+  // so display.h stays one interface for both backends.
+  (void)theme;
+}
+
 void display_clear(void) {
   canvas_clear(&s_canvas);
 }
