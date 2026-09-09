@@ -139,30 +139,32 @@ static const uint8_t s_configuration_desc_full[] = {
 // Espressif's PID map encodes the interface set (bit 2 HID, bit 1 MSC), and
 // it exists because hosts cache descriptors per VID/PID: the same PID with a
 // different interface list is how Windows ends up loading yesterday's driver
-// for today's device. That is why the two compositions are two PIDs, and why
-// a keyboard-only composition is not offered until it has one of its own.
-#define DEVICE_DESCRIPTOR(pid)                   \
-  {                                              \
-      .bLength = sizeof(tusb_desc_device_t),     \
-      .bDescriptorType = TUSB_DESC_DEVICE,       \
-      .bcdUSB = 0x0200,                          \
-      .bDeviceClass = 0x00,                      \
-      .bDeviceSubClass = 0x00,                   \
-      .bDeviceProtocol = 0x00,                   \
-      .bMaxPacketSize0 = CFG_TUD_ENDPOINT0_SIZE, \
-      .idVendor = 0x303A,                        \
-      .idProduct = (pid),                        \
-      .bcdDevice = 0x0100,                       \
-      .iManufacturer = 0x01,                     \
-      .iProduct = 0x02,                          \
-      .iSerialNumber = 0x03,                     \
-      .bNumConfigurations = 0x01,                \
-  }
+// for today's device. So the two compositions are two PIDs, and a
+// keyboard-only composition is not offered until it has one of its own (#64).
+#define PID_HID_ONLY 0x4004  // keyboard + mouse
+#define PID_HID_MSC 0x4006   // keyboard + mouse + disk
 
-static const tusb_desc_device_t s_device_desc_hid = DEVICE_DESCRIPTOR(0x4004);
-#if CONFIG_TINYUSB_MSC_ENABLED
-static const tusb_desc_device_t s_device_desc_full = DEVICE_DESCRIPTOR(0x4006);
-#endif
+// Not const, and the only mutable descriptor here: idProduct is assigned once
+// in hid_out_start() before tinyusb_driver_install() and never again. The
+// alternative was two structs differing in one field, or a macro to build
+// them — the macro is what a formatter disagreed about across versions, and
+// two near-identical descriptors is the copy that drifts.
+static tusb_desc_device_t s_device_desc = {
+    .bLength = sizeof(tusb_desc_device_t),
+    .bDescriptorType = TUSB_DESC_DEVICE,
+    .bcdUSB = 0x0200,
+    .bDeviceClass = 0x00,
+    .bDeviceSubClass = 0x00,
+    .bDeviceProtocol = 0x00,
+    .bMaxPacketSize0 = CFG_TUD_ENDPOINT0_SIZE,
+    .idVendor = 0x303A,
+    .idProduct = PID_HID_ONLY,  // the composition decides; see hid_out_start
+    .bcdDevice = 0x0100,
+    .iManufacturer = 0x01,
+    .iProduct = 0x02,
+    .iSerialNumber = 0x03,
+    .bNumConfigurations = 0x01,
+};
 
 static const char *s_string_desc[] = {
     (const char[]){0x09, 0x04},  // English (US)
@@ -686,9 +688,9 @@ esp_err_t hid_out_start(void) {
   // is a disk. Reboot-scoped by design — re-enumerating a live device is a
   // hardware re-test of gotcha 10 (the USB and RF PHYs share the BBPLL) and
   // is tracked, not attempted.
-  const tusb_desc_device_t *device = &s_device_desc_hid;
   const uint8_t *configuration = s_configuration_desc_hid;
   int itf_count = ITF_COUNT_HID;
+  s_device_desc.idProduct = PID_HID_ONLY;
 #if CONFIG_TINYUSB_MSC_ENABLED
   const bool with_disk = settings_usb_disk_enabled();
   if (with_disk) {
@@ -699,16 +701,16 @@ esp_err_t hid_out_start(void) {
     // (gotcha 16b), and the MSC callbacks are never invoked for an interface
     // the descriptor does not declare.
     ESP_RETURN_ON_ERROR(msc_out_start(), TAG, "msc_out_start failed");
-    device = &s_device_desc_full;
     configuration = s_configuration_desc_full;
     itf_count = ITF_COUNT_FULL;
+    s_device_desc.idProduct = PID_HID_MSC;
   }
 #else
   const bool with_disk = false;
 #endif
 
   const tinyusb_config_t cfg = {
-      .device_descriptor = device,
+      .device_descriptor = &s_device_desc,
       .string_descriptor = s_string_desc,
       .string_descriptor_count =
           sizeof(s_string_desc) / sizeof(s_string_desc[0]),
@@ -724,7 +726,7 @@ esp_err_t hid_out_start(void) {
   ESP_LOGI(TAG,
            "USB HID started (keyboard itf %d, mouse itf %d, %d itfs, PID "
            "0x%04X, disk %s)",
-           HID_ITF_KEYBOARD, HID_ITF_MOUSE, itf_count, device->idProduct,
+           HID_ITF_KEYBOARD, HID_ITF_MOUSE, itf_count, s_device_desc.idProduct,
            with_disk ? "on" : "off");
   return ESP_OK;
 }

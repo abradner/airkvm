@@ -447,6 +447,19 @@ add rather than rewrite.
   same rule wants applying to any shell command you then reason from. Grep for the thing you care
   about instead of eyeballing a truncated list, and if you must truncate, say so in the sentence
   that reports the result.
+- **`mise run lint` passing is not evidence CI's lint passes: they run different clang-format
+  versions.** `mise.toml` pins `clang-format = "19"`; `.github/workflows/ci.yml` runs
+  `apt-get install -y clang-format`, which on the `ubuntu-latest` image is whatever Ubuntu ships
+  (18 at the time of writing). The two disagree about continuation alignment inside multi-line
+  macros: a `#define` with `\`-continued designated initialisers was accepted by 19 and rejected
+  by 18, so a locally-green branch reddened CI on a file nothing else had touched. Two ways to
+  settle it, and the first is the real fix: **pin the CI install to the same version mise does**,
+  so there is one formatter rather than two. Until then, code that avoids `\`-continued macros is
+  code neither version can argue about, and a suspect file can be checked against the other
+  version without waiting for CI — `pip install clang-format==18.1.8` into a throwaway venv ships
+  a binary wheel and takes seconds. General form: **a linter whose version is pinned in one place
+  and floating in another is two linters, and green from the pinned one proves nothing about the
+  floating one.**
 - **`main/indicator.c`'s LED body compiles on the C3 bench board and NOWHERE else — so the two S3
   builds are not coverage for it.** `BOARD_HAS_LED` is 1 on the C3, **0** on the S3 0.42" dongle,
   and 1 on the LCD147 — but the LCD147 selects `indicator_ws2812.c` instead
