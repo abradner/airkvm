@@ -127,6 +127,13 @@ enum indicator_state indicator_tick(const struct status_snapshot *snap) {
   }
   // One channel cannot say "suspended" in a colour, so it says it in a rhythm:
   // a fast blink, distinguishable from the slow breath of a bound session.
+  // One channel cannot say "setup" in a colour either, so it says it in the
+  // most distinctive rhythm available: a slow, deep pulse, unlike the fast
+  // suspended blink and unlike the breathe of a bound session.
+  if (state == INDICATOR_SETUP) {
+    set_percent(((now / 1000000) % 2) ? 100 : 10);
+    return state;
+  }
   if (state == INDICATOR_SUSPENDED) {
     set_percent(((now / 250000) % 2) ? 60 : 0);
     return state;

@@ -177,6 +177,12 @@ enum indicator_state indicator_tick(const struct status_snapshot *snap) {
       ceiling = LEVEL_FAULT;
       break;
     }
+    case INDICATOR_SETUP: {
+      const uint8_t c[] = {SOL_LED_SETUP};
+      r = c[0], g = c[1], b = c[2];
+      ceiling = LEVEL_WARN;
+      break;
+    }
     case INDICATOR_SUSPENDED: {
       // Cyan: distinct from every other state, and reads as dormant rather
       // than alarming — nothing is wrong, the target is just asleep.

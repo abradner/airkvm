@@ -68,6 +68,12 @@
 #define SOL_LED_WARN 0xB5, 0x89, 0x00
 #define SOL_LED_FAULT 0xDC, 0x32, 0x2F
 #define SOL_LED_DEBUG 0xD3, 0x36, 0x82
+// Setup mode. Deliberately NOT another hue on the health ramp: setup mode is
+// not a degree of working, it is the device doing a different job entirely
+// (no keyboard, no disk, no console, no target). A warm white says "this is
+// not the normal mode" without inviting the operator to rank it against green
+// or amber, and it is unmistakable beside all six hues above.
+#define SOL_LED_SETUP 0xEE, 0xE8, 0xD5
 
 // Accents. Only these carry meaning; everything else is text.
 #define SOL_YELLOW 0xB5, 0x89, 0x00

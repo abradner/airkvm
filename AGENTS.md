@@ -418,6 +418,50 @@ add rather than rewrite.
   USB-Serial/JTAG mode, esptool's `--before default_reset` enters the bootloader on its own —
   the manual BOOT+RESET in the first bullet above is only needed from HID mode, where there is
   no serial control channel to send it through.
+- **A shell guard binds to the command immediately before it, which is often not the command you
+  meant to test.** Two sessions hit this within hours of each other, in two different shapes, so
+  it is a shape rather than a typo:
+  - *Pipeline* — `git commit ... | tail -2 && git reset --hard HEAD~1`. A pipeline's exit status
+    is the **last stage's**, so `tail` succeeding ran the reset even though the commit had
+    failed. That ate a finished, tested commit; `reflog` got it back, but only because it had
+    been committed.
+  - *Sequence* — `git commit ... ; git log && git push`. The `&&` tests `git log`, not the
+    commit. Observed while 1Password was locked: the commit failed, the push ran, and it was
+    harmless **only** because there was nothing to push. With a commit that had landed it would
+    have published something unverified.
+
+  Note the second one is not a pipeline at all, which is why "check `${PIPESTATUS[0]}`" is too
+  narrow a fix. What both need is for the guard to name the command it guards: `if git commit
+  ...; then`. Two more habits worth the keystrokes: prefer `git reset --hard <explicit-sha>` over
+  a relative `HEAD~1`, so a mis-fire lands somewhere known; and probe on a *copy* rather than the
+  working tree — the first instance of this in the same session was `git checkout --` to undo a
+  probe, which took uncommitted changes with it. **The cleanup half of a throwaway probe is where
+  the damage lives, not the probe itself.** `git reflog` recovers commits and nothing else, so
+  the one rule that always pays is to commit before probing.
+- **A `head`/`tail` on a listing does not give you a partial answer, it gives you a confident
+  negative.** Asked whether a PR touched `palette.h`, a session ran `gh pr view --json files ...
+  | head -25`, did not see it, and told a peer the file was absent. It was there, past the cut.
+  The damage is not the truncation — it is that the report came out as a fact about the PR
+  ("#49 does not touch palette.h") rather than a fact about the command ("I looked at 25 of N
+  entries"). §8 already says to include a positive control when asserting absence in a test; the
+  same rule wants applying to any shell command you then reason from. Grep for the thing you care
+  about instead of eyeballing a truncated list, and if you must truncate, say so in the sentence
+  that reports the result.
+- **`main/indicator.c`'s LED body compiles on the C3 bench board and NOWHERE else — so the two S3
+  builds are not coverage for it.** `BOARD_HAS_LED` is 1 on the C3, **0** on the S3 0.42" dongle,
+  and 1 on the LCD147 — but the LCD147 selects `indicator_ws2812.c` instead
+  (`main/CMakeLists.txt`). So `mise run build` compiles the `#else` stub, `mise run build-lcd147`
+  compiles the other backend, and the whole `#if BOARD_HAS_LED` arm of `indicator.c` is built by
+  `mise run build-bench` alone. A session edited that arm, ran the two S3 builds, and wrote in a
+  PR body that this covered "both indicator backends" — the arm it had changed was compiled by
+  neither. The bug was a bare `return;` in a function returning `enum indicator_state`, which
+  `-Werror=all` catches as a hard error on the bench build in seconds, and which reached review
+  because that build was never run. (An automated reviewer then reported it as affecting the OLED
+  S3, which is also wrong, and for the same reason: it read the source without resolving the board
+  macros.) **General rule: run the build that compiles the lines you edited, and work that out
+  from the board macros rather than from which board the feature is "for".** This is §9 entry 8
+  from the build side — the board that cannot do the headline feature is again the one holding the
+  evidence.
 
 ## 7. CI & Deployment
 
@@ -900,8 +944,7 @@ code is written.*
     state you are least likely to look twice at.
     **Corollary for reviewers:** a `default:` arm or an early `return` in an error path deserves
     the question "what does this value MEAN to the caller", separately from "is it a legal value".
-    (a) and (b) were both found by adversarial review, not by tests; (c) by a human reading a
-    rebase. No test in this repo would have failed for any of them.
+    (a) and (b) were both found by adversarial review, not by tests; (c) by reading a rebase. No test in this repo would have failed for any of them.
 
 19. **A state-coalescing drain is only safe for states that carry no information — and gotcha 11
     had only been applied to the keyboard.** The report task drains every queued intent before
