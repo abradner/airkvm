@@ -241,12 +241,23 @@ mise run fw:clean               # idf.py fullclean
 mise run fw:test                # host-side unit tests — no hardware required
 mise run fw:lint                # clang-format --dry-run --Werror + ruff check/format --check
 mise run fw:fmt                 # clang-format -i + ruff format
+mise run fw:build-bench         # ESP32-C3 bench image — the ONLY build compiling indicator.c's
+                                # #if BOARD_HAS_LED arm (§6.1); CI builds it too
+mise run fw:build-lcd147        # Waveshare ESP32-S3-LCD-1.47B image
+mise run console:test           # console checks in headless Firefox — no board, no phone
+mise run console:self-test      # plant a bug; require console:test to catch it (§8)
+mise run test                   # umbrella: every tree that has tests (firmware, console)
+mise run lint                   # umbrella: firmware C + Python, and the console's harness
+mise run fmt                    # umbrella: apply formatting in both
 ```
 
-`mise run fw:test` is the gate that matters day to day: the keymap and protocol codec are pure and
-compile on the host (§4), so their tests run in seconds with no board attached. Everything else
+`mise run test` is the gate that matters day to day: the keymap and protocol codec are pure and
+compile on the host (§4), and the console's encoder is checkable in a browser with no dongle, so
+both run in seconds with nothing attached. Everything else
 about this project currently cannot be verified without hardware — say so rather than implying
-a passing build means working firmware (§8, verify the output not the instrument).
+a passing build means working firmware (§8, verify the output not the instrument). In particular
+a green `console:test` says the console puts the right bytes on a socket; it says nothing about
+any target receiving them.
 
 Console development: the console is plain static files under `packages/console/`. Edit and reload against a
 flashed board, or serve `packages/console/` with `python3 -m http.server` and point it at a board's WebSocket
@@ -462,6 +473,17 @@ add rather than rewrite.
   `NotFoundError` for a pointer the browser does not consider active, and Firefox draws the
   scrollbars that iOS overlays, so a horizontally scrolling row needs `scrollbar-width: none`
   or it renders as a white stripe.
+  **Committed 2026-09-10 as `packages/console/test/`, and it runs in CI** — the mechanism above
+  was described here, run by hand, and thrown away, which is why `app.js` carried a comment
+  saying "The headless check caught it." about a check that existed nowhere. `mise run
+  console:test`. Two changes worth knowing if you go back to the manual recipe: results come back
+  over HTTP (a `POST` from the page) rather than being read out of a screenshot, so checks are
+  machine-checkable and a timeout is a failure rather than a blank pass; and the stub script is
+  injected into `<head>` **at serve time**, so no file on disk is modified and nothing names
+  `app.js` — which is what survives that file being split. Pointer lock is still unobtainable
+  headlessly (it needs a real gesture), so the suite sets the console's `captured` flag directly;
+  without that every direct-mode handler early-returns and the suite would pass by testing
+  nothing.
 - **`firmware/tools/serial_bridge.py` goes stale every time the board changes USB mode — restart it.**
   Seen ~8 times in one evening: after any flash whose image moved the board between USB HID
   (TinyUSB) and USB-Serial/JTAG, in either direction, the next esptool connect failed with
@@ -549,6 +571,16 @@ add rather than rewrite.
   from the board macros rather than from which board the feature is "for".** This is §9 entry 8
   from the build side — the board that cannot do the headline feature is again the one holding the
   evidence.
+  **Closed structurally 2026-09-10** (§10 meta-rule 5): the bench board is now a row in CI's
+  `BOARDS` table, so those lines are compiled on every PR and the rule above no longer depends on
+  anyone remembering it. The entry stays because the *reasoning* still binds — the mapping from
+  edited lines to the build that compiles them is not something CI can work out for you, and the
+  next board-conditional file will have its own version of this. Demonstrated rather than
+  asserted before the row was added: with a bare `return;` planted in `indicator_tick()`'s
+  `INDICATOR_SETUP` arm, `fw:build-bench` failed with
+  `error: 'return' with no value, in function returning non-void [-Wreturn-mismatch]` while
+  `fw:build` and `fw:build-lcd147` both stayed **green** on the identical file. The green pair is
+  the evidence, not the red one.
 
 ## 7. CI & Deployment
 
@@ -564,10 +596,18 @@ repo is small; filtering would buy seconds and cost trust):
   what §6.1's clang-format 18-vs-19 entry is about, and it is now structurally impossible rather
   than merely warned against. Lint carries `if: always()` so a style failure still reports the
   test result.
+- **console checks** — two more steps in the same job: `console:test` drives the console in
+  headless Firefox against a stubbed socket and asserts the exact frames it sends, and
+  `console:self-test` plants a bug and requires that suite to catch it. Steps rather than a
+  job of their own for the billing reason below; they do need to be off the IDF container,
+  which has no Firefox. See `packages/console/test/README.md` for what they do and do not
+  prove — a green run says the console *encodes* correctly and nothing about any target.
 - **firmware** — builds every board in one job in the official `espressif/idf:release-v5.5`
   container. Proves the images compile and link; proves nothing about behavior. Boards are rows
   in a `BOARDS` table, so adding one is a line rather than a job, and each row names the symbol
-  that proves its config reached the compiler. This job is the deliberate exception to the rule
+  that proves its config reached the compiler. Three rows: both S3 boards and the **C3 bench
+  board**, which is not decorative — it is the only build that compiles `indicator.c`'s
+  `#if BOARD_HAS_LED` arm (§6.1), so without it those lines reach review uncompiled. This job is the deliberate exception to the rule
   above: mise cannot supply ESP-IDF in CI (`fw:setup` clones ~4GB), so its sdkconfig strings are
   a second copy of what mise's build tasks say.
 

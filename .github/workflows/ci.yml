@@ -59,6 +59,26 @@ jobs:
       - name: Lint (clang-format, ruff)
         if: always()
         run: mise run fw:lint
+      # Steps in this job rather than a job of their own, deliberately: this one
+      # runs in seconds and GitHub bills a whole minute per job, which is the
+      # cost this workflow was just restructured to stop paying. It does need to
+      # be off the IDF container — Firefox is not in that image — and `checks`
+      # already is.
+      #
+      # `firefox --version` first so a runner image without Firefox says so in
+      # one line, instead of surfacing sixty seconds later as a page that never
+      # reported. Chromium is not a fallback: it hangs (AGENTS.md §6.1).
+      - name: Console checks (headless Firefox)
+        if: always()
+        run: firefox --version && mise run console:test
+      # The console checks assert exact bytes, and several assert that NO bytes
+      # were sent; a harness that had quietly stopped exercising the page would
+      # pass all of them. This plants a bug and requires the suite to catch it,
+      # so "these checks can fail" is re-established every run rather than
+      # asserted once in a commit message (AGENTS.md §8).
+      - name: Console checks can fail (planted bug)
+        if: always()
+        run: mise run console:self-test
 
   # Every board in one job, so the espressif/idf image is pulled once instead of
   # once per board. Sequential rather than a matrix: parallel legs shorten wall
@@ -150,11 +170,7 @@ jobs:
           # overlay was read; s3-oled042 layers no overlay, so there is nothing
           # to prove.
           #
-          # Adding the C3 bench board is one line:
-          #
-          #   "c3-bench|esp32c3|sdkconfig.defaults;sdkconfig.bench|CONFIG_AIRKVM_BOARD_C3_EGG|no|CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE"
-          #
-          # Three things in that line are easy to get wrong. The symbol is
+          # Three things in the c3-bench row are easy to get wrong. The symbol is
           # C3_EGG, not C3_BENCH. NCM must be `no`: that part has no USB OTG
           # controller so it runs no TinyUSB, and asserting NCM would fail a
           # build that is perfectly correct. And the sentinel must NOT be
@@ -170,6 +186,7 @@ jobs:
           BOARDS=(
             "s3-oled042|esp32s3|sdkconfig.defaults|CONFIG_AIRKVM_BOARD_S3_OLED042|yes|"
             "s3-lcd147|esp32s3|sdkconfig.defaults;sdkconfig.lcd147|CONFIG_AIRKVM_BOARD_S3_LCD147|yes|"
+            "c3-bench|esp32c3|sdkconfig.defaults;sdkconfig.bench|CONFIG_AIRKVM_BOARD_C3_EGG|no|CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE"
           )
 
           # Every board is attempted even after one fails, which is what the
