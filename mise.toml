@@ -164,19 +164,50 @@ ruff format tools
 # shell: a chain reports the exit status of the last command in it, which is the
 # shape AGENTS.md §6.1 records twice as having eaten real work.
 #
-# They name what they actually cover rather than claiming "everything": today
-# packages/console has neither a linter nor a test runner, so an umbrella that
-# said "every tree" would be asserting coverage that does not exist (§2
-# principle 1). Add the entry in the same change that adds the tooling.
+# They name what they actually cover rather than claiming "everything": an
+# umbrella that said "every tree" would be asserting coverage that does not
+# exist (§2 principle 1). packages/console now has a test runner and so appears
+# below; it still has no linter, so `lint` does not claim it.
+
+[tasks."console:test"]
+dir = "packages/console"
+description = "Console checks in headless Firefox — no board, no phone needed"
+run = "python3 test/runner.py"
+
+# Kept separate from console:test rather than folded into it: this one is only
+# meaningful when it FAILS to fail, so running it as part of the suite would
+# make a red run ambiguous between "the console broke" and "the harness broke".
+# Ruff only. Named for what it actually covers rather than for its tree: the
+# console's own JavaScript has no linter, and a task called "console:lint" that
+# silently skipped app.js would assert coverage that does not exist (§2
+# principle 1). Rename it when a JS linter lands.
+[tasks."console:lint-python"]
+dir = "packages/console"
+description = "Lint the console's Python test harness (its JS has no linter yet)"
+run = """
+set -e
+ruff check test
+ruff format --check test
+"""
+
+[tasks."console:self-test"]
+dir = "packages/console"
+description = "Plant a bug and require the console checks to catch it (§8)"
+run = "python3 test/runner.py --self-test"
 
 [tasks.test]
-description = "Every tree that has tests (today: firmware)"
-depends = ["fw:test"]
+description = "Every tree that has tests (today: firmware, console)"
+depends = ["fw:test", "console:test"]
 
 [tasks.lint]
-description = "Every tree that has a linter (today: firmware C + its Python)"
-depends = ["fw:lint"]
+description = "Every tree that has a linter (firmware C + Python; the console's harness)"
+depends = ["fw:lint", "console:lint-python"]
+
+[tasks."console:fmt-python"]
+dir = "packages/console"
+description = "Format the console's Python test harness"
+run = "ruff format test"
 
 [tasks.fmt]
-description = "Apply formatting in every tree that has a formatter (today: firmware)"
-depends = ["fw:fmt"]
+description = "Apply formatting in every tree that has a formatter (firmware, console harness)"
+depends = ["fw:fmt", "console:fmt-python"]

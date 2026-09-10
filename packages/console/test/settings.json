@@ -1,0 +1,16 @@
+{
+  "_comment": [
+    "Stands in for GET /settings, which the dongle serves from",
+    "firmware/main/settings.c. The console fetches it at load, so without it",
+    "the harness would 404 on every run -- which is how this file came to",
+    "exist: the runner's own 404 guard caught it on the first run.",
+    "Deliberately minimal. The checks here are about the wire protocol, not",
+    "the settings panel, and a fixture that mirrored the full device document",
+    "would be a second copy of it drifting against firmware/main/settings.c.",
+    "usb_disk is true so the page renders its default composition rather than",
+    "a variant, keeping the DOM the checks touch in its ordinary state."
+  ],
+  "board": "host-test",
+  "features": { "usb_disk": true },
+  "settings": []
+}
