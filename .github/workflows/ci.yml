@@ -39,7 +39,7 @@ jobs:
     name: Checks (host tests, lint)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Installs the versions mise.toml pins and caches them between runs.
       # Measured locally: clang-format is a 6s install cold, the rest are
       # faster, so this costs less than the apt install it replaces.
@@ -101,7 +101,7 @@ jobs:
       IDF_CCACHE_ENABLE: "1"
       CCACHE_DIR: ${{ github.workspace }}/.ccache
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Restore ccache
         uses: actions/cache@v4
