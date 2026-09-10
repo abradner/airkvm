@@ -556,6 +556,21 @@ add rather than rewrite.
   a binary wheel and takes seconds. General form: **a linter whose version is pinned in one place
   and floating in another is two linters, and green from the pinned one proves nothing about the
   floating one.**
+- **A `depends` umbrella stops at the first failing task, so `mise run test` going red tells you
+  about one tree and nothing about the others.** `[tasks.test]` fans out to `fw:test` and
+  `console:test` via `depends` — chosen over a shell chain because a chain reports only the last
+  command's status, which §6.1 records twice as having eaten real work. It does not have that
+  bug: measured both directions, with the failing task planted deliberately and mise.toml
+  restored afterwards. Console failing → `exit=1` with `fw:test`'s 18 tests still run and
+  reported. **But firmware failing → `exit=3` and `console:test` never runs at all**, producing
+  no output whatsoever. That is not a swallowed failure — the exit code is honest — it is a
+  *partial* run that reads like a complete one, which is §7's "a skipped job is not a passing
+  job" one level down: after a red `mise run test`, the trees that never ran are unknown, not
+  fine. Run the tree's own task (`mise run console:test`) before concluding anything about it.
+  **CI does not have this problem, and that is deliberate rather than lucky:** the workflow runs
+  each check as its own step with `if: always()`, so a firmware failure still reports the
+  console result. The umbrella is a local convenience; the step list is the thing that tells you
+  what actually ran.
 - **`firmware/main/indicator.c`'s LED body compiles on the C3 bench board and NOWHERE else — so the two S3
   builds are not coverage for it.** `BOARD_HAS_LED` is 1 on the C3, **0** on the S3 0.42" dongle,
   and 1 on the LCD147 — but the LCD147 selects `indicator_ws2812.c` instead
