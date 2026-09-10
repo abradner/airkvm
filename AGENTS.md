@@ -555,13 +555,29 @@ add rather than rewrite.
 `.github/workflows/ci.yml` runs on every PR and on pushes to `main`, with no path filters (the
 repo is small; filtering would buy seconds and cost trust):
 
-- **host-tests** — builds and runs the pure-logic tests (keymap, protocol, hid_state). Fast,
-  and the only job that can actually fail for a real logic bug.
-- **firmware-build** — builds the ESP32-S3 image in the official `espressif/idf:release-v5.5`
-  container. Proves it compiles and links; proves nothing about behavior.
-- **lint** — `clang-format` on firmware sources; `ruff check` and `ruff format --check` on
-  `firmware/tools/`. The format check is the one most likely to redden an otherwise-clean PR: run
-  `mise run fw:fmt` before pushing.
+- **checks** — the host-side tests (keymap, protocol, hid_state, settings) and lint, as two
+  steps. The tests are the only thing here that can fail for a real logic bug; the format check
+  is the one most likely to redden an otherwise-clean PR, so run `mise run fw:fmt` before
+  pushing. Both steps are `mise run` invocations, and that is the point: **`mise.toml` is the
+  single source of truth for the tool versions and for what each check does**, so CI and a local
+  run cannot disagree. Do not reintroduce an apt-installed or action-pinned tool here — that is
+  what §6.1's clang-format 18-vs-19 entry is about, and it is now structurally impossible rather
+  than merely warned against. Lint carries `if: always()` so a style failure still reports the
+  test result.
+- **firmware** — builds every board in one job in the official `espressif/idf:release-v5.5`
+  container. Proves the images compile and link; proves nothing about behavior. Boards are rows
+  in a `BOARDS` table, so adding one is a line rather than a job, and each row names the symbol
+  that proves its config reached the compiler. This job is the deliberate exception to the rule
+  above: mise cannot supply ESP-IDF in CI (`fw:setup` clones ~4GB), so its sdkconfig strings are
+  a second copy of what mise's build tasks say.
+
+**Two jobs rather than four, because GitHub bills per job with a one-minute minimum.** Measured
+on the run for `e0d5917`: 25s of host tests plus 36s of lint cost two billed minutes, and the
+container pull was 113s *per board leg* for the same image. Sharing one job and one container cut
+a run from 12 billed minutes to 9 cold, and to 5 with a warm ccache (measured: the both-boards
+build goes 322s → 67s at a 99.6% hit rate). ccache hits are cross-run only — cross-*board* hits
+are zero, because the boards differ by Kconfig and `sdkconfig.h` is included widely. Wall clock
+is the accepted cost: sequential boards are slower to report than parallel legs but bill less.
 
 Deployment is `idf.py flash` over USB by a human holding the board. There is no shipping OTA path
 and no release artifact — don't build those until asked. What does exist is `firmware/main/ota.c`: a
@@ -577,7 +593,7 @@ Two universal cautions, whatever the pipeline:
 
 - **A skipped job is not a passing job.** A green run where path filtering skipped half the suite
   means that half never saw the commit. Check what actually ran before trusting the check.
-- **A build is not a behavior.** `firmware-build` going green means the image links, nothing more.
+- **A build is not a behavior.** The `firmware` job going green means the images link, nothing more.
   Every claim about enumeration, HID delivery, BIOS support, or latency needs a board, and until
   one exists those claims are marked unverified in-place (§4).
 

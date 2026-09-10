@@ -6,52 +6,94 @@ name: CI
 # coordinator reports green having never compiled the firmware, which is exactly
 # the "a skipped job is not a passing job" trap §7 warns about. Revisit only when
 # the minutes actually hurt, and then make the skip visible in the check name.
+#
+# Two jobs, not four, and the reason is billing rather than taste: GitHub bills
+# per-job with a one-minute minimum, so a 25-second job and a 36-second job cost
+# two minutes between them. Measured on the run for e0d5917 (per-step timings
+# from the API, not guessed):
+#
+#   host tests   25s  |  lint  36s          -> 2 billed minutes for 61s of work
+#   firmware build, per board:  113s pulling the container + 162s compiling
+#
+# So the container pull was 40% of each board's cost and was paid once per board
+# for the same image. Both facts are addressed below: the cheap checks share one
+# job, and every board shares one container.
 on:
   pull_request:
   push:
     branches: [main]
 
 jobs:
-  host-tests:
-    name: Host tests (keymap, protocol)
+  # Everything that needs no ESP-IDF. Both steps run through `mise run`, which
+  # is the point: mise.toml is the single source of truth for the tool versions
+  # AND for what the check actually does.
+  #
+  # This replaced an apt-installed clang-format plus a second copy of the
+  # file-selection command, and two astral-sh/ruff-action steps each repeating
+  # the version string. That duplication was not hypothetical — §6.1 records a
+  # locally-green branch reddening CI because mise pinned clang-format 19 while
+  # apt shipped 18, on a file nothing else had touched. There is now one pinned
+  # version of each tool and one definition of each command, so the two cannot
+  # disagree, and a Renovate bump to mise.toml reaches CI by construction.
+  checks:
+    name: Checks (host tests, lint)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: firmware
     steps:
       - uses: actions/checkout@v4
-      - name: Install build deps
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
-      - name: Configure
-        run: cmake -B test/host/build -G Ninja -S test/host
-      - name: Build
-        run: cmake --build test/host/build
-      - name: Run
-        run: ctest --test-dir test/host/build --output-on-failure
+      # Installs the versions mise.toml pins and caches them between runs.
+      # Measured locally: clang-format is a 6s install cold, the rest are
+      # faster, so this costs less than the apt install it replaces.
+      - uses: jdx/mise-action@v2
+      # mise refuses a config it has not been told to trust, and this one has a
+      # templated [env] block, so it is not a config mise will read blindly.
+      # One line here rather than discovering it as a red first run.
+      - run: mise trust
+      # No working-directory here: each mise task carries its own `dir`, so a
+      # task knows where it runs and this file does not have to.
+      - name: Host tests (keymap, protocol, hid_state, settings)
+        run: mise run fw:test
+      # `always()` so a formatting failure still reports the test result and
+      # vice versa. Merging the jobs must not cost the ability to tell a style
+      # failure from a broken test run — that separation was the reason they
+      # were two jobs, and it is preserved here at the step level instead.
+      - name: Lint (clang-format, ruff)
+        if: always()
+        run: mise run fw:lint
 
-  firmware-build:
-    # One leg per shipping board. Both are esp32s3, so the board is chosen by a
-    # Kconfig symbol rather than by target — which means a shared generated
-    # sdkconfig would silently build the same image twice and report two green
-    # checks for one configuration. Hence a distinct -DSDKCONFIG per leg; that
-    # is load-bearing, not tidiness (AGENTS.md §6.1: a defaults file cannot
-    # change a symbol an existing sdkconfig already holds).
-    name: Firmware build (${{ matrix.board }})
+  # Every board in one job, so the espressif/idf image is pulled once instead of
+  # once per board. Sequential rather than a matrix: parallel legs shorten wall
+  # clock but bill the same minutes plus another container pull each, and the
+  # instruction here was to spend fewer minutes.
+  #
+  # This job proves the images compile and link. It observes nothing about USB
+  # enumeration, HID delivery, or latency — see AGENTS.md §7.
+  firmware:
+    name: Firmware build (all boards)
     runs-on: ubuntu-latest
     container: espressif/idf:release-v5.5
     defaults:
       run:
         working-directory: firmware
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - board: s3-oled042
-            defaults: "sdkconfig.defaults"
-          - board: s3-lcd147
-            defaults: "sdkconfig.defaults;sdkconfig.lcd147"
+    env:
+      # ESP-IDF honours this to route compilation through ccache. Kept in the
+      # workspace rather than $HOME so actions/cache can find it regardless of
+      # what the container sets HOME to.
+      IDF_CCACHE_ENABLE: "1"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
     steps:
       - uses: actions/checkout@v4
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          # Keyed on the run so every run writes a fresh entry, restoring from
+          # the most recent one. A key that never changes would pin the cache to
+          # whatever the first run compiled and stop it ever warming.
+          key: ccache-idf5.5-${{ github.run_id }}
+          restore-keys: |
+            ccache-idf5.5-
+
       # CONFIG_AIRKVM_TLS defaults to y, and the certificates it embeds live in
       # gitignored certs/ because they are key material. A fresh checkout
       # therefore could not even configure: CMake failed on the missing
@@ -65,85 +107,146 @@ jobs:
         run: |
           command -v openssl >/dev/null || (apt-get update && apt-get install -y openssl)
           ./tools/make_certs.sh
-      # This job proves the image compiles and links. It observes nothing about
-      # USB enumeration, HID delivery, or latency — see AGENTS.md §7.
-      - name: Build
-        shell: bash
-        # `idf.py set-target` writes sdkconfig and does not compose with
-        # SDKCONFIG_DEFAULTS, so the target is passed at configure time
-        # instead — the same way mise.toml's build-bench does it.
-        run: |
-          . "$IDF_PATH/export.sh"
-          idf.py -B build-${{ matrix.board }} -DIDF_TARGET=esp32s3 \
-            -DSDKCONFIG_DEFAULTS="${{ matrix.defaults }}" \
-            -DSDKCONFIG=sdkconfig.${{ matrix.board }}.ci build
-      # A build is not a behaviour, and this one is worth confirming rather
-      # than assuming: the board symbol reaching the compiler is exactly the
-      # thing §6.1 says fails silently, and an image built for the wrong board
-      # links and passes just as green as the right one.
-      - name: Confirm the intended board actually reached the compiler
-        shell: bash
-        run: |
-          header="build-${{ matrix.board }}/config/sdkconfig.h"
-          case "${{ matrix.board }}" in
-            s3-oled042) want=CONFIG_AIRKVM_BOARD_S3_OLED042 ;;
-            s3-lcd147)  want=CONFIG_AIRKVM_BOARD_S3_LCD147 ;;
-          esac
-          # `if` rather than `grep && {...}`: this step runs under `bash -e`,
-          # where a failing AND-list aborts the step — so the negative check
-          # would fail the build in exactly the case it is meant to pass.
-          if ! grep -q "^#define $want 1" "$header"; then
-            echo "::error::$want absent from $header"; exit 1
-          fi
-          if ! grep -q "^#define CONFIG_FREERTOS_HZ 1000" "$header"; then
-            echo "::error::FREERTOS_HZ is not 1000 (gotcha 12)"; exit 1
-          fi
-          # A disabled Kconfig symbol is absent from the generated header
-          # entirely, so presence of any kind means it got switched on.
-          if grep -q "CONFIG_MBEDTLS_SSL_PROTO_TLS1_3" "$header"; then
-            echo "::error::TLS 1.3 is enabled (gotcha 13)"; exit 1
-          fi
-          # Setup mode's USB link promises a DHCP offer with no DNS option;
-          # this symbol makes the server offer itself whenever the flag is
-          # off (sdkconfig.defaults says why). Present means the promise
-          # is broken, and nothing else in the build would notice.
-          if grep -q "CONFIG_LWIP_DHCPS_ADD_DNS" "$header"; then
-            echo "::error::LWIP_DHCPS_ADD_DNS is on (usb_net.h)"; exit 1
-          fi
-          if ! grep -q "^#define CONFIG_TINYUSB_NET_MODE_NCM 1" "$header"; then
-            echo "::error::TINYUSB_NET_MODE_NCM absent (setup mode has no USB link)"; exit 1
-          fi
-          echo "$want present, FREERTOS_HZ=1000, TLS 1.3 off, DHCPS_ADD_DNS off, NCM on"
 
-  lint:
-    name: Lint (clang-format, ruff)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: firmware
-    steps:
-      - uses: actions/checkout@v4
-      - name: clang-format
+      - name: Build and verify each board
+        shell: bash
         run: |
-          sudo apt-get update && sudo apt-get install -y clang-format
-          find main test -name build -prune -o \( -name '*.c' -o -name '*.h' \) -print \
-            | xargs -r clang-format --dry-run --Werror
-      # Version pinned to match the one mise installs. Left unpinned the action
-      # installs the latest ruff, which enforced a wider default rule set than
-      # `mise run fw:lint` did and failed on code that was green locally. The rule
-      # selection itself is in .ruff.toml, so the two agree by construction.
-      # `src` rather than a path appended to `args`: the action runs
-      # `ruff <args> <src>` and `src` defaults to the whole workspace, so
-      # `args: check firmware/tools` would lint firmware/tools AND the entire
-      # repo — which passes today and would quietly subject the coming Rails
-      # and Astro trees to the firmware's rule selection.
-      - uses: astral-sh/ruff-action@v3
-        with:
-          version: "0.9"
-          args: check
-          src: firmware/tools
-      - uses: astral-sh/ruff-action@v3
-        with:
-          version: "0.9"
-          args: format --check
-          src: firmware/tools
+          # -e already arrives from GitHub's `shell: bash` (it runs
+          # `bash -eo pipefail`), so every fallible command below is guarded by
+          # an `if` or an OR-list. -u is deliberately NOT set: `${#failed[@]}`
+          # on an empty array is an unbound-variable error under it in older
+          # bash, which would fail the step precisely when nothing went wrong.
+          set -o pipefail
+          . "$IDF_PATH/export.sh"
+
+          # ccache is a saving, not a requirement: if the image has no ccache
+          # the builds still run, just slower. Reported rather than assumed —
+          # `ccache -s` at the end is what tells you whether it did anything
+          # (AGENTS.md §8, verify the output not the instrument).
+          if ! command -v ccache >/dev/null; then
+            echo "::warning::ccache absent from the image; building without it"
+            unset IDF_CCACHE_ENABLE
+          fi
+
+          # board | idf target | SDKCONFIG_DEFAULTS | expected board symbol | expects USB NCM | overlay sentinel
+          #
+          # A distinct -DSDKCONFIG per board is load-bearing, not tidiness: both
+          # S3 boards are the same target and differ only by a Kconfig symbol, so
+          # a shared generated sdkconfig would silently build one configuration
+          # twice and report it green twice (AGENTS.md §6.1: a defaults file
+          # cannot change a symbol an existing sdkconfig already holds).
+          #
+          # The last field exists because asserting the *board* symbol does not
+          # always prove the overlay was read. Kconfig.projbuild picks a board by
+          # target (`default AIRKVM_BOARD_C3_EGG if IDF_TARGET_ESP32C3`), so on a
+          # single-board target the symbol is set by -DIDF_TARGET alone and would
+          # be present even if the overlay were silently ignored — §6.1's "a
+          # config change can silently not reach the image", with a green check
+          # over it. The sentinel is a symbol ONLY the overlay can produce.
+          #
+          # Both S3 rows leave it empty, and that emptiness is meaningful rather
+          # than lazy: esp32s3 defaults to S3_OLED042, so S3_LCD147 can only come
+          # from sdkconfig.lcd147 and the board assertion already proves the
+          # overlay was read; s3-oled042 layers no overlay, so there is nothing
+          # to prove.
+          #
+          # Adding the C3 bench board is one line:
+          #
+          #   "c3-bench|esp32c3|sdkconfig.defaults;sdkconfig.bench|CONFIG_AIRKVM_BOARD_C3_EGG|no|CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE"
+          #
+          # Three things in that line are easy to get wrong. The symbol is
+          # C3_EGG, not C3_BENCH. NCM must be `no`: that part has no USB OTG
+          # controller so it runs no TinyUSB, and asserting NCM would fail a
+          # build that is perfectly correct. And the sentinel must NOT be
+          # CONFIG_AIRKVM_HID_BACKEND_LOG, the obvious choice — Kconfig's
+          # `default AIRKVM_HID_BACKEND_LOG` is the fallback for every non-S3/S2
+          # target, so a C3 gets it from the target too and it proves nothing.
+          # The partition table does prove it: sdkconfig.defaults asks for
+          # TWO_OTA_LARGE and only sdkconfig.bench overrides it to
+          # SINGLE_APP_LARGE, so its presence also proves the overlay was applied
+          # in the right order. The bench board is the only one that compiles
+          # indicator.c's `#if BOARD_HAS_LED` arm (§6.1), which is why it is
+          # worth a leg at all.
+          BOARDS=(
+            "s3-oled042|esp32s3|sdkconfig.defaults|CONFIG_AIRKVM_BOARD_S3_OLED042|yes|"
+            "s3-lcd147|esp32s3|sdkconfig.defaults;sdkconfig.lcd147|CONFIG_AIRKVM_BOARD_S3_LCD147|yes|"
+          )
+
+          # Every board is attempted even after one fails, which is what the
+          # matrix's fail-fast: false used to buy. Failures are collected and
+          # re-reported at the end so the summary names all of them.
+          failed=()
+
+          for entry in "${BOARDS[@]}"; do
+            IFS='|' read -r board target defaults want ncm sentinel <<<"$entry"
+            echo "::group::$board ($target)"
+
+            # `idf.py set-target` writes sdkconfig and does not compose with
+            # SDKCONFIG_DEFAULTS, so the target is passed at configure time
+            # instead — the same way mise.toml's fw:build-bench does it.
+            if ! idf.py -B "build-$board" -DIDF_TARGET="$target" \
+                 -DSDKCONFIG_DEFAULTS="$defaults" \
+                 -DSDKCONFIG="sdkconfig.$board.ci" build; then
+              echo "::error::$board failed to build"
+              failed+=("$board (build)")
+              echo "::endgroup::"
+              continue
+            fi
+
+            # A build is not a behaviour, and this is worth confirming rather
+            # than assuming: the board symbol reaching the compiler is exactly
+            # the thing §6.1 says fails silently, and an image built for the
+            # wrong board links and passes just as green as the right one.
+            header="build-$board/config/sdkconfig.h"
+            bad=""
+
+            # `if` rather than `grep && {...}`: a failing AND-list under `set -e`
+            # aborts the step, so the negative check would fail the build in
+            # exactly the case it is meant to pass.
+            if ! grep -q "^#define $want 1" "$header"; then
+              bad="$bad $want-absent"
+            fi
+            if ! grep -q "^#define CONFIG_FREERTOS_HZ 1000" "$header"; then
+              bad="$bad FREERTOS_HZ-not-1000(gotcha-12)"
+            fi
+            # A disabled Kconfig symbol is absent from the generated header
+            # entirely, so presence of any kind means it got switched on.
+            if grep -q "CONFIG_MBEDTLS_SSL_PROTO_TLS1_3" "$header"; then
+              bad="$bad TLS1.3-enabled(gotcha-13)"
+            fi
+            # Setup mode's USB link promises a DHCP offer with no DNS option;
+            # this symbol makes the server offer itself whenever the flag is off
+            # (sdkconfig.defaults says why). Present means the promise is broken,
+            # and nothing else in the build would notice.
+            if grep -q "CONFIG_LWIP_DHCPS_ADD_DNS" "$header"; then
+              bad="$bad LWIP_DHCPS_ADD_DNS-on(usb_net.h)"
+            fi
+            if [ "$ncm" = yes ] && \
+               ! grep -q "^#define CONFIG_TINYUSB_NET_MODE_NCM 1" "$header"; then
+              bad="$bad NCM-absent(setup-mode-has-no-USB-link)"
+            fi
+            # The overlay sentinel: see the table's comment for why the board
+            # symbol alone is not enough on a single-board target.
+            if [ -n "$sentinel" ] && ! grep -q "^#define $sentinel 1" "$header"; then
+              bad="$bad $sentinel-absent(overlay-not-read)"
+            fi
+
+            if [ -n "$bad" ]; then
+              echo "::error::$board config wrong:$bad"
+              failed+=("$board (config:$bad)")
+            else
+              echo "$board OK: $want present, FREERTOS_HZ=1000, TLS 1.3 off," \
+                   "DHCPS_ADD_DNS off, NCM expected=$ncm"
+            fi
+            echo "::endgroup::"
+          done
+
+          echo "::group::ccache statistics"
+          command -v ccache >/dev/null && ccache -s || echo "no ccache"
+          echo "::endgroup::"
+
+          if [ ${#failed[@]} -gt 0 ]; then
+            printf '::error::failing boards: %s\n' "${failed[*]}"
+            exit 1
+          fi
+          echo "all ${#BOARDS[@]} boards built and verified"
