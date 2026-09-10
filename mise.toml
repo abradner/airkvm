@@ -12,7 +12,7 @@
 python = "3.14"
 cmake = "3.31"
 ninja = "1.13.2"
-ruff = "0.9"
+ruff = "0.16.6"
 clang-format = "19"
 
 # ESP-IDF itself is not a mise-managed tool: it is a git checkout plus its own
