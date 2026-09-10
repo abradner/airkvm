@@ -11,7 +11,7 @@ doesn't light, the scan is broken and nothing else it says means anything.
 Not built by CI and not part of the firmware.
 
 ```sh
-cd tools/led_scan
+cd firmware/tools/led_scan
 idf.py -DIDF_TARGET=esp32c3 build
 idf.py -p /dev/ttyACM0 flash monitor
 ```

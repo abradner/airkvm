@@ -36,7 +36,7 @@ the source, so what was skipped is visible and reviewable.
 Not built by CI and not part of the firmware.
 
 ```sh
-cd tools/i2c_scan
+cd firmware/tools/i2c_scan
 idf.py -DIDF_TARGET=esp32s3 build
 idf.py -p /dev/ttyACM0 flash monitor
 ```

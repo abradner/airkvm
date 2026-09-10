@@ -37,7 +37,7 @@ differentiator, and the only mode that needs no infrastructure at all (AGENTS.md
 
 The coordinator is a separate program: a single Go binary with embedded assets, plus a container
 image wrapping it. It is a CA by default, encourages Let's Encrypt where a real name exists, and
-accepts a supplied certificate-chain PEM — the same three-way choice `tools/make_certs.sh`
+accepts a supplied certificate-chain PEM — the same three-way choice `firmware/tools/make_certs.sh`
 already offers, so operators who run internal PKI are not forced onto a second one.
 
 ### Accepted trade-off
@@ -154,7 +154,7 @@ fleet mode ever ships.
 ## Sequencing
 
 1. ~~**`session.c` extraction + keepalive deadline.**~~ **Done** — shipped in `84c3f0d`
-   ("Tear down a console session that has gone quiet", #3). `main/session.c`/`session.h` exist,
+   ("Tear down a console session that has gone quiet", #3). `firmware/main/session.c`/`session.h` exist,
    `net.c` drives them, and the 3s deadline is live and documented in `docs/repo-map.md`. Its
    known limitation is tracked separately as #6. Left in the list rather than deleted so the
    sequencing argument still reads, since everything below was justified partly by this being

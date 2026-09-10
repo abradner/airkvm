@@ -26,7 +26,9 @@ tmp/
 # .idea/
 # .vscode/
 
-# --- ESP-IDF / CMake ---
+# --- ESP-IDF / CMake (firmware/) ---
+# Unanchored on purpose: build dirs appear under firmware/ and under
+# firmware/tools/{led_scan,i2c_scan}/, which are their own IDF projects.
 build/
 build-*/
 managed_components/
@@ -35,22 +37,40 @@ managed_components/
 # re-allow only the checked-in templates. Listing files individually let
 # `sdkconfig.bench.generated` through once; a deny-all-then-allow rule cannot
 # make that mistake again as new targets are added.
+#
+# The re-allows are anchored to the directories that actually hold checked-in
+# sdkconfigs. Unanchored, `!sdkconfig.defaults` would re-allow one dropped in
+# any future tree, which is a promise this repo has no reason to make.
+#
+# Note there are FIVE checked-in sdkconfigs, not three: tools/i2c_scan and
+# tools/led_scan are their own little IDF projects and each ships one. Anchoring
+# only the firmware/ three silently moved those two into the ignored set — they
+# stayed tracked, so nothing broke, and `git check-ignore` on a tracked file
+# reports "not ignored" and hides it. `git check-ignore --no-index` is what
+# shows the truth; use it when touching these lines.
+#
+# Enumerated, not globbed. `!/firmware/tools/*/sdkconfig.defaults` would work
+# today and would also re-allow the file for every tool directory added later —
+# which is the deny-all-then-re-allow rule above defeating itself, since the
+# whole point is that a new target must be added deliberately rather than
+# inherited. Adding a sixth means adding a line here, on purpose.
 sdkconfig*
-!sdkconfig.defaults
-!sdkconfig.bench
-!sdkconfig.ci
-!sdkconfig.lcd147
+!/firmware/sdkconfig.defaults
+!/firmware/sdkconfig.bench
+!/firmware/sdkconfig.lcd147
+!/firmware/tools/i2c_scan/sdkconfig.defaults
+!/firmware/tools/led_scan/sdkconfig.defaults
 dependencies.lock
 *.bin
 *.elf
 *.map
 
-# ESP-IDF checkout and its downloaded toolchains (installed by `mise run setup`,
+# ESP-IDF checkout and its downloaded toolchains (installed by `mise run fw:setup`,
 # pinned in mise.toml — several GB, never committed)
 .esp-idf/
 .esp-idf-tools/
 
-# --- Python (tools/) ---
+# --- Python (firmware/tools/) ---
 __pycache__/
 *.pyc
 .venv/
@@ -59,4 +79,6 @@ __pycache__/
 # --- TLS material ---
 # Device keys and the local CA private key. The CA key can mint a certificate
 # for any name the trusting machines accept, so it is treated like an ssh key.
+# Unanchored: firmware/tools/make_certs.sh writes firmware/certs/, and a
+# coordinator holding key material must be covered by the same rule.
 certs/

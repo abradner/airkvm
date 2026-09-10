@@ -255,7 +255,7 @@ def key_frame(frame_type: int, code: str) -> bytes:
     return bytes([frame_type, len(encoded)]) + encoded
 
 
-# Mirrors the console's CHAR_MAP (web/app.js). Two copies of this table is a
+# Mirrors the console's CHAR_MAP (packages/console/app.js). Two copies of this table is a
 # known duplication: this one exists so the tool has no dependency on a browser,
 # and it is small enough that divergence shows up immediately as a wrong
 # character. If it grows, move it into firmware and send text as text.

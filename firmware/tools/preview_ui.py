@@ -7,15 +7,16 @@ the IP fits or the rows collide. This draws the real glyphs from the real font
 tables at the real layout offsets, so the things that are actually checkable
 without hardware — does it fit, does it overlap, is it legible — are checkable.
 
-It is a preview, not a test: it deliberately reads main/font*.c and main/ui.c
+It is a preview, not a test: it deliberately reads firmware/main/font*.c and
+firmware/main/ui.c
 rather than hardcoding their values, so it cannot silently disagree with the
 firmware, but the sequence of draw calls mirrors ui.c's draw() by hand.
 
-  python3 tools/preview_ui.py            # ASCII art for both boards
-  python3 tools/preview_ui.py --png out  # also write out-{board}[-{theme}].png
-  python3 tools/preview_ui.py --contrast # the contrast table, from theme.h
+  python3 firmware/tools/preview_ui.py            # ASCII art for both boards
+  python3 firmware/tools/preview_ui.py --png out  # also write out-{board}[-{theme}].png
+  python3 firmware/tools/preview_ui.py --contrast # the contrast table, from theme.h
 
-Themes are read out of main/theme.h and main/palette.h for the same reason the
+Themes are read out of firmware/main/theme.h and firmware/main/palette.h for the same reason the
 fonts and offsets are read out of their sources: a preview that disagrees with
 the firmware is worse than no preview. Colours are QUANTISED to RGB565 before
 being drawn, so what this renders is what the panel can show rather than what

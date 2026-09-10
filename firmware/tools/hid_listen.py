@@ -11,10 +11,10 @@ Until now the only way to close it was to ask a human what appeared on screen.
 Run the dongle into this machine and it enumerates as an ordinary USB keyboard,
 so the kernel will tell us precisely what it typed:
 
-    ./tools/hid_listen.py --seconds 5
-    ./tools/hid_listen.py --expect "hello from airkvm" &
-    ./tools/poke.py <dongle-ip> type "hello from airkvm"
-    ./tools/hid_listen.py --mouse --seconds 10   # buttons, motion, wheel
+    ./firmware/tools/hid_listen.py --seconds 5
+    ./firmware/tools/hid_listen.py --expect "hello from airkvm" &
+    ./firmware/tools/poke.py <dongle-ip> type "hello from airkvm"
+    ./firmware/tools/hid_listen.py --mouse --seconds 10   # buttons, motion, wheel
 
 `--mouse` reads the dongle's mouse node instead, so "a tap is one click" and
 "two fingers are a wheel" are checked the same way as typed text is.

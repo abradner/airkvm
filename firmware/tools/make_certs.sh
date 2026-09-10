@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Generate the TLS material the firmware embeds.
 #
-#   ./tools/make_certs.sh                      # create a local CA if needed, then a device cert
-#   ./tools/make_certs.sh --host kvm-rack      # a second dongle, different mDNS name
-#   ./tools/make_certs.sh --ca-cert ca.crt --ca-key ca.key   # sign with a CA you already run
+#   ./firmware/tools/make_certs.sh             # create a local CA if needed, then a device cert
+#   ./firmware/tools/make_certs.sh --host kvm-rack   # a second dongle, different mDNS name
+#   ./firmware/tools/make_certs.sh --ca-cert ca.crt --ca-key ca.key   # sign with a CA you run
 #
 # Why a CA at all, rather than a self-signed device certificate: the browser has
 # to consider the origin trustworthy, not merely encrypted. Chrome now resists
@@ -17,6 +17,15 @@
 # can mint a certificate for ANY name your machines trust — treat it like an ssh
 # private key, and prefer passing an existing CA you already manage.
 set -euo pipefail
+
+# Where the caller was standing, captured BEFORE the cd below, because a
+# relative --ca-cert/--ca-key is relative to THAT and not to the firmware tree.
+# This mattered the moment the firmware moved into firmware/: the cd used to
+# land at the repository root, so `./tools/make_certs.sh --ca-cert ca.crt` from
+# the root resolved against the root; afterwards the same command silently
+# resolved against firmware/ and reported a missing key, or — worse — found a
+# different file of the same name and signed with the wrong CA.
+INVOKED_FROM="$PWD"
 
 cd "$(dirname "$0")/.."
 CERT_DIR="certs"
@@ -33,6 +42,16 @@ while [[ $# -gt 0 ]]; do
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
+done
+
+# Resolve caller-supplied paths against the caller's directory. Absolute paths
+# are left alone; an unset CA is not resolved at all, because it is filled in
+# below from CERT_DIR, which is relative to the firmware tree on purpose.
+for var in CA_CERT CA_KEY; do
+  val="${!var}"
+  if [[ -n "$val" && "$val" != /* ]]; then
+    printf -v "$var" '%s' "$INVOKED_FROM/$val"
+  fi
 done
 
 mkdir -p "$CERT_DIR"
@@ -95,4 +114,4 @@ echo "           -k /Library/Keychains/System.keychain $CA_CERT"
 echo "  Linux: sudo cp $CA_CERT /usr/local/share/ca-certificates/airkvm-ca.crt \\"
 echo "           && sudo update-ca-certificates"
 echo
-echo "Then: mise run build && mise run flash"
+echo "Then: mise run fw:build && mise run fw:flash"

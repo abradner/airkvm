@@ -114,7 +114,7 @@ esp_err_t wifi_start(void) {
     status_set_no_credentials();
     ESP_LOGE(TAG,
              "no WiFi credentials — hold BOOT for 5 s to set up, or run "
-             "`mise run config`");
+             "`mise run fw:config`");
     return ESP_ERR_INVALID_STATE;
   }
 
