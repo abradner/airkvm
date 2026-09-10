@@ -110,6 +110,11 @@ esp_err_t display_init(void) {
     return err;
   }
 
+  // clang-format off
+  // Hand-paired, like the tables in keymap.c and the fonts: each line is one
+  // SSD1306 command with its argument, and the pairing is the documentation.
+  // clang-format 23 splits every pair onto its own line, which reads as a wall
+  // of unrelated bytes; the guard keeps the layout identical under 19 and 23.
   static const uint8_t init_seq[] = {
       0xAE,        // display off
       0xD5, 0x80,  // clock divide
@@ -137,6 +142,7 @@ esp_err_t display_init(void) {
       0xA6,        // non-inverted
       0xAF,        // display on
   };
+  // clang-format on
   // Sent in small chunks: the command buffer is deliberately stack-sized, and
   // one long transfer would need a heap allocation for no benefit.
   for (size_t i = 0; i < sizeof(init_seq);) {
