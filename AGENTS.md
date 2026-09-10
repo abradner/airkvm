@@ -556,6 +556,12 @@ add rather than rewrite.
   a binary wheel and takes seconds. General form: **a linter whose version is pinned in one place
   and floating in another is two linters, and green from the pinned one proves nothing about the
   floating one.**
+  **The specific instance is closed (#71, 2026-09-09):** CI's lint step is now `mise run fw:lint`,
+  so there is one pinned formatter and a local green does predict CI's. The general form still
+  binds, and the closure has a cost worth knowing: the version CI enforces is now whatever
+  `mise.toml` says, so **a Renovate bump to `clang-format` changes what CI enforces across every
+  file in the repo.** That is the right trade — it just means a formatter bump is a diff to read
+  rather than a version string to wave through (see the clang-format 23 entry below).
 - **A `depends` umbrella kills its siblings when one task fails, so a red `mise run test` is not
   a full run.** `[tasks.test]` fans out to `fw:test` and `console:test` via `depends`, chosen
   over a shell chain because a chain reports only the last command's status — the shape recorded
@@ -611,6 +617,49 @@ add rather than rewrite.
   `error: 'return' with no value, in function returning non-void [-Wreturn-mismatch]` while
   `fw:build` and `fw:build-lcd147` both stayed **green** on the identical file. The green pair is
   the evidence, not the red one.
+- **CI cannot vet a `cmake`/`ninja` bump for the firmware, because the firmware job never runs
+  mise.** The `firmware` job runs in the `espressif/idf:release-v5.5` container and uses *that
+  image's* CMake and ninja; mise is installed only in the `checks` job, where the sole thing it
+  builds is `firmware/test/host` — a plain pure-C test project with none of ESP-IDF's
+  component system in it. So a green CI on a Renovate bump to either tool proves the host tests
+  still configure, and says nothing whatsoever about ESP-IDF's build system, which is where a CMake
+  major version actually breaks. This is the clang-format 18-vs-19 entry above turned inside out:
+  there, two pinned versions disagreed; here, the pin is real but **the job that would exercise
+  it isn't the job that builds the firmware.** The gate for such a bump is local, and it is the
+  three board builds (`fw:build`, `fw:build-bench`, `fw:build-lcd147`), from *deleted* build
+  directories — an incremental build reuses the generator and cache the previous CMake wrote, so
+  it can succeed on a version that could never have configured the project. Verify which binary
+  did the work rather than trusting `mise ls`, because `. $IDF_PATH/export.sh` also puts tools on
+  PATH: `grep CMAKE_COMMAND firmware/build*/CMakeCache.txt` names the exact executable.
+- **CMake 4 does build ESP-IDF v5.5 — recorded so it is not re-litigated.** The expectation
+  (reasonable, and wrong) was that CMake 4 removing `cmake_minimum_required` compatibility below
+  3.5 would take out a third-party component. Measured 2026-09-10 on aarch64 with mise's
+  `cmake = "4.4.3"`: all three boards configure and link from clean build dirs, the host tests
+  pass, and the logs contain no CMake deprecation warning of any kind. Managed components
+  (`esp_tinyusb`, `mdns`) were in the link. This is a result about *this* IDF version, not a
+  licence to skip the check on the next one: v5.5 pins the floor, and the same three builds are
+  the test when IDF moves.
+- **A formatter bump can change WHICH files it checks, not just how it formats them.** ruff
+  0.16.6 formats Python fenced in Markdown, so `mise run fw:lint` went from 5 files to 7 without
+  a word: `tools/i2c_scan/README.md` and `tools/led_scan/README.md` are now lint-enforced, and a
+  badly-indented snippet in either would redden CI on a PR that never touched Python. They happen
+  to pass today. Confirmed with a positive control rather than inferred from the count — a
+  `probe.md` holding `x   =    1` in a ```python fence, which `ruff format --diff` rewrites to
+  `x = 1`. **Read the file list a formatter reports, not just its exit code:** the count line
+  ("7 files already formatted") was the only visible symptom, and `--verbose` is what names them.
+- **clang-format 23 unpicks pair-per-line initialiser tables, and `// clang-format off` is this
+  repo's answer.** The 19 → 23 bump (#28) reformatted exactly one file: `display_ssd1306.c`'s
+  SSD1306 `init_seq[]`, where each line is one command with its argument and a trailing comment
+  naming the pair. 23 splits every pair onto its own line, leaving a 40-line wall of bytes whose
+  comments no longer sit beside the command they describe — 25 insertions for 16 deletions, and
+  nothing about it is a bug the compiler can see. The fix was not to accept the churn and not to
+  hold the version back: `keymap.c`, `font3x5.c` and `font8x16.c` already fence their hand-laid-out
+  tables with `// clang-format off`, so the table got the same fence (#76, landed *before* the
+  bump so `main` never failed its own lint). Two general points. **A hand-laid-out table is a
+  standing invitation for the next formatter major to rewrite it, so fence it when you write it**,
+  not when a bump finds it. And **land the fence and the bump as separate commits in that order**
+  — a hand-added commit on a Renovate branch is force-pushed away the moment Renovate rebases,
+  which for a bump this old it will.
 
 ## 7. CI & Deployment
 
