@@ -128,7 +128,7 @@ jobs:
             unset IDF_CCACHE_ENABLE
           fi
 
-          # board | idf target | SDKCONFIG_DEFAULTS | expected board symbol | expects USB NCM
+          # board | idf target | SDKCONFIG_DEFAULTS | expected board symbol | expects USB NCM | overlay sentinel
           #
           # A distinct -DSDKCONFIG per board is load-bearing, not tidiness: both
           # S3 boards are the same target and differ only by a Kconfig symbol, so
@@ -136,14 +136,40 @@ jobs:
           # twice and report it green twice (AGENTS.md §6.1: a defaults file
           # cannot change a symbol an existing sdkconfig already holds).
           #
-          # Adding the C3 bench board here is one line, and it must set the
-          # target to esp32c3 and USB NCM to `no`: that part has no USB OTG
-          # controller so it runs no TinyUSB, and asserting NCM on it would fail
-          # a build that is perfectly correct. The bench board is the only one
-          # that compiles indicator.c's `#if BOARD_HAS_LED` arm (§6.1).
+          # The last field exists because asserting the *board* symbol does not
+          # always prove the overlay was read. Kconfig.projbuild picks a board by
+          # target (`default AIRKVM_BOARD_C3_EGG if IDF_TARGET_ESP32C3`), so on a
+          # single-board target the symbol is set by -DIDF_TARGET alone and would
+          # be present even if the overlay were silently ignored — §6.1's "a
+          # config change can silently not reach the image", with a green check
+          # over it. The sentinel is a symbol ONLY the overlay can produce.
+          #
+          # Both S3 rows leave it empty, and that emptiness is meaningful rather
+          # than lazy: esp32s3 defaults to S3_OLED042, so S3_LCD147 can only come
+          # from sdkconfig.lcd147 and the board assertion already proves the
+          # overlay was read; s3-oled042 layers no overlay, so there is nothing
+          # to prove.
+          #
+          # Adding the C3 bench board is one line:
+          #
+          #   "c3-bench|esp32c3|sdkconfig.defaults;sdkconfig.bench|CONFIG_AIRKVM_BOARD_C3_EGG|no|CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE"
+          #
+          # Three things in that line are easy to get wrong. The symbol is
+          # C3_EGG, not C3_BENCH. NCM must be `no`: that part has no USB OTG
+          # controller so it runs no TinyUSB, and asserting NCM would fail a
+          # build that is perfectly correct. And the sentinel must NOT be
+          # CONFIG_AIRKVM_HID_BACKEND_LOG, the obvious choice — Kconfig's
+          # `default AIRKVM_HID_BACKEND_LOG` is the fallback for every non-S3/S2
+          # target, so a C3 gets it from the target too and it proves nothing.
+          # The partition table does prove it: sdkconfig.defaults asks for
+          # TWO_OTA_LARGE and only sdkconfig.bench overrides it to
+          # SINGLE_APP_LARGE, so its presence also proves the overlay was applied
+          # in the right order. The bench board is the only one that compiles
+          # indicator.c's `#if BOARD_HAS_LED` arm (§6.1), which is why it is
+          # worth a leg at all.
           BOARDS=(
-            "s3-oled042|esp32s3|sdkconfig.defaults|CONFIG_AIRKVM_BOARD_S3_OLED042|yes"
-            "s3-lcd147|esp32s3|sdkconfig.defaults;sdkconfig.lcd147|CONFIG_AIRKVM_BOARD_S3_LCD147|yes"
+            "s3-oled042|esp32s3|sdkconfig.defaults|CONFIG_AIRKVM_BOARD_S3_OLED042|yes|"
+            "s3-lcd147|esp32s3|sdkconfig.defaults;sdkconfig.lcd147|CONFIG_AIRKVM_BOARD_S3_LCD147|yes|"
           )
 
           # Every board is attempted even after one fails, which is what the
@@ -152,7 +178,7 @@ jobs:
           failed=()
 
           for entry in "${BOARDS[@]}"; do
-            IFS='|' read -r board target defaults want ncm <<<"$entry"
+            IFS='|' read -r board target defaults want ncm sentinel <<<"$entry"
             echo "::group::$board ($target)"
 
             # `idf.py set-target` writes sdkconfig and does not compose with
@@ -198,6 +224,11 @@ jobs:
             if [ "$ncm" = yes ] && \
                ! grep -q "^#define CONFIG_TINYUSB_NET_MODE_NCM 1" "$header"; then
               bad="$bad NCM-absent(setup-mode-has-no-USB-link)"
+            fi
+            # The overlay sentinel: see the table's comment for why the board
+            # symbol alone is not enough on a single-board target.
+            if [ -n "$sentinel" ] && ! grep -q "^#define $sentinel 1" "$header"; then
+              bad="$bad $sentinel-absent(overlay-not-read)"
             fi
 
             if [ -n "$bad" ]; then
