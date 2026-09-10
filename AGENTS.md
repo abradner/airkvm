@@ -608,8 +608,8 @@ repo is small; filtering would buy seconds and cost trust):
   that proves its config reached the compiler. Three rows: both S3 boards and the **C3 bench
   board**, which is not decorative — it is the only build that compiles `indicator.c`'s
   `#if BOARD_HAS_LED` arm (§6.1), so without it those lines reach review uncompiled. This job is
-  the deliberate exception to the rule above: mise cannot supply ESP-IDF in CI (`fw:setup` clones ~4GB), so its sdkconfig strings are
-  a second copy of what mise's build tasks say.
+  the deliberate exception to the rule above: mise cannot supply ESP-IDF in CI (`fw:setup`
+  clones ~4GB), so its sdkconfig strings are a second copy of what mise's build tasks say.
 
 **Two jobs rather than four, because GitHub bills per job with a one-minute minimum.** Measured
 on the run for `e0d5917`: 25s of host tests plus 36s of lint cost two billed minutes, and the
