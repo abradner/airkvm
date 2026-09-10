@@ -69,12 +69,12 @@ const el = {
   status: document.getElementById("status"),
   stage: document.getElementById("stage"),
   overlay: document.getElementById("overlay"),
-  video: document.getElementById("video"),
-  camera: document.getElementById("camera"),
-  startVideo: document.getElementById("start-video"),
-  pasteText: document.getElementById("paste-text"),
+  video: /** @type {HTMLVideoElement} */ (document.getElementById("video")),
+  camera: /** @type {HTMLSelectElement} */ (document.getElementById("camera")),
+  startVideo: /** @type {HTMLButtonElement} */ (document.getElementById("start-video")),
+  pasteText: /** @type {HTMLTextAreaElement} */ (document.getElementById("paste-text")),
   sendText: document.getElementById("send-text"),
-  sensitivity: document.getElementById("sensitivity"),
+  sensitivity: /** @type {HTMLInputElement} */ (document.getElementById("sensitivity")),
   releaseAll: document.getElementById("release-all"),
   wakeTarget: document.getElementById("wake-target"),
   target: document.getElementById("target-state"),
@@ -84,18 +84,18 @@ const el = {
   macros: document.getElementById("macros"),
   release: document.getElementById("release"),
   softKbd: document.getElementById("soft-kbd"),
-  softInput: document.getElementById("soft-input"),
-  settings: document.getElementById("settings"),
+  softInput: /** @type {HTMLTextAreaElement} */ (document.getElementById("soft-input")),
+  settings: /** @type {HTMLDialogElement} */ (document.getElementById("settings")),
   settingsOpen: document.getElementById("settings-open"),
   settingsStatus: document.getElementById("settings-status"),
   deviceDetails: document.getElementById("device-details"),
   deviceSettings: document.getElementById("device-settings"),
-  settingsSens: document.getElementById("settings-sensitivity"),
+  settingsSens: /** @type {HTMLInputElement} */ (document.getElementById("settings-sensitivity")),
   settingsSensOut: document.getElementById("settings-sensitivity-out"),
   settingsMode: document.getElementById("settings-mode"),
-  settingsModeDirect: document.getElementById("settings-mode-direct"),
-  settingsModeSoft: document.getElementById("settings-mode-soft"),
-  more: document.getElementById("more"),
+  settingsModeDirect: /** @type {HTMLAnchorElement} */ (document.getElementById("settings-mode-direct")),
+  settingsModeSoft: /** @type {HTMLAnchorElement} */ (document.getElementById("settings-mode-soft")),
+  more: /** @type {HTMLDetailsElement} */ (document.getElementById("more")),
 };
 
 // --- input mode -------------------------------------------------------------
@@ -252,7 +252,7 @@ const LATCH_LOCK_MS = 500; // NOT measured (principle 6)
 const latch = { held: [], locked: new Set() }; // held: codes in press order
 
 function repaintLatch() {
-  document.querySelectorAll("[data-mod]").forEach((b) => {
+  document.querySelectorAll("[data-mod]").forEach((/** @type {HTMLElement} */ b) => {
     b.classList.toggle("latched", latch.held.includes(b.dataset.mod));
     b.classList.toggle("locked", latch.locked.has(b.dataset.mod));
   });
@@ -464,7 +464,7 @@ function installDirectInput() {
 
 // --- sidebar ---------------------------------------------------------------
 
-document.querySelectorAll("[data-combo]").forEach((button) => {
+document.querySelectorAll("[data-combo]").forEach((/** @type {HTMLElement} */ button) => {
   button.addEventListener("click", () => {
     const codes = button.dataset.combo.split("+");
     codes.forEach((code) => sendKey(FRAME.KEY_DOWN, code));
@@ -557,7 +557,7 @@ function typeChar(ch) {
 // is still being paced waits for it, and single characters typed meanwhile
 // (typeLater) queue behind both. Without this a composed word and the
 // keystroke that committed it would interleave on the wire.
-let typeChain = Promise.resolve();
+let typeChain = /** @type {Promise<unknown>} */ (Promise.resolve());
 let typing = 0;
 // Bumped by cancelTyping(): a paced string checks it between characters and
 // stops. Release-all means "nothing more reaches the target from what was
@@ -944,7 +944,8 @@ function installSoftInput() {
   document.addEventListener(
     "touchmove",
     (e) => {
-      if (!e.target.closest(".more[open], textarea, dialog")) e.preventDefault();
+      if (!(/** @type {HTMLElement} */ (e.target)).closest(".more[open], textarea, dialog"))
+        e.preventDefault();
     },
     { passive: false },
   );
@@ -1059,7 +1060,7 @@ function installSoftInput() {
   // with the action invoked from there.
   for (const host of [el.keyrows, el.macros, el.release]) {
     host.addEventListener("pointerdown", (e) => {
-      if (e.target.closest("button")) e.preventDefault();
+      if ((/** @type {HTMLElement} */ (e.target)).closest("button")) e.preventDefault();
     });
   }
 
@@ -1071,7 +1072,7 @@ function installSoftInput() {
     modTimers.forEach((t) => clearTimeout(t));
     modTimers.clear();
   }
-  el.keyrows.querySelectorAll("[data-mod]").forEach((b) => {
+  el.keyrows.querySelectorAll("[data-mod]").forEach((/** @type {HTMLElement} */ b) => {
     const code = b.dataset.mod;
     // Modifiers run on pointer events, never on click, so cancelling
     // touchstart costs nothing here — and it is what stops iOS treating the
@@ -1174,9 +1175,9 @@ const MEDIA = {
 };
 
 const mediaEl = {
-  file: document.getElementById("media-file"),
-  attach: document.getElementById("media-attach"),
-  eject: document.getElementById("media-eject"),
+  file: /** @type {HTMLInputElement} */ (document.getElementById("media-file")),
+  attach: /** @type {HTMLButtonElement} */ (document.getElementById("media-attach")),
+  eject: /** @type {HTMLButtonElement} */ (document.getElementById("media-eject")),
   status: document.getElementById("media-status"),
 };
 
@@ -1573,10 +1574,10 @@ function openSettings() {
 el.settingsOpen.addEventListener("click", openSettings);
 
 // The reload links keep whatever else is in the query (?ws= for UI work).
-for (const [a, mode] of [
+for (const [a, mode] of /** @type {[HTMLAnchorElement, string][]} */ ([
   [el.settingsModeDirect, "direct"],
   [el.settingsModeSoft, "soft"],
-]) {
+])) {
   const url = new URL(location.href);
   url.searchParams.set("mode", mode);
   a.href = url.toString();
@@ -1592,8 +1593,8 @@ const SENSITIVITY_KEY = "airkvm.sensitivity";
 
 function setSensitivity(value, save) {
   const v = Math.min(3, Math.max(0.2, parseFloat(value) || 1));
-  el.sensitivity.value = v;
-  el.settingsSens.value = v;
+  el.sensitivity.value = String(v);
+  el.settingsSens.value = String(v);
   el.settingsSensOut.textContent = `${v.toFixed(1)}\u00d7`;
   if (save) {
     try {
@@ -1609,5 +1610,9 @@ try {
 } catch {
   setSensitivity("1", false);
 }
-el.sensitivity.addEventListener("input", (e) => setSensitivity(e.target.value, true));
-el.settingsSens.addEventListener("input", (e) => setSensitivity(e.target.value, true));
+el.sensitivity.addEventListener("input", (e) =>
+  setSensitivity(/** @type {HTMLInputElement} */ (e.target).value, true),
+);
+el.settingsSens.addEventListener("input", (e) =>
+  setSensitivity(/** @type {HTMLInputElement} */ (e.target).value, true),
+);

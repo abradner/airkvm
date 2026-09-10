@@ -68,6 +68,12 @@ jobs:
       # `firefox --version` first so a runner image without Firefox says so in
       # one line, instead of surfacing sixty seconds later as a page that never
       # reported. Chromium is not a fallback: it hangs (AGENTS.md §6.1).
+      # Static, so it runs before the browser steps and costs under a second.
+      # `always()` like every other check in this job: a failing test must not
+      # hide a type error or the reverse.
+      - name: Console typecheck (tsc, JSDoc)
+        if: always()
+        run: mise run console:typecheck
       - name: Console checks (headless Firefox)
         if: always()
         run: firefox --version && mise run console:test

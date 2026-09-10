@@ -2,11 +2,16 @@
 #
 # Tasks are namespaced by tree, because a bare `build` in a repo holding
 # firmware, a Rails service and a marketing site names nothing:
-#   fw:*   firmware/       (ESP-IDF; every one runs with dir = "firmware")
-#   co:*   coordinator/    (Rails; not yet present)
-#   mk:*   marketing/      (Astro; not yet present)
-# The unnamespaced `test`, `lint` and `fmt` are umbrellas that run every tree's,
-# so "did I break anything" stays one command as trees are added.
+#   fw:*        firmware/           (ESP-IDF; every one runs with dir = "firmware")
+#   console:*   packages/console/   (the shared browser console)
+#   co:*        coordinator/        (Rails; not yet present)
+#   mk:*        marketing/          (Astro; not yet present)
+# The unnamespaced `test`, `lint` and `fmt` are umbrellas across the trees, so
+# "did I break anything" stays one command as trees are added. They report
+# failure honestly but **stop at the first one** — §6.1 has the measurement —
+# so a red umbrella means the trees after it are unknown, not fine. CI does not
+# rely on them for that reason: it runs each check as its own step with
+# `if: always()`.
 
 [tools]
 python = "3.14"
@@ -14,6 +19,14 @@ cmake = "3.31"
 ninja = "1.12"
 ruff = "0.9"
 clang-format = "19"
+# For the console's type checker only. TypeScript 7 IS the native (Go) compiler
+# — the separate @typescript/native-preview package was superseded — so `tsc`
+# here is a platform binary behind a thin launcher, and node is present to run
+# that launcher and to install it. The console itself still has no build step,
+# no npm and no node_modules (§4): nothing in packages/console is compiled, and
+# the firmware embeds the literal files.
+node = "22"
+"npm:typescript" = "7.0.2"
 
 # ESP-IDF itself is not a mise-managed tool: it is a git checkout plus its own
 # installer that fetches per-target compilers. `mise run fw:setup` handles both and
@@ -181,6 +194,14 @@ run = "python3 test/runner.py"
 # console's own JavaScript has no linter, and a task called "console:lint" that
 # silently skipped app.js would assert coverage that does not exist (§2
 # principle 1). Rename it when a JS linter lands.
+[tasks."console:typecheck"]
+description = "Type-check the console's JavaScript (JSDoc types, no build step)"
+dir = "packages/console"
+# checkJs against the files as they ship — see tsconfig.json for why this is
+# never allowed to become a compile step. TypeScript 7 is the native compiler,
+# so a full check is well under a second.
+run = "tsc -p tsconfig.json"
+
 [tasks."console:lint-python"]
 dir = "packages/console"
 description = "Lint the console's Python test harness (its JS has no linter yet)"
@@ -201,7 +222,7 @@ depends = ["fw:test", "console:test"]
 
 [tasks.lint]
 description = "Every tree that has a linter (firmware C + Python; the console's harness)"
-depends = ["fw:lint", "console:lint-python"]
+depends = ["fw:lint", "console:lint-python", "console:typecheck"]
 
 [tasks."console:fmt-python"]
 dir = "packages/console"
