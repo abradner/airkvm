@@ -13,7 +13,7 @@ python = "3.14"
 cmake = "3.31"
 ninja = "1.13.2"
 ruff = "0.16.6"
-clang-format = "19"
+clang-format = "23.1.1"
 
 # ESP-IDF itself is not a mise-managed tool: it is a git checkout plus its own
 # installer that fetches per-target compilers. `mise run fw:setup` handles both and
