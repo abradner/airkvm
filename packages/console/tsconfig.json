@@ -23,5 +23,20 @@
     "strict": false,
     "noImplicitAny": false
   },
-  "include": ["app.js"]
+  // A glob, NOT a list of filenames, and that is load-bearing. With
+  // `["app.js"]` a sibling .js file is silently unchecked: the check stays
+  // green while its coverage shrinks to one file of several. The dangerous
+  // case is a *partial* split — app.js still here while protocol.js and
+  // friends appear beside it — because the fully-split case is loud ("no
+  // inputs were found") and the partial one is not. Green with files
+  // unchecked is worse than no checker, because it reads as coverage.
+  //
+  // `*` is non-recursive in a TS include glob, so this deliberately does not
+  // reach test/: the harness has its own globals and is linted as Python plus
+  // its own concern. Verified with `tsc --listFiles`, which shows app.js and
+  // nothing from test/.
+  //
+  // Found by the session that wrote the console harness, by planting a type
+  // error in a sibling file rather than by reading this line.
+  "include": ["*.js"]
 }
