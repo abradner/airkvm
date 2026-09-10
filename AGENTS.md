@@ -560,8 +560,10 @@ add rather than rewrite.
   so there is one pinned formatter and a local green does predict CI's. The general form still
   binds, and the closure has a cost worth knowing: the version CI enforces is now whatever
   `mise.toml` says, so **a Renovate bump to `clang-format` changes what CI enforces across every
-  file in the repo.** That is the right trade — it just means a formatter bump is a diff to read
-  rather than a version string to wave through (see the clang-format 23 entry below).
+  file that task selects** — which is `firmware/{main,test}`'s `.c` and `.h`, and nothing else;
+  the console's JavaScript has no formatter and `firmware/tools` goes to ruff instead. That is
+  the right trade — it just means a formatter bump is a diff to read over that file set rather
+  than a version string to wave through (see the clang-format 23 entry below).
 - **A `depends` umbrella kills its siblings when one task fails, so a red `mise run test` is not
   a full run.** `[tasks.test]` fans out to `fw:test` and `console:test` via `depends`, chosen
   over a shell chain because a chain reports only the last command's status — the shape recorded
