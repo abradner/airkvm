@@ -556,21 +556,36 @@ add rather than rewrite.
   a binary wheel and takes seconds. General form: **a linter whose version is pinned in one place
   and floating in another is two linters, and green from the pinned one proves nothing about the
   floating one.**
-- **A `depends` umbrella stops at the first failing task, so `mise run test` going red tells you
-  about one tree and nothing about the others.** `[tasks.test]` fans out to `fw:test` and
-  `console:test` via `depends` — chosen over a shell chain because a chain reports only the last
-  command's status, which §6.1 records twice as having eaten real work. It does not have that
-  bug: measured both directions, with the failing task planted deliberately and mise.toml
-  restored afterwards. Console failing → `exit=1` with `fw:test`'s 18 tests still run and
-  reported. **But firmware failing → `exit=3` and `console:test` never runs at all**, producing
-  no output whatsoever. That is not a swallowed failure — the exit code is honest — it is a
-  *partial* run that reads like a complete one, which is §7's "a skipped job is not a passing
-  job" one level down: after a red `mise run test`, the trees that never ran are unknown, not
-  fine. Run the tree's own task (`mise run console:test`) before concluding anything about it.
-  **CI does not have this problem, and that is deliberate rather than lucky:** the workflow runs
-  each check as its own step with `if: always()`, so a firmware failure still reports the
-  console result. The umbrella is a local convenience; the step list is the thing that tells you
-  what actually ran.
+- **A `depends` umbrella kills its siblings when one task fails, so a red `mise run test` is not
+  a full run.** `[tasks.test]` fans out to `fw:test` and `console:test` via `depends`, chosen
+  over a shell chain because a chain reports only the last command's status — the shape recorded
+  twice above as having eaten real work. It does not have that bug. What it does instead:
+  **mise runs the dependencies in parallel and kills the survivors the moment one fails.** So
+  after a red umbrella, the trees that did not finish are *unknown*, not fine — §7's "a skipped
+  job is not a passing job", one level down. Run that tree's own task before concluding anything
+  about it.
+  Three specifics, because the first two are what a careless reproduction gets wrong, and the
+  first draft of this entry got both of them wrong too:
+  - **The sibling starts and is then killed** — it does not "never run". mise echoes its command
+    line first, so partial output from a task that produced no effect is exactly what you should
+    expect to see.
+  - **You cannot reproduce this with two instant tasks.** If the sibling finishes before the
+    other fails, it completes normally and nothing is skipped, in either order — so a
+    thirty-second probe with two trivial tasks "disproves" this entry. The sibling has to still
+    be running when the failure lands. Measured with a filesystem marker rather than log output,
+    because grepping the log matches mise's *echo* of the command rather than its result:
+    slow sibling → marker absent; instant sibling → marker present; umbrella red either way.
+  - **The exit status is the failing task's own, not a fixed code.** Planted 1, 7 and 8; the
+    umbrella returned 1, 7 and 8. An earlier version of this entry reported "exit=3" as though
+    it were a property of the umbrella — it was the `exit 3` the measurement had planted,
+    read back. The real behaviour is more useful: `mise run test` is usable in a script that
+    cares *which* gate failed.
+  **CI does not behave this way, and that is deliberate rather than lucky.** Within the `checks`
+  job every step after the first carries `if: always()`, so a failing host-test step still
+  reports lint and both console steps. (Not to be confused with the two jobs: `checks` and
+  `firmware` are separate jobs and never gated each other, so that much was always true and is
+  not what the guards buy.) The umbrella is a local convenience; the CI step list is the thing
+  that tells you what actually ran.
 - **`firmware/main/indicator.c`'s LED body compiles on the C3 bench board and NOWHERE else — so the two S3
   builds are not coverage for it.** `BOARD_HAS_LED` is 1 on the C3, **0** on the S3 0.42" dongle,
   and 1 on the LCD147 — but the LCD147 selects `indicator_ws2812.c` instead
