@@ -39,7 +39,7 @@ jobs:
     name: Checks (host tests, lint)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Installs the versions mise.toml pins and caches them between runs.
       # Measured locally: clang-format is a 6s install cold, the rest are
       # faster, so this costs less than the apt install it replaces.
@@ -68,6 +68,21 @@ jobs:
       # `firefox --version` first so a runner image without Firefox says so in
       # one line, instead of surfacing sixty seconds later as a page that never
       # reported. Chromium is not a fallback: it hangs (AGENTS.md §6.1).
+      # The console harness is Python, and CI's lint step above runs `fw:lint`
+      # rather than the `lint` umbrella — so without this step nothing checks
+      # it, and `mise run lint` locally would cover three tasks where CI
+      # covered one. That is exactly the drift the single-source rule exists to
+      # prevent, arriving from the other direction: same source of truth, but
+      # CI entering it at a different point. Raised by the session that added
+      # the harness in #74.
+      #
+      # A separate step rather than routing CI through `mise run lint`: the
+      # umbrella stops at its first failure (§6.1), which would trade this
+      # job's "every check reports" property for the local convenience's
+      # short-circuit.
+      - name: Lint the console harness (ruff)
+        if: always()
+        run: mise run console:lint-python
       # Static, so it runs before the browser steps and costs under a second.
       # `always()` like every other check in this job: a failing test must not
       # hide a type error or the reverse.
@@ -107,7 +122,7 @@ jobs:
       IDF_CCACHE_ENABLE: "1"
       CCACHE_DIR: ${{ github.workspace }}/.ccache
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Restore ccache
         uses: actions/cache@v4
