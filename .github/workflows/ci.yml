@@ -137,12 +137,12 @@ jobs:
       # `args: check firmware/tools` would lint firmware/tools AND the entire
       # repo — which passes today and would quietly subject the coming Rails
       # and Astro trees to the firmware's rule selection.
-      - uses: astral-sh/ruff-action@v3
+      - uses: astral-sh/ruff-action@v4.1.0
         with:
           version: "0.9"
           args: check
           src: firmware/tools
-      - uses: astral-sh/ruff-action@v3
+      - uses: astral-sh/ruff-action@v4.1.0
         with:
           version: "0.9"
           args: format --check
