@@ -1,0 +1,42 @@
+{
+  // Type-CHECKING only, never compiling. `tsc --noEmit` reads the .js files as
+  // they ship; nothing here is built, bundled or transformed, and no
+  // node_modules lands in this directory. The firmware embeds these exact
+  // bytes (AGENTS.md §4), and `python3 -m http.server` here serves the same
+  // ones, so the checker must never become a step between source and served.
+  //
+  // TypeScript 7 is the native compiler, so this costs well under a second.
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "target": "ES2022",
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    // Deliberately not `strict`. Turning it on buries the real findings under
+    // hundreds of null checks against a DOM the page already knows is there —
+    // every getElementById would need a guard for an element the HTML in this
+    // same directory guarantees. The value here is catching contract drift
+    // between the protocol tables, the session config and the input handlers,
+    // and checkJs alone does that.
+    "strict": false,
+    "noImplicitAny": false
+  },
+  // A glob, NOT a list of filenames, and that is load-bearing. With
+  // `["app.js"]` a sibling .js file is silently unchecked: the check stays
+  // green while its coverage shrinks to one file of several. The dangerous
+  // case is a *partial* split — app.js still here while protocol.js and
+  // friends appear beside it — because the fully-split case is loud ("no
+  // inputs were found") and the partial one is not. Green with files
+  // unchecked is worse than no checker, because it reads as coverage.
+  //
+  // `*` is non-recursive in a TS include glob, so this deliberately does not
+  // reach test/: the harness has its own globals and is linted as Python plus
+  // its own concern. Verified with `tsc --listFiles`, which shows app.js and
+  // nothing from test/.
+  //
+  // Found by the session that wrote the console harness, by planting a type
+  // error in a sibling file rather than by reading this line.
+  "include": ["*.js"]
+}
