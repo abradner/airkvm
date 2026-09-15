@@ -43,7 +43,7 @@ jobs:
       # Installs the versions mise.toml pins and caches them between runs.
       # Measured locally: clang-format is a 6s install cold, the rest are
       # faster, so this costs less than the apt install it replaces.
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v4
       # mise refuses a config it has not been told to trust, and this one has a
       # templated [env] block, so it is not a config mise will read blindly.
       # One line here rather than discovering it as a red first run.
