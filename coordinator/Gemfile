@@ -33,6 +33,20 @@ gem "thruster", require: false
 
 # Use Active Storage variants [https://guides.rubyonrails.org/active_storage_overview.html#transforming-images]
 
+# Prometheus metrics: request histograms (yabeda-rails), Puma pool gauges
+# (yabeda-puma-plugin), Ruby GC and heap stats (yabeda-gc — the signal that
+# separates a Ruby heap leak from native growth when a container's RSS climbs),
+# and an in-process /metrics exporter on its own port (yabeda-prometheus).
+# Wired in config/puma.rb. Same shape as the sibling Rails repos.
+#
+# yabeda-rails over prometheus_exporter because it labels by controller#action
+# and has no path label at all, so the classic cardinality blowup from raw paths
+# like /devices/123 cannot happen.
+gem "yabeda-gc"
+gem "yabeda-prometheus"
+gem "yabeda-puma-plugin"
+gem "yabeda-rails"
+
 group :development, :test do
   # See https://guides.rubyonrails.org/debugging_rails_applications.html#debugging-with-the-debug-gem
   gem "debug", platforms: %i[ mri windows ], require: "debug/prelude"

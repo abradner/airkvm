@@ -5,7 +5,7 @@ operators drive. Design: `../docs/design/fleet.md`. Roadmap and decisions:
 [issue #68](https://github.com/abradner/airkvm/issues/68).
 
 **Status: scaffold.** It boots, connects to a database, and has nothing else in
-it yet. No models, no auth, no device enrolment, no `/metrics`.
+it yet. No models, no auth, no device enrolment.
 
 ## Running it locally
 
@@ -72,6 +72,27 @@ Local overrides: `COORDINATOR_DB_HOST`, `COORDINATOR_DB_PORT`,
 `COORDINATOR_DB_USER`, `COORDINATOR_DB_PASSWORD` (development and test only —
 they are deliberately not in the `default:` anchor, so production cannot
 inherit a development host).
+
+## Metrics
+
+`bin/rails server` (Puma) serves Prometheus metrics on **port 9394**, separate
+from the app: request counts and latency by `controller#action` (never by raw
+path, so cardinality stays bounded), Puma pool gauges, and Ruby GC/heap stats.
+`rails runner`, specs and the console do not start it.
+
+- It is **unauthenticated**, so it binds `127.0.0.1` by default. The container
+  sets `PROMETHEUS_EXPORTER_BIND=0.0.0.0` because its scraper is outside it,
+  which exposes it to everything that can route to the container — the whole
+  Docker network, or the whole cluster without a NetworkPolicy. Restrict it
+  there; never publish it or route it through an ingress. A failing collector
+  gets a bare 500, never a backtrace.
+- **One Puma process, no workers.** `WEB_CONCURRENCY` refuses to boot rather
+  than being honoured: with workers, the exporter would describe a master
+  process that serves no requests. Scale with `RAILS_MAX_THREADS`.
+- `PROMETHEUS_EXPORTER_PORT` moves it, if 9394 is taken on a shared host.
+- Puma's control socket (which the pool gauges read) lives in a private `0700`
+  directory under `$TMPDIR`, not in `tmp/` — see `config/puma_control_socket.rb`
+  for why, and why boot refuses to start if that directory looks wrong.
 
 ## Deployment
 
