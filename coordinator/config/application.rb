@@ -27,6 +27,16 @@ module Coordinator
     # Common ones are `templates`, `generators`, or `middleware`, for example.
     config.autoload_lib(ignore: %w[assets tasks])
 
+    # Generated migrations get a UUIDv7 primary key and uuid-typed references.
+    # This line (with lib/templates/) only makes the default right; a
+    # hand-written migration bypasses it. What enforces the rule — every
+    # primary key a uuidv7() uuid, every *_id column a uuid — is
+    # spec/db/primary_keys_spec.rb. Why v7, and what it gives away (creation
+    # time), is in coordinator/AGENTS.md §4.
+    config.generators do |g|
+      g.orm :active_record, primary_key_type: :uuid
+    end
+
     # Configuration for the application, engines, and railties goes here.
     #
     # These settings can be overridden in specific environments using the files

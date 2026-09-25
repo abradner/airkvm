@@ -31,10 +31,10 @@ This repo holds more than the firmware. The trees, and what each is:
 |---|---|---|
 | `firmware/` | The ESP-IDF firmware — `main/`, its host tests, its dev tools, its sdkconfigs | ESP-IDF v5.5, CMake/ninja |
 | `packages/console/` | The browser console the dongle serves. Shared, because the fleet coordinator will serve the same page (`docs/design/fleet.md`) | None — plain files, no build step (§4) |
+| `coordinator/` | The fleet coordination service — a Rails app. **Has its own `coordinator/AGENTS.md`; read it before working there.** | Rails 8.1, Ruby 4.0.6, Postgres 18 |
 | `docs/` | Repo-wide: the boundary map and the design docs | — |
 
-`coordinator/` (the fleet coordination service, a Rails app) is scaffolded; `marketing/` (a
-static site) is still to come. `docs/design/fleet.md` is its design, and still describes a Go
+`marketing/` (a static site) is still to come. `docs/design/fleet.md` is its design, and still describes a Go
 binary — issue #68 records the decision to build it in Rails instead and tracks that rewrite. **The layout rule, stated
 because this repo had no convention for it and one was needed:** a deployable application gets a
 top-level directory; something two applications share goes under `packages/`. That is why the
