@@ -4,8 +4,17 @@
 # firmware, a Rails service and a marketing site names nothing:
 #   fw:*        firmware/           (ESP-IDF; every one runs with dir = "firmware")
 #   console:*   packages/console/   (the shared browser console)
-#   co:*        coordinator/        (Rails; not yet present)
+#   co:*        coordinator/        (Rails fleet coordinator)
 #   mk:*        marketing/          (Astro; not yet present)
+# **`co:*` is deliberately NOT in the umbrellas.** Every other tree's checks run
+# from a bare checkout; the coordinator's need a Postgres container up and, for
+# bundler-audit, the network. Because an umbrella kills its siblings on the
+# first failure (§6.1), wiring co:test in would mean `mise run test` on a fresh
+# worktree killed fw:test and console:test and reported red for a firmware-only
+# change — the daily gate degraded by a tree most sessions never touch. Run
+# `mise run co:db && mise run co:test` for the coordinator. Revisit if its
+# checks ever become hermetic.
+#
 # The unnamespaced `test`, `lint` and `fmt` are umbrellas across the trees, so
 # "did I break anything" stays one command as trees are added. They report
 # failure honestly but **stop at the first one** — §6.1 has the measurement —
@@ -27,6 +36,13 @@ clang-format = "23.1.1"
 # the firmware embeds the literal files.
 node = "22"
 "npm:typescript" = "7.0.2"
+# The coordinator (Rails). Exact, not "4.0": coordinator/.ruby-version and the
+# Dockerfile both say 4.0.6, and a floating pin here would be a second, later
+# Ruby the moment 4.0.7 ships — §6.1's "a version pinned in one place and
+# floating in another is two versions", which this repo has already paid for
+# once with clang-format. .ruby-version stays because `rails new` writes it and
+# non-mise tooling reads it; this file is what mise resolves.
+ruby = "4.0.6"
 
 # ESP-IDF itself is not a mise-managed tool: it is a git checkout plus its own
 # installer that fetches per-target compilers. `mise run fw:setup` handles both and
@@ -39,14 +55,12 @@ IDF_TOOLS_PATH = "{{config_root}}/.esp-idf-tools"
 # shell. Setting it globally makes it conflict with the bench build's esp32c3
 # and produces a "not consistent with target in the environment" error that
 # looks like a project bug rather than an env var. Each build carries its own.
-# Serial port for flashing. Written as a default-if-unset rather than a plain
-# value: mise's [env] overrides the inherited environment, so a bare assignment
-# silently ignores `PORT=... mise run fw:flash` and flashes the wrong board — or,
-# more confusingly, reports "port is busy" while naming a port you didn't ask
-# for. Overrides work per invocation:
-#   PORT=/dev/tty.usbmodem1101 mise run fw:flash
-#   PORT=rfc2217://otherhost:4000 mise run fw:flash-bench  (firmware/tools/serial_bridge.py)
-PORT = "{{ env.PORT | default(value='/dev/ttyACM0') }}"
+# No PORT here, and that is deliberate — see FLASH_PORT_ENV below. `[env]` is
+# applied to EVERY process mise starts, and in a monorepo `PORT` means two
+# different things: the firmware's serial device, and the TCP port Rails binds.
+# A global `/dev/ttyACM0` default here made Puma try to listen on TCP port
+# "/dev/ttyACM0", so `mise run co:dev` crashed on its first line. The serial
+# default now lives only on the three tasks that flash.
 
 [tasks."fw:setup"]
 dir = "firmware"
@@ -93,8 +107,16 @@ idf.py -B build-bench -DIDF_TARGET=esp32c3 \
   -DSDKCONFIG=sdkconfig.bench.generated build
 """
 
+# FLASH_PORT_ENV: the serial port for flashing, set only on the three flash
+# tasks. Written as a default-if-unset rather than a plain value, because a bare
+# assignment would override the inherited environment and silently ignore
+# `PORT=... mise run fw:flash` — flashing the wrong board, or reporting "port is
+# busy" while naming a port you did not ask for. Overrides work per invocation:
+#   PORT=/dev/tty.usbmodem1101 mise run fw:flash
+#   PORT=rfc2217://otherhost:4000 mise run fw:flash-bench  (firmware/tools/serial_bridge.py)
 [tasks."fw:flash-bench"]
 dir = "firmware"
+env = { PORT = "{{ env.PORT | default(value='/dev/ttyACM0') }}" }
 shell = "bash -c"
 description = "Flash + monitor the ESP32-C3 bench board"
 run = """
@@ -120,6 +142,7 @@ idf.py -B build-lcd147 \
 
 [tasks."fw:flash-lcd147"]
 dir = "firmware"
+env = { PORT = "{{ env.PORT | default(value='/dev/ttyACM0') }}" }
 shell = "bash -c"
 description = "Flash + monitor the ESP32-S3-LCD-1.47B"
 run = """
@@ -129,6 +152,7 @@ idf.py -B build-lcd147 -DSDKCONFIG=sdkconfig.lcd147.generated -p "$PORT" flash m
 
 [tasks."fw:flash"]
 dir = "firmware"
+env = { PORT = "{{ env.PORT | default(value='/dev/ttyACM0') }}" }
 shell = "bash -c"
 description = "Flash and monitor (board must be in bootloader mode — see AGENTS.md §6.1)"
 run = '. "$IDF_PATH/export.sh" >/dev/null && idf.py -p "$PORT" flash monitor'
@@ -187,13 +211,62 @@ dir = "packages/console"
 description = "Console checks in headless Firefox — no board, no phone needed"
 run = "python3 test/runner.py"
 
-# Kept separate from console:test rather than folded into it: this one is only
-# meaningful when it FAILS to fail, so running it as part of the suite would
-# make a red run ambiguous between "the console broke" and "the harness broke".
-# Ruff only. Named for what it actually covers rather than for its tree: the
-# console's own JavaScript has no linter, and a task called "console:lint" that
-# silently skipped app.js would assert coverage that does not exist (§2
-# principle 1). Rename it when a JS linter lands.
+[tasks."co:db"]
+description = "Start the coordinator's development Postgres (docker compose)"
+dir = "coordinator"
+run = "docker compose up -d"
+
+[tasks."co:setup"]
+description = "Install the coordinator's gems and create its databases"
+dir = "coordinator"
+# db:prepare rather than db:create+db:migrate: it is idempotent, so this is safe
+# to re-run, which is what makes it usable as the one setup command.
+run = """
+set -e
+bundle install
+bin/rails db:prepare
+"""
+
+[tasks."co:dev"]
+description = "Run the coordinator locally (needs co:db)"
+dir = "coordinator"
+run = "bin/rails server"
+
+[tasks."co:test"]
+description = "Coordinator specs (needs co:db)"
+dir = "coordinator"
+run = "bundle exec rspec"
+
+[tasks."co:lint"]
+description = "Coordinator style and security checks"
+dir = "coordinator"
+# Four separate tools because they answer different questions and a repo that
+# runs only the style one has no security gate. Every tool runs whatever the
+# others did, and the task fails if any failed: under `set -e` (or a && chain)
+# a rubocop offence would stop the run before brakeman, so a style nit would
+# hide a security finding — in CI, where this is one step.
+run = """
+status=0
+bundle exec rubocop || status=1
+bundle exec brakeman --no-pager --quiet --exit-on-warn --exit-on-error || status=1
+bundle exec bundler-audit check --update || status=1
+bin/importmap audit || status=1
+exit $status
+"""
+
+[tasks."co:precompile"]
+description = "The image build's asset step, with its build-only stand-ins"
+dir = "coordinator"
+# One script, run by both the Dockerfile and CI, so the step that builds the
+# image is the step that is checked. It once failed on every build unnoticed,
+# because nothing but `docker build` ran it.
+run = "bin/precompile-assets"
+
+[tasks."co:fmt"]
+description = "Apply the coordinator's formatting"
+dir = "coordinator"
+run = "bundle exec rubocop --autocorrect"
+
 [tasks."console:typecheck"]
 description = "Type-check the console's JavaScript (JSDoc types, no build step)"
 dir = "packages/console"
@@ -202,6 +275,10 @@ dir = "packages/console"
 # so a full check is well under a second.
 run = "tsc -p tsconfig.json"
 
+# Ruff only. Named for what it actually covers rather than for its tree: the
+# console's own JavaScript has no linter, and a task called "console:lint" that
+# silently skipped app.js would assert coverage that does not exist (§2
+# principle 1). Rename it when a JS linter lands.
 [tasks."console:lint-python"]
 dir = "packages/console"
 description = "Lint the console's Python test harness (its JS has no linter yet)"
@@ -211,6 +288,9 @@ ruff check test
 ruff format --check test
 """
 
+# Kept separate from console:test rather than folded into it: this one is only
+# meaningful when it FAILS to fail, so running it as part of the suite would
+# make a red run ambiguous between "the console broke" and "the harness broke".
 [tasks."console:self-test"]
 dir = "packages/console"
 description = "Plant a bug and require the console checks to catch it (§8)"

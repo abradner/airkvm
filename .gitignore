@@ -2,9 +2,20 @@
 .DS_Store
 Thumbs.db
 *.log
-tmp/
 *.swp
 *.swo
+
+# `tmp/` used to live in the universal block and had to leave it, because a
+# directory-form exclusion cannot be negated from underneath: Rails tracks
+# .keep files inside otherwise-ignored directories, and `tmp/` made
+# `!/coordinator/tmp/.keep` unreachable no matter where it was written — a
+# child .gitignore cannot rescue it either. Measured, not assumed:
+# `git check-ignore --no-index coordinator/tmp/.keep` reported it ignored.
+#
+# So tmp is now ignored per tree. Any future tree with a tmp/ adds its own
+# line here rather than inheriting one — the same deliberate-not-inherited
+# rule the sdkconfig re-allows below follow.
+/tmp/
 
 # Local agent config (per-machine permissions — never shared)
 .claude/settings.local.json
@@ -82,3 +93,32 @@ __pycache__/
 # Unanchored: firmware/tools/make_certs.sh writes firmware/certs/, and a
 # coordinator holding key material must be covered by the same rule.
 certs/
+
+# --- coordinator/ (Rails) ---
+# Path-scoped rather than a nested .gitignore: the negations below have to
+# out-rank the universal block above, which only works from this file.
+/coordinator/.bundle
+/coordinator/vendor/bundle
+/coordinator/log/*
+!/coordinator/log/.keep
+/coordinator/tmp/*
+!/coordinator/tmp/.keep
+/coordinator/tmp/pids/*
+!/coordinator/tmp/pids/
+!/coordinator/tmp/pids/.keep
+/coordinator/public/assets
+# Key material, and BOTH lines are needed. `rails new` generates
+# config/master.key and, with --skip-git, no .gitignore to cover it. But a
+# gitignore `*` never matches across a `/`, so `config/*.key` covers
+# master.key and NOT config/credentials/production.key — which is where
+# `bin/rails credentials:edit --environment production` writes the key that
+# decrypts production secrets. coordinator/.dockerignore already listed that
+# second path; this file had only the first.
+#
+# Found by review, verified with `git check-ignore --no-index` (the plain form
+# reports a tracked file as not-ignored and hides exactly this class of gap).
+/coordinator/config/*.key
+/coordinator/config/credentials/**/*.key
+/coordinator/app/assets/builds/*
+!/coordinator/app/assets/builds/.keep
+/coordinator/node_modules

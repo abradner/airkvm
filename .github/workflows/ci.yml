@@ -101,6 +101,60 @@ jobs:
         if: always()
         run: mise run console:self-test
 
+  # The coordinator needs a database, and a `services:` block is per-job — so
+  # this cannot be steps inside `checks` the way the console checks are, and it
+  # costs a third billed minute. That is the honest reason for the extra job,
+  # not preference: §7's billing logic says share a job wherever you can, and
+  # here you cannot.
+  #
+  # The service maps host port 25433, which is what coordinator/config/
+  # database.yml's development/test anchor already expects — so CI and a dev
+  # machine use one connection config rather than two that can drift.
+  coordinator:
+    name: Coordinator (specs, lint)
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: postgres:18
+        env:
+          POSTGRES_USER: coordinator
+          POSTGRES_PASSWORD: coordinator_dev
+        ports:
+          - 25433:5432
+        # Without this the first step races Postgres' startup and fails on a
+        # connection refused that looks like a config error.
+        options: >-
+          --health-cmd "pg_isready -U coordinator"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v7
+      # Ruby only: this job builds nothing else, and without install_args
+      # mise-action installs every tool in mise.toml (clang-format, cmake,
+      # ninja, node) into a job that uses none of them.
+      - uses: jdx/mise-action@v2
+        with:
+          install_args: ruby
+      - run: mise trust
+      # Installs gems and runs db:prepare. Not folded into the test step so a
+      # dependency-resolution failure is distinguishable from a failing spec.
+      - name: Setup (bundle, db:prepare)
+        run: mise run co:setup
+      - name: Specs
+        run: mise run co:test
+      # `always()` for the same reason every other check in this workflow has
+      # it: a failing spec must not hide a lint or security finding. co:lint is
+      # four tools — rubocop, brakeman, bundler-audit, importmap audit.
+      - name: Lint and security (rubocop, brakeman, bundler-audit, importmap)
+        if: always()
+        run: mise run co:lint
+      # The Dockerfile's asset step, by the same script. Short of a docker
+      # build, this is what proves the image's one app-booting build step works.
+      - name: Image asset step (bin/precompile-assets)
+        if: always()
+        run: mise run co:precompile
+
   # Every board in one job, so the espressif/idf image is pulled once instead of
   # once per board. Sequential rather than a matrix: parallel legs shorten wall
   # clock but bill the same minutes plus another container pull each, and the
