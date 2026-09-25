@@ -41,6 +41,7 @@ AGENTS.md §8).
 | `CACHE_DATABASE_URL` | Solid Cache's database |
 | `QUEUE_DATABASE_URL` | Solid Queue's database |
 | `SECRET_KEY_BASE` | Signs session cookies. Rails refuses to boot production without it. Generate with `openssl rand -hex 64` |
+| `AIRKVM_EDITION` | `self_hosted` or `cloud`. No default outside development and test — see below |
 
 **The three URLs are not redundant, and this is the trap.** Rails applies
 `DATABASE_URL` to the *primary* database only — `url ||= ENV["DATABASE_URL"] if
@@ -49,6 +50,16 @@ entries read `<NAME>_DATABASE_URL`. A deploy that set `DATABASE_URL` alone would
 boot healthy, pass its health check, serve requests, and send every cache write
 and every background job to a *local socket* instead — with the entrypoint's
 `db:prepare` creating those databases there. Hence the boot check.
+
+**`AIRKVM_EDITION` has no production default on purpose.** Both editions boot
+and serve normally, so a wrong guess would not fail loudly — a cloud deploy
+running as `self_hosted` would expose the first-boot setup page to the internet
+rather than refuse to start. Development and test default to `self_hosted`; any
+other environment, staging included, must say which it is. (That allowlist
+keys on `RAILS_ENV`, which Rails defaults to `development` when unset — the
+image sets it, but a hand-run `bin/rails server` on a host must too, or it
+quietly becomes a self-hosted development server.) The rule the seam
+holds: an edition may change policy (who may sign up, limits), never data shape.
 
 There is no `RAILS_MASTER_KEY` and no `config/credentials.yml.enc`: secrets
 arrive as ENV from the deploying gitops repo, so no key file sitting in one
