@@ -34,8 +34,8 @@ This repo holds more than the firmware. The trees, and what each is:
 | `coordinator/` | The fleet coordination service — a Rails app. **Has its own `coordinator/AGENTS.md`; read it before working there.** | Rails 8.1, Ruby 4.0.6, Postgres 18 |
 | `docs/` | Repo-wide: the boundary map and the design docs | — |
 
-`marketing/` (a static site) is still to come. `docs/design/fleet.md` is its design, and still describes a Go
-binary — issue #68 records the decision to build it in Rails instead and tracks that rewrite. **The layout rule, stated
+`marketing/` (a static site) is still to come. The coordinator's design is `docs/design/fleet.md`;
+its roadmap and the decision record behind it (Rails rather than Go, two editions) are issue #68. **The layout rule, stated
 because this repo had no convention for it and one was needed:** a deployable application gets a
 top-level directory; something two applications share goes under `packages/`. That is why the
 console sits in `packages/console` while the coordinator will not — it mirrors the sibling repo
@@ -544,6 +544,15 @@ add rather than rewrite.
   squash commit — and the check that it worked is that the child's tree hash is *unchanged* by the
   merge (`git rev-parse HEAD^{tree}` before and after). A changed tree there means the resolution
   silently dropped something from `main`.
+- **`git rebase --update-refs` moves EVERY branch that points into the rewritten range —
+  including the snapshot you took so you could undo the rebase.** The independent-commit-review
+  procedure says to `git branch snapshot/<name>` at the tip before rewriting; replaying a stack
+  with `--update-refs` then carried that snapshot along onto the rewritten commits, so it no
+  longer pointed at the pre-review history it existed to preserve. Nothing warns — the rebase
+  lists it among the refs it updated, which reads like success. Found on 2026-09-26 by checking
+  the snapshot's SHA after the rebase; restored from the old SHA (`git branch -f`), which was only
+  possible because it was still written down. **Snapshot with a tag (`git tag`), which
+  `--update-refs` never touches**, or check `git log -1 <snapshot>` after every rebase.
 - **`mise run fw:lint` passing is not evidence CI's lint passes: they run different clang-format
   versions.** `mise.toml` pins `clang-format = "19"`; `.github/workflows/ci.yml` runs
   `apt-get install -y clang-format`, which on the `ubuntu-latest` image is whatever Ubuntu ships

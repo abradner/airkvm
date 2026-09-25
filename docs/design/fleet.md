@@ -1,12 +1,16 @@
 # Fleet mode and the coordinator
 
-> **Status: design only. None of this is built, and nothing here has run on any board.**
-> Every property described below is intent, not proof (AGENTS.md §4, last rule). Sizes and
-> timings marked *(estimate)* are arithmetic, not measurement.
+> **Status: fleet mode itself is design only — the device has no fleet client, no enrolment and
+> no tunnel, and none of it has run on any board.** Some firmware it builds on exists for
+> standalone use (see Sequencing: the session state machine, the setup portal, an OTA test
+> hook). **The coordinator has a scaffold and nothing device-facing:** `coordinator/`
+> signs operators in, scopes them to an Account, and bootstraps a self-hosted install, but has no
+> enrolment endpoint, no CA, no tunnel and no relay. Every property described below for either
+> half is intent, not proof (AGENTS.md §4, last rule). Sizes and timings marked *(estimate)* are
+> arithmetic, not measurement.
 >
-> This document exists because the repo has no reachable tracker yet (AGENTS.md §11 names
-> GitHub issues on `abradner/airkvm`; no remote is configured). Move the open questions there
-> when it exists, and cut this down to the decisions.
+> The roadmap and decision record now live in issue #68; this document is the design. Where
+> the two disagree, #68 is newer.
 
 ## The problem
 
@@ -35,8 +39,32 @@ differentiator, and the only mode that needs no infrastructure at all (AGENTS.md
 | Trust root | Physical possession | Physical enrollment, then coordinator |
 | Needs infrastructure | No | Yes |
 
-The coordinator is a separate program: a single Go binary with embedded assets, plus a container
-image wrapping it. It is a CA by default, encourages Let's Encrypt where a real name exists, and
+The coordinator is a separate program: **a Rails app** (`coordinator/`, Rails 8.1 on Postgres 18),
+shipped as a container image. This section used to say "a single Go binary with embedded assets";
+that was sound for the scope it had — a CA plus a relay — and was changed on 2026-09-09 (Alex's
+call, recorded in #68) because the scope grew a control plane that is most of the code: operator
+identity, accounts, device inventory, enrolment approval, audit, firmware rollout. Two constraints
+come with that choice and are not optional:
+
+- **The relay does not go through Action Cable.** Frames are relayed verbatim, and a JSON message
+  bus would force base64 or a translation layer onto the keystroke path. The socket layer sits
+  behind a narrow interface so it can be extracted into a small Go gateway later — #68 names the
+  triggers: a few hundred device sockets per instance, more than ~10 ms measured on the typing
+  path, or a decision to ship the self-hosted edition as a downloadable binary rather than a
+  container.
+- **Device and operator sockets forward in-process** in the self-hosted edition. A database-polled
+  pub/sub hop would put ~100 ms in front of every keystroke (principle 6). The coordinator runs
+  as a single Puma process for this reason (among others) and refuses to start with workers. The
+  cloud edition will need connection affinity or a real broker.
+- **Mutual TLS terminates in exactly one place.** Terminating at an ingress and having Rails
+  trust a forwarded header would let anyone who reaches Rails directly forge device identity —
+  the deletion test (AGENTS.md §8).
+
+**One codebase, two editions** (`AIRKVM_EDITION`): `self_hosted`, which is the current focus, and
+`cloud`. An edition may change *policy* — whether sign-up exists, whether the first-boot setup page
+is reachable, limits — and never *data shape*: every table is tenant-scoped in both.
+
+It is a CA by default, encourages Let's Encrypt where a real name exists, and
 accepts a supplied certificate-chain PEM — the same three-way choice `firmware/tools/make_certs.sh`
 already offers, so operators who run internal PKI are not forced onto a second one.
 
@@ -191,10 +219,15 @@ fleet mode ever ships.
 ## What must change in `docs/repo-map.md` when this lands
 
 Listed, not applied — the map describes what exists, and aspirational entries are exactly what it
-warns against. When fleet mode ships:
+warns against. The coordinator's *operator-facing* surfaces are now on the map (sign-in, the
+first-boot setup page, metrics; R-011, R-012), because they exist; the setup AP already has its
+row, as the standalone setup portal. The rest lands with the first device-facing endpoint. When
+fleet mode ships:
 
 - **Surfaces**: the coordinator tunnel is a new surface; in fleet mode `GET /` and `/ws` are gone
-  and the setup AP is a new (transient) one.
+  and the setup AP (already mapped, as the standalone setup portal) gains the coordinator URL —
+  a new thing a person in RF range can point the device at, which the Setup portal row and R-009
+  must then say.
 - **Trust boundaries**: *"Dongle → internet: None, and intentionally so"* becomes false. The
   honest replacement is that the device dials out to exactly one pinned peer whose address is
   configuration — the mechanism now exists, which is the boundary change, and the erosion risk
