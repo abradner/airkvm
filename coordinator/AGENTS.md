@@ -15,9 +15,9 @@ One Rails app, two **editions** from one codebase (`AIRKVM_EDITION`):
 - `self_hosted` — a homelab or an operator's own infrastructure. Normally one Account.
 - `cloud` — app.airkvm.io. One Account per customer.
 
-Status: early. It boots, fails fast on missing configuration, serves Prometheus metrics, and
-has an `Account` model. There is no authentication, no `User`, and no device enrolment yet —
-the next interstitials in issue #68.
+Status: early. It boots, fails fast on missing configuration, serves Prometheus metrics, signs
+operators in, and bootstraps a self-hosted install through a one-time setup page. There is no
+device enrolment yet — issue #68's next bullet.
 
 ## 3. Stack
 
@@ -26,7 +26,7 @@ the next interstitials in issue #68.
 | Runtime | Rails 8.1, Ruby 4.0.6 | pinned exactly in the root `mise.toml`; `.ruby-version` and the Dockerfile agree |
 | Database | Postgres 18 | dev container on **port 25433**; production needs three URLs (below) |
 | Keys | UUIDv7 everywhere | native `uuidv7()` in Postgres 18 — see §4 |
-| Tests | rspec, factory_bot, capybara + cuprite | cuprite drives system Chromium over CDP; unproven on this Pi (root §6.1: headless Chromium hangs here) |
+| Tests | rspec, factory_bot, capybara + cuprite | cuprite drives system Chromium over CDP, and **works on this Pi** despite root §6.1's `--headless` hang (probed 2026-09-26, §6.1 below). No system specs exist yet |
 | Lint | rubocop-omakase, brakeman, bundler-audit, `importmap audit` | four tools; `co:lint` runs all of them |
 | Metrics | yabeda, `/metrics` on port 9394 | loopback by default; see §6.1 for the control socket |
 | Frontend | importmap + propshaft, no build step | same rule as the console (root §4) |
@@ -42,9 +42,38 @@ and on a service that can type on every enrolled machine that is the whole ballg
 
 A record belonging to another Account is a **404, not a 403**. A 403 confirms the id exists.
 
-**Stated, not yet enforced.** `current_account` does not exist until operator authentication
-lands (issue #68's next interstitial). Until then this rule has nothing to apply to; when it
-lands, it lands with a spec proving a cross-account lookup is a 404.
+**Enforced at the HTTP boundary, by convention plus a spec.** `current_account` is
+`Current.session.user.account` (`ApplicationController`). `spec/requests/operators_spec.rb`
+proves a cross-account id is a 404 byte-identical, in production's reply, to an id that never
+existed — and was seen to fail with `User.find` planted. Nothing *mechanically* stops a new
+controller using the bare class; each new resource brings its own cross-account spec.
+
+### First-boot setup exists until an Account does, and never in the cloud
+
+With no Account, a self-hosted install redirects every page to `/setup`
+(`prepend_before_action`, ahead of authentication — on a fresh install there is nobody to sign
+in). It creates the Account and first operator together, then 404s for everyone while any Account
+exists — derived from state, not stored, so emptying the accounts table reopens it (R-012). In the
+cloud edition it is always a 404. `FirstBoot.complete!` takes a Postgres advisory lock and
+re-checks under it, because until used the page is open to anyone who can reach the service; the
+re-check depends on READ COMMITTED (see the comment there).
+
+### Sessions and sign-in
+
+- Sessions last `Authentication::SESSION_LIFETIME` (7 days) from sign-in. The expiry is signed
+  into the cookie and checked by Rails on every request — that is the one enforcement; do not add
+  an age check on the `sessions` row beside it. A password change destroys every session.
+- **Never use `request.remote_ip` for anything security-relevant; use `client_address`.** Rails
+  believes `X-Forwarded-For` from any peer — `trusted_proxies` only strips known proxies from the
+  chain — so a client reaching Puma directly names its own address. `client_address` believes
+  the header only when the peer is loopback (the in-image Thruster, verified to append the peer it
+  saw). Sign-in is rate-limited both by that address and by email address.
+- TLS is the fronting proxy's job and is required: `assume_ssl` means the app cannot detect its
+  absence (README).
+
+There is **no password reset**: the generator's email flow was removed, because a self-hosted
+install usually has no mail and a link that emails into the void is a claim the mechanism does
+not deliver (root principle 1). The README documents the console reset.
 
 ### An edition changes policy, never data shape
 
@@ -128,6 +157,23 @@ CI runs it as its own job.
   Mount `/var/lib/postgresql`.
 - **ERB renders `config/database.yml` in every environment.** An `ENV.fetch` for a
   production-only variable there raises during development boot. Enforce in an initializer.
+- **The root `mise.toml` must never set `PORT` globally.** `[env]` reaches every process mise
+  starts, Rails reads `PORT` as the TCP port to bind, and the firmware's serial default
+  `/dev/ttyACM0` made `co:dev` die with `Integer(): "/dev/ttyACM0"`. It is now per-task on the
+  three flash tasks. Inside an agent worktree the main checkout's `mise.toml` is an ancestor
+  (root §6.1), so the collision persists there until `main` carries the fix — bypass it with
+  `env -u PORT PATH="$(mise where ruby)/bin:$PATH" bin/rails server`, not `mise x`, which
+  re-applies it.
+- **Rails 8.1.3.1 plus json 3 cannot read a signed cookie.** ActiveSupport passed `JSON.parse` a
+  positional options hash that json 3 no longer accepts, so every login raised ArgumentError.
+  The Gemfile floor is `~> 8.1.4`; do not relax it.
+- **The test environment's 404 is a debug page that echoes the requested id.** A spec comparing
+  two 404s there will always see them differ. Compare production's reply
+  (`show_detailed_exceptions = false`, i.e. `public/404.html`) — see `operators_spec.rb`.
+- **cuprite works here; the Chromium hang in root §6.1 does not apply to it.** Probed with a
+  throwaway system spec rendering `/setup/new` in ~5 s, and a planted `have_text` for absent text
+  failed with the real page body — so the instrument was seen both ways. It needs only
+  `require "capybara/cuprite"` and `driven_by :cuprite` — no sandbox flag (tested without one).
 - **`0 examples, 0 failures` is not a pass — it is a suite that never ran.** A probe migration
   dated 2999 was rejected outright (Rails 8.1: `Invalid timestamp … for migration file`, exit 1),
   which is loud — but the probe had redirected that output to `/dev/null`, so the rejection was
