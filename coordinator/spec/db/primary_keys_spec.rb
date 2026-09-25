@@ -2,7 +2,9 @@ require "rails_helper"
 
 # The one enforcement point for the key rules in coordinator/AGENTS.md §4:
 # every primary key is a uuid defaulting to uuidv7(), and every *_id column is a
-# uuid.
+# uuid — in the PRIMARY database, the one this app's migrations own. The Solid
+# Cache and Solid Queue schemas are framework-owned bigint tables and out of
+# scope by decision (AGENTS.md §4 says why); in test they are not even loaded.
 #
 # The generator config in config/application.rb and the migration template in
 # lib/templates/ make generated migrations right by default, but nothing stops a

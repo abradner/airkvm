@@ -83,7 +83,13 @@ data is*: no edition-only column, no edition-only table, no record that is tenan
 edition and global in the other. Both editions run the same migrations against the same schema.
 Code that branches on the edition to add or drop a column is the seam being misused.
 
-### Every table has a UUIDv7 primary key, and every reference is a uuid
+### Every application table has a UUIDv7 primary key, and every reference is a uuid
+
+**Scope: the primary database — the tables this app's migrations own.** The Solid Cache and Solid
+Queue databases (`db/cache_schema.rb`, `db/queue_schema.rb`) are framework-owned, use bigint keys
+and references, hold no tenant data, and are never exposed by id; they are left as their gems
+ship them, because rewriting a vendor schema would be a fork to maintain. The spec reads the
+primary database only, and that is the whole of what it enforces.
 
 v7 rather than bigint so ids are not enumerable — device and enrolment ids must not be guessable
 by counting — and rather than v4 because v7 is time-ordered, so inserts stay at the right-hand
@@ -114,8 +120,10 @@ Two cases it will flag that are not mistakes of yours:
 
 ### Required configuration fails fast at boot
 
-`DATABASE_URL`, `CACHE_DATABASE_URL`, `QUEUE_DATABASE_URL` and `AIRKVM_EDITION` are required in
-production and raise at boot when missing (`config/initializers/`). None has a production
+`DATABASE_URL`, `CACHE_DATABASE_URL`, `QUEUE_DATABASE_URL`, `AIRKVM_EDITION` and
+`SECRET_KEY_BASE` are required in production and raise at boot when missing
+(`config/initializers/`, and Rails itself for the secret — there is no credentials file to fall
+back on). `spec/smoke/boot_spec.rb` boots production in a child process to pin each refusal. None has a production
 default, for reasons worth knowing before adding one:
 
 - **Three database URLs, not one.** Rails applies `DATABASE_URL` to the *primary* database
@@ -185,7 +193,8 @@ CI runs it as its own job.
 
 ## 7. CI
 
-The `coordinator` job in the root `.github/workflows/ci.yml`: specs and `co:lint` against a
-`postgres:18` service on port 25433, matching the local config. A third job rather than steps in
+The `coordinator` job in the root `.github/workflows/ci.yml`: specs, `co:lint` and `co:precompile`
+(the image's asset step, by the script the Dockerfile runs) against a `postgres:18` service on port
+25433, matching the local config. A third job rather than steps in
 `checks`, because a `services:` block is per-job — the one case the root §7 billing logic cannot
 satisfy.

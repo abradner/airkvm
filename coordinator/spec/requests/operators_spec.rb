@@ -19,6 +19,7 @@ RSpec.describe "operators" do
     # page for a 404, which echoes the requested id, so two different ids would
     # differ by that id alone and prove nothing either way. With detailed
     # exceptions off, the response is public/404.html — the real reply.
+    previous = Rails.application.env_config["action_dispatch.show_detailed_exceptions"]
     Rails.application.env_config["action_dispatch.show_detailed_exceptions"] = false
 
     get operator_path(stranger)
@@ -30,7 +31,9 @@ RSpec.describe "operators" do
     # Same body too, so nothing in the reply distinguishes "real but not yours".
     expect(response.body).to eq(foreign)
   ensure
-    Rails.application.env_config.delete("action_dispatch.show_detailed_exceptions")
+    # Restore, not delete: env_config is memoized with the test value (true),
+    # and deleting it left every later example on production error pages.
+    Rails.application.env_config["action_dispatch.show_detailed_exceptions"] = previous
   end
 
   it "treats a malformed id as not found, not as a server error" do

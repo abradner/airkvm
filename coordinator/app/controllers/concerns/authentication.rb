@@ -58,7 +58,8 @@ module Authentication
     # network, since Puma listens behind Thruster on all interfaces) could name
     # any address it liked. So the header is believed only when the peer is a
     # trusted proxy (config/application.rb: loopback, i.e. the in-image
-    # Thruster), and then remote_ip's rightmost-untrusted walk applies.
+    # Thruster, plus TRUSTED_PROXIES), and then remote_ip's rightmost-untrusted
+    # walk applies.
     def client_address
       peer = request.remote_addr
       trusted = Rails.application.config.action_dispatch.trusted_proxies

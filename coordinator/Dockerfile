@@ -6,10 +6,17 @@
 # separate gitops repo (issue #68). Build and run by hand:
 #
 #   docker build -t coordinator .
-#   docker run -d -p 80:80 \
+#   docker run -d -p 127.0.0.1:8080:80 \
+#     -e AIRKVM_EDITION=self_hosted \
 #     -e SECRET_KEY_BASE=<openssl rand -hex 64> \
 #     -e DATABASE_URL=... -e CACHE_DATABASE_URL=... -e QUEUE_DATABASE_URL=... \
+#     -e TRUSTED_PROXIES=<the TLS proxy's address> \
 #     --name coordinator coordinator
+#
+# then put a TLS-terminating proxy in front of 127.0.0.1:8080. It is required,
+# not optional: production assumes TLS (assume_ssl), so over plain HTTP the
+# Secure session cookie is dropped and sign-in and setup silently fail — and
+# passwords would cross the network in cleartext. See README.md.
 #
 # Runtime ENV contract. Required — the app raises at boot without these rather
 # than degrading (AGENTS.md §8; config/initializers/):
@@ -42,6 +49,12 @@
 # Optional tuning: RAILS_MAX_THREADS, RAILS_LOG_LEVEL, and HTTP_PORT — the port
 # Thruster (the CMD below) listens on, 80 by default. Not PORT: Thruster sets
 # PORT itself for the Rails server it fronts, so a PORT given here is ignored.
+#
+# BINDING=127.0.0.1 keeps Puma on loopback, reachable only through Thruster. On
+# 0.0.0.0 anything on the container's network could bypass Thruster and the TLS
+# proxy in front of it. It has to be BINDING: `rails server` passes its own host
+# to Puma, which then drops any bind config/puma.rb sets. IPv4 only is enough —
+# Thruster dials "localhost", and Go falls back from ::1 to 127.0.0.1.
 
 # For a containerized dev environment, see Dev Containers: https://guides.rubyonrails.org/getting_started_with_devcontainer.html
 
@@ -61,6 +74,7 @@ RUN apt-get update -qq && \
 # Set production environment variables and enable jemalloc for reduced memory usage and latency.
 ENV RAILS_ENV="production" \
     PROMETHEUS_EXPORTER_BIND="0.0.0.0" \
+    BINDING="127.0.0.1" \
     BUNDLE_DEPLOYMENT="1" \
     BUNDLE_PATH="/usr/local/bundle" \
     BUNDLE_WITHOUT="development:test" \

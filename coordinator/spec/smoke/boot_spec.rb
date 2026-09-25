@@ -41,10 +41,10 @@ RSpec.describe "the coordinator scaffold" do
   # stops raising, stops naming what is missing, or starts refusing a complete
   # configuration.
   describe "production boot" do
-    def boot_production(edition: "self_hosted", **urls)
+    def boot_production(edition: "self_hosted", secret: :dummy, **urls)
       env = REQUIRED_DATABASE_URLS.to_h { |key| [ key, nil ] }.merge(urls.transform_keys(&:to_s))
-      env.merge!("RAILS_ENV" => "production", "SECRET_KEY_BASE_DUMMY" => "1",
-                 "AIRKVM_EDITION" => edition)
+      env.merge!("RAILS_ENV" => "production", "AIRKVM_EDITION" => edition,
+                 "SECRET_KEY_BASE" => nil, "SECRET_KEY_BASE_DUMMY" => (secret == :dummy ? "1" : nil))
       out, status = Open3.capture2e(env, "bin/rails", "runner", "puts :booted",
                                     chdir: Rails.root.to_s)
       [ out, status ]
@@ -68,6 +68,12 @@ RSpec.describe "the coordinator scaffold" do
       out, status = boot_production(edition: nil, DATABASE_URL: url, CACHE_DATABASE_URL: url, QUEUE_DATABASE_URL: url)
       expect(status).not_to be_success
       expect(out).to include("AIRKVM_EDITION is not set")
+    end
+
+    it "refuses to start without SECRET_KEY_BASE — there is no credentials file to fall back on" do
+      out, status = boot_production(secret: nil, DATABASE_URL: url, CACHE_DATABASE_URL: url, QUEUE_DATABASE_URL: url)
+      expect(status).not_to be_success
+      expect(out).to include("Missing `secret_key_base`")
     end
 
     it "starts with all three (the positive control: the check is not simply always failing)" do

@@ -38,7 +38,7 @@ This repo holds more than the firmware. The trees, and what each is:
 its roadmap and the decision record behind it (Rails rather than Go, two editions) are issue #68. **The layout rule, stated
 because this repo had no convention for it and one was needed:** a deployable application gets a
 top-level directory; something two applications share goes under `packages/`. That is why the
-console sits in `packages/console` while the coordinator will not — it mirrors the sibling repo
+console sits in `packages/console` while the coordinator does not — it mirrors the sibling repo
 this shape is borrowed from. It is a proposal until reviewed; correct it here rather than in a
 PR thread if it is wrong.
 
@@ -227,7 +227,8 @@ conversation context, only what's written down.
 Toolchain is pinned in `mise.toml`. From a fresh shell:
 
 ```sh
-mise install                    # cmake, ninja, python, ruff, clang-format
+mise install                    # every pinned tool: cmake, ninja, python, ruff, clang-format,
+                                # node + typescript (console checker), ruby (coordinator)
 mise run fw:setup               # one-time: clone ESP-IDF v5.5 into .esp-idf/ and install its
                                 # esp32s3 toolchain (several GB; not mise-managed)
 ```
@@ -693,9 +694,11 @@ repo is small; filtering would buy seconds and cost trust):
   job of their own for the billing reason below; they do need to be off the IDF container,
   which has no Firefox. See `packages/console/test/README.md` for what they do and do not
   prove — a green run says the console *encodes* correctly and nothing about any target.
-- **coordinator** — the Rails service's specs and its four-tool lint (rubocop,
-  brakeman, bundler-audit, `importmap audit`), against a `postgres:18` service
-  container. A third job rather than steps inside `checks`, because a
+- **coordinator** — the Rails service's specs, its four-tool lint (rubocop,
+  brakeman, bundler-audit, `importmap audit`) and the image's asset step
+  (`co:precompile`, the script the Dockerfile runs), against a `postgres:18`
+  service container. It installs Ruby only; everything else in `mise.toml` is
+  kept out on purpose (see the job's comments). A third job rather than steps inside `checks`, because a
   `services:` block is per-job and the coordinator needs a database — that is
   the one case where the billing logic below cannot be satisfied. The service
   maps host port 25433, matching what `coordinator/config/database.yml` expects

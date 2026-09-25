@@ -43,8 +43,19 @@ RSpec.describe FirstBoot, "under concurrency" do
     end
 
     begin
-      sleep 0.5
-      expect(worker).to be_alive, "complete! did not wait for the lock — it raced ahead"
+      # Wait until Postgres itself reports the worker blocked on the advisory
+      # lock. Asserting only that the thread is still alive after a pause (an
+      # earlier version) could pass on a slow runner with the lock removed.
+      waiting = 0
+      50.times do
+        waiting = holder.select_value(
+          "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted"
+        ).to_i
+        break if waiting.positive? || !worker.alive?
+
+        sleep 0.1
+      end
+      expect(waiting).to eq(1), "complete! did not wait for the lock — it raced ahead"
 
       # Another first boot finishes while the worker is waiting on the lock.
       holder.execute("INSERT INTO accounts (id, name, created_at, updated_at) VALUES (uuidv7(), 'first', now(), now())")
