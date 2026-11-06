@@ -38,6 +38,7 @@
 #include "hid_out.h"
 #include "hid_state.h"
 #include "keymap.h"
+#include "report_drain.h"
 #if CONFIG_TINYUSB_MSC_ENABLED
 #include "msc_out.h"
 #endif
@@ -577,9 +578,10 @@ static void report_task(void *arg) {
 
     // Apply everything already queued before emitting, so a burst collapses
     // into the fewest reports that still convey it faithfully — with one
-    // exception that is load-bearing: a keyboard intent is never applied on
-    // top of a keyboard state whose report has not gone out yet. Doing so
-    // silently destroys the keypress (see the note above pump_keyboard).
+    // exception that is load-bearing: an intent carrying ABSOLUTE state — a
+    // keystroke or a button mask — is never applied on top of a state whose
+    // report has not gone out yet. Doing so silently destroys the event, the
+    // keypress or the click alike (report_drain.h; §9 entries 11 and 19).
     // Peek before receiving, so the intent we decline to apply stays queued
     // in order for the next pass.
     //
@@ -599,11 +601,21 @@ static void report_task(void *arg) {
     // states, so it is proposed there rather than made here at the same time
     // as a bug fix.
     while (xQueuePeek(s_queue, &intent, 0) == pdTRUE) {
-      const bool is_keyboard = intent.type == AIRKVM_FRAME_KEY_DOWN ||
-                               intent.type == AIRKVM_FRAME_KEY_UP;
-      if (is_keyboard && s_kbd_dirty) {
-        pump_keyboard();
-        if (s_kbd_dirty) {
+      // Which channel this intent writes, and whether that channel still owes
+      // a report. report_drain.h carries the classification and the argument;
+      // the short version is that MOUSE_BUTTON belongs here for exactly the
+      // reason KEY_DOWN/KEY_UP do, and did not until issue #58.
+      const enum report_channel channel = report_drain_channel(intent.type);
+      if (report_drain_blocked(intent.type, s_kbd_dirty, s_buttons_dirty)) {
+        // Only this intent's own channel: pumping the other one here would
+        // emit a motion report earlier than the drain otherwise would, for no
+        // benefit to the intent that is actually waiting.
+        if (channel == REPORT_CHANNEL_KEYBOARD) {
+          pump_keyboard();
+        } else {
+          pump_mouse();
+        }
+        if (report_drain_blocked(intent.type, s_kbd_dirty, s_buttons_dirty)) {
           // Endpoint not ready; this intent waits its turn. If the reason is
           // a suspended bus, waiting is not enough — nothing will resume it
           // unless we ask (see the note on wake-on-input; this is the level

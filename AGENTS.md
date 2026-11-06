@@ -594,6 +594,16 @@ add rather than rewrite.
   `firmware` are separate jobs and never gated each other, so that much was always true and is
   not what the guards buy.) The umbrella is a local convenience; the CI step list is the thing
   that tells you what actually ran.
+- **A gitignored file does not move when the repo is refactored, and the build reports it as
+  missing rather than misplaced.** After the monorepo split, `mise run fw:build` in a worktree
+  that predated it died at configure with `SDKCONFIG_DEFAULTS
+  '.../firmware/sdkconfig.local' does not exist` — because `sdkconfig.local`, the generated
+  `sdkconfig*` and `certs/` are per-machine and gitignored, so the commit that moved every
+  *tracked* file under `firmware/` moved none of them. Nothing was broken and nothing lost;
+  they were one directory up. **After any layout change, move the gitignored local config by
+  hand** — the worktree entry above lists what this repo keeps out of git — and read that
+  error as a claim about a path, not about existence.
+
 - **`firmware/main/indicator.c`'s LED body compiles on the C3 bench board and NOWHERE else — so the two S3
   builds are not coverage for it.** `BOARD_HAS_LED` is 1 on the C3, **0** on the S3 0.42" dongle,
   and 1 on the LCD147 — but the LCD147 selects `indicator_ws2812.c` instead
@@ -1183,8 +1193,16 @@ code is written.*
     button frame inside that overwrites the first. Nothing ever noticed because a human click
     outlasts it by orders of magnitude — until the phone console synthesised a click from a tap.
     Found by reading, while planning that work (2026-09-08); the window was pinned down by the
-    review of it; not observed on hardware. The console dwells `TAP_CLICK_HOLD_MS` between the two frames, and the firmware fix
-    (the keyboard guard, applied to buttons) is issue #58.
+    review of it; not observed on hardware. The console dwells `TAP_CLICK_HOLD_MS` between the two frames.
+    **Fixed 2026-09-26 (#58).** Not with a second `if`: the drain's rule is now a pure,
+    total classifier (`firmware/main/report_drain.h`, host-tested) naming which report
+    channel each intent writes, so ACCUMULATING intents (move, scroll — `+=`, no
+    observable intermediate) stay free to coalesce while ABSOLUTE-STATE intents (keys,
+    buttons — overwrite) block on their own channel and no other. The switch has no
+    `default:`, so a new frame type fails the build rather than inheriting "safe to
+    coalesce" — this entry's own general rule made mechanical instead of remembered.
+    Still unverified on hardware: `firmware/tools/hid_listen.py --mouse` with the
+    console's dwell set to zero is the acceptance test.
     **General rule: when a guard is added for one instance of a shape, list the other instances
     of the shape in the same file and say why each does or does not need it.** Entry 11 named the
     rule and fixed one arm of a five-arm switch.

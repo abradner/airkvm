@@ -34,6 +34,12 @@ endforeach()
 # oled_geometry.h is header-only macros with no hardware dependency (unlike
 # display.c, which needs driver/i2c_master.h and is excluded above) — no
 # extra sources needed.
+# report_drain.h is header-only and pure for the same reason wake_policy.c is:
+# the question "may this intent be applied yet" is arithmetic over the frame
+# type and two flags, and it decides whether a click survives (issue #58).
+add_executable(test_report_drain test_report_drain.c ../../main/protocol.c)
+add_test(NAME report_drain COMMAND test_report_drain)
+
 add_executable(test_oled_geometry test_oled_geometry.c)
 add_test(NAME oled_geometry COMMAND test_oled_geometry)
 
