@@ -54,7 +54,10 @@ RSpec.describe "the coordinator scaffold" do
 
     def all_urls = { DATABASE_URL: url, CACHE_DATABASE_URL: url, QUEUE_DATABASE_URL: url }
 
-    let(:url) { "postgres://boot-spec-stand-in/unused" }
+    # A closed local port, so anything that does try to connect is refused at
+    # once. A name that does not resolve made a regression in the host check
+    # below fail only after the connect gave up — five minutes, measured.
+    let(:url) { "postgres://127.0.0.1:1/unused" }
 
     it "refuses to start with no database URLs, naming all three" do
       out, status = boot_production

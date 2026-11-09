@@ -11,7 +11,17 @@
 #
 # COORDINATOR_HOSTS is comma-separated. Each entry is an exact host name
 # ("kvm.example.net"), a leading-dot domain matching it and every subdomain
-# (".example.net"), or an IP address — the forms config.hosts takes as strings.
+# (".example.net"), or an IPv4 address — the forms config.hosts takes as
+# strings. An IPv6 address must be bracketed ("[::1]"): the Host header carries
+# the brackets, and a bare "::1" is compared as an exact string and never
+# matches.
+#
+# Every production process boots this, not only the web server: rails console,
+# rake tasks and bin/jobs need the variable too, the same as SECRET_KEY_BASE.
+#
+# A refused Host is logged by Rails (HostAuthorization) as one error line per
+# request, quoting the Host it was sent — so DNS-rebinding probes are visible
+# in the log, at the cost of a line each.
 #
 # /up is excluded so a container or orchestrator health check, which dials an
 # address rather than a name, still gets its 200. It reveals nothing.

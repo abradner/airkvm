@@ -45,9 +45,12 @@ module TrustedProxies
   # Once per peer per process, so a misconfigured deploy logs one line per
   # proxy rather than one per request, and at most MAX_PEERS distinct peers, so
   # a client spraying the header from many addresses cannot grow the memo
-  # without bound. The line names the peer (the address that would need
-  # listing, and the same address Rails' own request log already records) and
-  # never the header's contents, which are whatever the client chose to claim.
+  # without bound; reaching the cap logs one line saying so, so the silence
+  # after it is visible. The line names the connecting peer — the address that
+  # would need listing, normally the proxy's own infrastructure address — and
+  # never the header's contents. That does add the peer's IP to the log, once
+  # per peer: Rails' own request line logs remote_ip, which for this very case
+  # is the header's CLAIMED address, not the peer.
   class UntrustedForwardingWarning
     MAX_PEERS = 32
 
@@ -65,16 +68,24 @@ module TrustedProxies
     private
       def warn_if_untrusted(env)
         peer = env["REMOTE_ADDR"].to_s
-        return if TrustedProxies.trusted?(peer)
-        return if @warned.size >= MAX_PEERS
+        return if peer.empty? || TrustedProxies.trusted?(peer)
+        return if @warned.size > MAX_PEERS
         return unless @warned.put_if_absent(peer, true).nil?
 
-        (@logger || Rails.logger).warn(
+        if @warned.size > MAX_PEERS
+          logger.warn("X-Forwarded-For from untrusted peers: #{MAX_PEERS} distinct peers already " \
+                      "logged; further untrusted peers will not be logged by this process.")
+          return
+        end
+
+        logger.warn(
           "X-Forwarded-For arrived from #{peer}, which is not a trusted proxy, so it was " \
           "ignored and the request is attributed to #{peer}. If #{peer} is the proxy in " \
           "front of this service, add it to TRUSTED_PROXIES; until then every client " \
           "behind it shares one sign-in rate-limit bucket. Logged once per peer."
         )
       end
+
+      def logger = @logger || Rails.logger
   end
 end

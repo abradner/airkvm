@@ -61,7 +61,8 @@ while browsers drop the `Secure` session cookie so sign-in silently fails.
 
 ## Runtime configuration
 
-Required in production. The app **raises at boot** if any is missing rather
+Required in every production process — the server, `rails console`, rake
+tasks and `bin/jobs` alike. The app **raises at boot** if any is missing rather
 than starting and failing later (AGENTS.md §8): the database URLs in
 `config/initializers/require_database_urls.rb`, the edition in
 `config/initializers/edition.rb`, the host list in
@@ -76,7 +77,7 @@ child process.
 | `QUEUE_DATABASE_URL` | Solid Queue's database |
 | `SECRET_KEY_BASE` | Signs session cookies. Rails refuses to boot production without it. Generate with `openssl rand -hex 64` |
 | `AIRKVM_EDITION` | `self_hosted` or `cloud`. No default outside development and test — see below |
-| `COORDINATOR_HOSTS` | The host name(s) operators reach the service by, comma-separated (`kvm.example.net`; a leading dot, `.example.net`, also matches subdomains). Every other `Host` gets a 403, except `/up` for health checks. Without it a DNS-rebinding page could reach the first-boot setup page |
+| `COORDINATOR_HOSTS` | The host name(s) operators reach the service by, comma-separated (`kvm.example.net`; a leading dot, `.example.net`, also matches subdomains; an IPv6 address must be bracketed, `[::1]`). Every other `Host` gets a 403, except `/up` for health checks. Without it a DNS-rebinding page could reach the first-boot setup page |
 
 **The three URLs are not redundant, and this is the trap.** Rails applies
 `DATABASE_URL` to the *primary* database only — `url ||= ENV["DATABASE_URL"] if

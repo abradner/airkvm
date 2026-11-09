@@ -66,6 +66,15 @@ RSpec.describe "X-Forwarded-For from an untrusted peer" do
     (warning::MAX_PEERS + 5).times do |i|
       middleware.call("REMOTE_ADDR" => "10.30.#{i / 250}.#{i % 250 + 1}", "HTTP_X_FORWARDED_FOR" => "203.0.113.4")
     end
-    expect(logger).to have_received(:warn).exactly(warning::MAX_PEERS).times
+    expect(logger).to have_received(:warn).with(/not a trusted proxy/).exactly(warning::MAX_PEERS).times
+    expect(logger).to have_received(:warn).with(/further untrusted peers will not be logged/).once
+  end
+
+  it "says nothing, and remembers nothing, for a request with no peer address" do
+    logger = instance_double(Logger, warn: nil)
+    middleware = TrustedProxies::UntrustedForwardingWarning.new(->(_env) { [ 200, {}, [] ] }, logger:)
+
+    middleware.call("HTTP_X_FORWARDED_FOR" => "203.0.113.5")
+    expect(logger).not_to have_received(:warn)
   end
 end
