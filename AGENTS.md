@@ -782,6 +782,11 @@ projects; adjust only with reason, and record the reason (see §10).
 
 ### Configuration
 
+- **Secrets are never committed — not even encrypted.** Decided 2026-11-09 for the coordinator,
+  which takes every secret as ENV from the gitops repo that deploys it and has no
+  `credentials.yml.enc` or master key (`coordinator/AGENTS.md` §4 has the why). The firmware's
+  equivalent is already per-machine and gitignored (`firmware/sdkconfig.local`, `firmware/certs/`,
+  §6.1). A new tree follows the same rule; an exception is a proposal for review, not a default.
 - Fail fast on boot: never provide fallback defaults when reading *required* configuration.
   Missing required config must raise at startup rather than silently degrade. Defaults are fine
   for genuinely optional tuning knobs. (This isn't hypothetical: a sibling repo baked a stand-in

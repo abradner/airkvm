@@ -10,6 +10,7 @@
 #     -e AIRKVM_EDITION=self_hosted \
 #     -e SECRET_KEY_BASE=<openssl rand -hex 64> \
 #     -e DATABASE_URL=... -e CACHE_DATABASE_URL=... -e QUEUE_DATABASE_URL=... \
+#     -e COORDINATOR_HOSTS=<the name operators use, e.g. kvm.example.net> \
 #     -e TRUSTED_PROXIES=<the TLS proxy's address> \
 #     --name coordinator coordinator
 #
@@ -28,6 +29,9 @@
 #   AIRKVM_EDITION       self_hosted | cloud — no default outside dev/test, because
 #                        both editions boot fine, so a wrong guess fails silently
 #                        (config/initializers/edition.rb)
+#   COORDINATOR_HOSTS    host name(s) the service answers, comma-separated; any
+#                        other Host gets a 403 except /up (DNS rebinding, R-012;
+#                        config/initializers/require_hosts.rb)
 #
 # No RAILS_MASTER_KEY: there is no config/credentials.yml.enc. Secrets arrive
 # as ENV from the gitops repo that deploys this, so a key file that exists in

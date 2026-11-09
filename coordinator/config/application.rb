@@ -17,6 +17,8 @@ require "action_view/railtie"
 # you've limited to :test, :development, or :production.
 Bundler.require(*Rails.groups)
 
+require_relative "trusted_proxies"
+
 module Coordinator
   class Application < Rails::Application
     # Initialize configuration defaults for originally generated Rails version.
@@ -51,8 +53,13 @@ module Coordinator
     # Too broad a value is the opposite failure — clients inside it choose
     # their own address — so name the proxy, not its subnet, where you can.
     # Authentication#client_address is the other half, which Rails does not do.
-    config.action_dispatch.trusted_proxies = [ IPAddr.new("127.0.0.1"), IPAddr.new("::1") ] +
-      ENV.fetch("TRUSTED_PROXIES", "").split(",").map(&:strip).reject(&:empty?).map { |cidr| IPAddr.new(cidr) }
+    #
+    # Fail closed, decided 2026-11-09: an unlisted proxy's header is ignored,
+    # never believed. TrustedProxies::UntrustedForwardingWarning logs the first
+    # request from each such peer, so the shared-bucket lockout above is
+    # diagnosable rather than silent (config/trusted_proxies.rb).
+    config.action_dispatch.trusted_proxies = TrustedProxies.from_env(ENV["TRUSTED_PROXIES"])
+    config.middleware.insert_before 0, TrustedProxies::UntrustedForwardingWarning
 
     # Configuration for the application, engines, and railties goes here.
     #
