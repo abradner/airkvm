@@ -12,12 +12,15 @@
 #     --name coordinator coordinator
 #
 # Runtime ENV contract. Required — the app raises at boot without these rather
-# than degrading (AGENTS.md §8; config/initializers/require_database_urls.rb):
+# than degrading (AGENTS.md §8; config/initializers/):
 #
 #   DATABASE_URL         primary database
 #   CACHE_DATABASE_URL   Solid Cache's database
 #   QUEUE_DATABASE_URL   Solid Queue's database
 #   SECRET_KEY_BASE      signs session cookies; Rails refuses to boot without it
+#   AIRKVM_EDITION       self_hosted | cloud — no default outside dev/test, because
+#                        both editions boot fine, so a wrong guess fails silently
+#                        (config/initializers/edition.rb)
 #
 # No RAILS_MASTER_KEY: there is no config/credentials.yml.enc. Secrets arrive
 # as ENV from the gitops repo that deploys this, so a key file that exists in

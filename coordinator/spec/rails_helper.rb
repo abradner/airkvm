@@ -1,6 +1,11 @@
 # This file is copied to spec/ when you run 'rails generate rspec:install'
 require 'spec_helper'
 ENV['RAILS_ENV'] ||= 'test'
+# The suite's edition is fixed, not inherited: a developer who exported
+# AIRKVM_EDITION=cloud to try the cloud edition locally would otherwise run
+# every spec that does not stub the edition as cloud, and first-boot results
+# would flip. Specs that need cloud stub Airkvm.edition explicitly.
+ENV['AIRKVM_EDITION'] = 'self_hosted'
 require_relative '../config/environment'
 # Prevent database truncation if the environment is production
 abort("The Rails environment is running in production mode!") if Rails.env.production?
