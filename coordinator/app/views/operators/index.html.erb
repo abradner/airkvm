@@ -1,0 +1,7 @@
+<h1><%= current_account.name %></h1>
+<h2>Operators</h2>
+<ul>
+  <% @operators.each do |operator| %>
+    <li><%= link_to operator.email_address, operator_path(operator) %></li>
+  <% end %>
+</ul>

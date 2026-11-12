@@ -5,7 +5,8 @@ operators drive. Design: `../docs/design/fleet.md`. Roadmap and decisions:
 [issue #68](https://github.com/abradner/airkvm/issues/68).
 
 **Status: scaffold.** It boots, connects to a database, and has nothing else in
-it yet. No models, no auth, no device enrolment.
+it yet. There are Accounts, operators who sign in, and a first-boot setup page;
+there is no device enrolment yet.
 
 ## Running it locally
 
@@ -28,6 +29,36 @@ Two things that will otherwise waste your time:
   checks need a container and the network, and a mise umbrella kills its
   siblings on first failure, so wiring it in would redden a firmware-only
   change on a machine with no database running. Run the `co:` tasks directly.
+
+## First boot (self-hosted)
+
+On a fresh self-hosted install every page redirects to `/setup`, which creates
+the Account and its first operator and signs you in. After that `/setup` is a
+404 for everyone, signed in or not, for as long as any Account exists — it is
+derived from that, not stored, so emptying the accounts table from a console
+would reopen it. It is race-safe — two people submitting at the same moment get
+one Account between them, not two. Until it is used, anyone who can reach the
+coordinator can use it, so complete it before exposing the service. The cloud
+edition has no setup page at all.
+
+There is **no password reset** yet. Rails' generator ships one that sends email,
+but nothing here has mail configured, and a "forgot password?" link that emails
+into the void would be a promise the app cannot keep. Reset from a console:
+
+```sh
+bin/rails runner 'User.find_by!(email_address: "you@example.com").update!(password: "a new long password")'
+```
+
+Changing a password signs that operator out everywhere, so this is also how to
+cut off a leaked session. Sessions otherwise last seven days from sign-in.
+
+## TLS is required in front of it
+
+Production sets `assume_ssl` and `force_ssl`: the app believes every request
+arrived over HTTPS, marks its cookies `Secure`, and sends HSTS. It does **not**
+redirect plain HTTP, and cannot tell when nothing terminated TLS. Run it without
+a TLS-terminating proxy in front and passwords cross the network in cleartext,
+while browsers drop the `Secure` session cookie so sign-in silently fails.
 
 ## Runtime configuration
 

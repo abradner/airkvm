@@ -33,6 +33,15 @@ module Coordinator
     # primary key a uuidv7() uuid, every *_id column a uuid — is
     # spec/db/primary_keys_spec.rb. Why v7, and what it gives away (creation
     # time), is in coordinator/AGENTS.md §4.
+    # Trust no proxy but loopback — the Thruster process the image runs in
+    # front of Puma. Rails' default trusts every private address, which on a
+    # self-hosted LAN is where the clients are, so a client's own
+    # X-Forwarded-For entries would be skipped over as "proxies". Behind a
+    # further reverse proxy, every client then shares the proxy's address — a
+    # stricter rate limit, not a looser one. This alone is not enough: see
+    # Authentication#client_address for the half Rails does not do.
+    config.action_dispatch.trusted_proxies = [ IPAddr.new("127.0.0.1"), IPAddr.new("::1") ]
+
     config.generators do |g|
       g.orm :active_record, primary_key_type: :uuid
     end
