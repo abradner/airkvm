@@ -1,0 +1,19 @@
+#!/bin/sh
+# The image build's asset step, and the one CI runs, so a build that cannot
+# precompile is a red check rather than a surprise at `docker build`.
+#
+# `assets:precompile` depends on :environment, which runs every initializer —
+# including the ones that refuse to boot production without its runtime
+# configuration. A build has none of that, and must not: it would bake it into
+# a layer. So this step, and only this step, gets stand-ins (AGENTS.md §8: a
+# build-time stand-in is scoped to the step, never image-wide). None of them is
+# used to connect to anything; precompiling assets opens no database.
+set -e
+cd "$(dirname "$0")/.."
+exec env \
+  RAILS_ENV=production \
+  SECRET_KEY_BASE_DUMMY=1 \
+  DATABASE_URL=postgres://build-stand-in/unused \
+  CACHE_DATABASE_URL=postgres://build-stand-in/unused \
+  QUEUE_DATABASE_URL=postgres://build-stand-in/unused \
+  ./bin/rails assets:precompile

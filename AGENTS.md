@@ -33,8 +33,9 @@ This repo holds more than the firmware. The trees, and what each is:
 | `packages/console/` | The browser console the dongle serves. Shared, because the fleet coordinator will serve the same page (`docs/design/fleet.md`) | None — plain files, no build step (§4) |
 | `docs/` | Repo-wide: the boundary map and the design docs | — |
 
-Two more trees are coming and are not built yet: `coordinator/` (the fleet coordination service,
-a Rails app — `docs/design/fleet.md`) and `marketing/` (a static site). **The layout rule, stated
+`coordinator/` (the fleet coordination service, a Rails app) is scaffolded; `marketing/` (a
+static site) is still to come. `docs/design/fleet.md` is its design, and still describes a Go
+binary — issue #68 records the decision to build it in Rails instead and tracks that rewrite. **The layout rule, stated
 because this repo had no convention for it and one was needed:** a deployable application gets a
 top-level directory; something two applications share goes under `packages/`. That is why the
 console sits in `packages/console` while the coordinator will not — it mirrors the sibling repo
@@ -693,6 +694,17 @@ repo is small; filtering would buy seconds and cost trust):
   job of their own for the billing reason below; they do need to be off the IDF container,
   which has no Firefox. See `packages/console/test/README.md` for what they do and do not
   prove — a green run says the console *encodes* correctly and nothing about any target.
+- **coordinator** — the Rails service's specs and its four-tool lint (rubocop,
+  brakeman, bundler-audit, `importmap audit`), against a `postgres:18` service
+  container. A third job rather than steps inside `checks`, because a
+  `services:` block is per-job and the coordinator needs a database — that is
+  the one case where the billing logic below cannot be satisfied. The service
+  maps host port 25433, matching what `coordinator/config/database.yml` expects
+  locally, so CI and a dev machine share one connection config.
+  **`co:*` is deliberately absent from the `test`/`lint`/`fmt` umbrellas**: its
+  checks need a container and the network, and an umbrella kills its siblings
+  on first failure (§6.1), so wiring it in would redden a firmware-only change
+  on a machine with no database running.
 - **firmware** — builds every board in one job in the official `espressif/idf:release-v5.5`
   container. Proves the images compile and link; proves nothing about behavior. Boards are rows
   in a `BOARDS` table, so adding one is a line rather than a job, and each row names the symbol
@@ -702,7 +714,9 @@ repo is small; filtering would buy seconds and cost trust):
   the deliberate exception to the rule above: mise cannot supply ESP-IDF in CI (`fw:setup`
   clones ~4GB), so its sdkconfig strings are a second copy of what mise's build tasks say.
 
-**Two jobs rather than four, because GitHub bills per job with a one-minute minimum.** Measured
+**As few jobs as possible, because GitHub bills per job with a one-minute minimum** — two for the
+firmware and console, plus the coordinator's third only because a `services:` block is per-job
+(above). The firmware side used to be four jobs, and the arithmetic that merged them is this. Measured
 on the run for `e0d5917`: 25s of host tests plus 36s of lint cost two billed minutes, and the
 container pull was 113s *per board leg* for the same image. Sharing one job and one container cut
 a run from 12 billed minutes to 9 cold, and to 5 with a warm ccache (measured: the both-boards

@@ -1,0 +1,32 @@
+# Development database only. The app itself runs on the host under mise, the
+# same shape the sibling Rails repos use — this file exists so `co:*` tasks
+# have a Postgres to talk to, not to run the coordinator.
+#
+# Port 25433 rather than 5432, and deliberately not 25432 either: a sibling
+# repo's dev database already holds that one, and this machine runs several
+# projects at once (mise.toml's [env] comment says so). A collision here
+# presents as connecting to the WRONG project's database, which is worse than
+# a refused connection.
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: coordinator
+      POSTGRES_PASSWORD: coordinator_dev
+    ports:
+      - "25433:5432"
+    volumes:
+      # /var/lib/postgresql, NOT .../data. The postgres:18 image refuses the
+      # pre-18 mount point with a hard "Error: in 18+, these Docker images are
+      # configured to store database data in a subdirectory" and exits — the
+      # container starts, stops, and `docker compose ps` then shows nothing at
+      # all, so it reads as "never started" rather than as a mount error.
+      - coordinator_pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U coordinator"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+volumes:
+  coordinator_pgdata:
