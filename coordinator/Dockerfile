@@ -26,6 +26,14 @@
 # as ENV from the gitops repo that deploys this, so a key file that exists in
 # one checkout is never the only way to decrypt a committed file.
 #
+# Metrics: Prometheus scrapes /metrics on port 9394 (PROMETHEUS_EXPORTER_PORT).
+# It binds 0.0.0.0 here because the scraper sits outside this container, and
+# loopback everywhere else. It is unauthenticated, and 0.0.0.0 means everything
+# that can route to the container reaches it — every container on the same
+# Docker network, every pod in the cluster unless a NetworkPolicy restricts it —
+# not only what `-p` publishes. Restrict it there; never route it through an
+# ingress.
+#
 # All three URLs are needed, and this is the trap: Rails applies DATABASE_URL
 # to the PRIMARY database only, so a container given just that one boots
 # healthy, passes its health check, and then writes every cache entry and
@@ -52,6 +60,7 @@ RUN apt-get update -qq && \
 
 # Set production environment variables and enable jemalloc for reduced memory usage and latency.
 ENV RAILS_ENV="production" \
+    PROMETHEUS_EXPORTER_BIND="0.0.0.0" \
     BUNDLE_DEPLOYMENT="1" \
     BUNDLE_PATH="/usr/local/bundle" \
     BUNDLE_WITHOUT="development:test" \
