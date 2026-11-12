@@ -5,7 +5,10 @@
 # closed for as long as any Account exists, and would REOPEN, to anyone who can
 # reach the page, if the accounts table were ever emptied. Nothing in the app
 # deletes an Account today (the users foreign key refuses it while operators
-# exist); a console or a future deletion feature could. R-012 records this.
+# exist); a console or a future deletion feature could. R-012 records this, and
+# the constraint accepted with it (2026-11-09): any account-deletion feature
+# must refuse to delete the last Account, or re-gate this page with a stored
+# completion marker, in the same change.
 #
 # Self-hosted only. In the cloud edition accounts are created some other way
 # (not built yet), and this page must not exist — an internet-facing "create the

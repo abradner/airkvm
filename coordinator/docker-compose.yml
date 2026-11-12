@@ -4,9 +4,13 @@
 #
 # Port 25433 rather than 5432, and deliberately not 25432 either: a sibling
 # repo's dev database already holds that one, and this machine runs several
-# projects at once (mise.toml's [env] comment says so). A collision here
+# projects at once. A collision here
 # presents as connecting to the WRONG project's database, which is worse than
 # a refused connection.
+#
+# Published on 127.0.0.1 only. The dev Pi sits on a LAN, and this database's
+# password is committed below; on all interfaces it would be an open database
+# to every machine on that network.
 services:
   db:
     image: postgres:18
@@ -14,7 +18,7 @@ services:
       POSTGRES_USER: coordinator
       POSTGRES_PASSWORD: coordinator_dev
     ports:
-      - "25433:5432"
+      - "127.0.0.1:25433:5432"
     volumes:
       # /var/lib/postgresql, NOT .../data. The postgres:18 image refuses the
       # pre-18 mount point with a hard "Error: in 18+, these Docker images are

@@ -65,10 +65,34 @@ RSpec.describe "signing in" do
     end
 
     it "believes X-Forwarded-For from the in-image proxy (loopback), using its rightmost entry" do
-      # Thruster appends the real peer; anything to its left came from the client.
-      alerts = (1..11).map { |i| attempt("y#{i}@example.com", from: "127.0.0.1", forwarded_for: "203.0.113.#{i}, 192.168.1.50") }
-      expect(alerts.last).to eq("Try again later.")
-      expect(Session.none? || Session.pluck(:ip_address).all?("192.168.1.50")).to be(true)
+      # Thruster appends the real peer; anything to its left came from the
+      # client. Two clients behind the same loopback proxy must get separate
+      # buckets — that is what proves the header is believed at all. (An earlier
+      # version sent all attempts from one client, which passed even with the
+      # header ignored: then everyone shares the proxy's bucket, the global
+      # lockout this guards against.)
+      exhausted = (1..11).map { |i| attempt("y#{i}@example.com", from: "127.0.0.1", forwarded_for: "203.0.113.#{i}, 192.168.1.50") }
+      expect(exhausted.last).to eq("Try again later.")
+
+      fresh = attempt("z@example.com", from: "127.0.0.1", forwarded_for: "192.168.1.51")
+      expect(fresh).to eq("Try another email address or password.")
+    end
+
+    it "believes X-Forwarded-For from a proxy named in TRUSTED_PROXIES, and from no other peer" do
+      proxies = Rails.application.config.action_dispatch.trusted_proxies
+      original = proxies.dup
+      proxies << IPAddr.new("10.0.0.2")
+
+      (1..11).each { |i| attempt("p#{i}@example.com", from: "10.0.0.2", forwarded_for: "192.168.1.60") }
+      expect(attempt("q@example.com", from: "10.0.0.2", forwarded_for: "192.168.1.61"))
+        .to eq("Try another email address or password.")
+
+      # 10.0.0.3 is not named: its header is ignored, so all of its clients share
+      # one bucket and a spoofed entry cannot buy a fresh one.
+      (1..10).each { |i| attempt("r#{i}@example.com", from: "10.0.0.3", forwarded_for: "203.0.113.#{i}") }
+      expect(attempt("s@example.com", from: "10.0.0.3", forwarded_for: "203.0.113.99")).to eq("Try again later.")
+    ensure
+      proxies.replace(original)
     end
 
     it "limits guesses at one operator's password from many addresses" do

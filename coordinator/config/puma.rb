@@ -29,6 +29,9 @@ threads_count = ENV.fetch("RAILS_MAX_THREADS", 3)
 threads threads_count, threads_count
 
 # Specifies the `port` that Puma will listen on to receive requests; default is 3000.
+# Not where it listens: `rails server` passes its own host (BINDING, else
+# localhost in development and 0.0.0.0 otherwise) and Puma's rack handler then
+# clears any bind set here. The image sets BINDING — see the Dockerfile.
 port ENV.fetch("PORT", 3000)
 
 # Allow puma to be restarted by `bin/rails restart` command.

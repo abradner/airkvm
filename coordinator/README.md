@@ -4,9 +4,8 @@ The fleet coordination service for airkvm — the Rails app devices enrol with a
 operators drive. Design: `../docs/design/fleet.md`. Roadmap and decisions:
 [issue #68](https://github.com/abradner/airkvm/issues/68).
 
-**Status: scaffold.** It boots, connects to a database, and has nothing else in
-it yet. There are Accounts, operators who sign in, and a first-boot setup page;
-there is no device enrolment yet.
+**Status: scaffold.** There are Accounts, operators who sign in, and a
+first-boot setup page; there is no device enrolment yet.
 
 ## Running it locally
 
@@ -62,9 +61,14 @@ while browsers drop the `Secure` session cookie so sign-in silently fails.
 
 ## Runtime configuration
 
-Required in production. The app **raises at boot** if any is missing rather
-than starting and failing later (`config/initializers/require_database_urls.rb`;
-AGENTS.md §8).
+Required in every production process — the server, `rails console`, rake
+tasks and `bin/jobs` alike. The app **raises at boot** if any is missing rather
+than starting and failing later (AGENTS.md §8): the database URLs in
+`config/initializers/require_database_urls.rb`, the edition in
+`config/initializers/edition.rb`, the host list in
+`config/initializers/require_hosts.rb`, and `SECRET_KEY_BASE` by Rails itself. Each
+refusal is pinned by `spec/smoke/boot_spec.rb`, which boots production in a
+child process.
 
 | Variable | Why |
 |---|---|
@@ -73,6 +77,7 @@ AGENTS.md §8).
 | `QUEUE_DATABASE_URL` | Solid Queue's database |
 | `SECRET_KEY_BASE` | Signs session cookies. Rails refuses to boot production without it. Generate with `openssl rand -hex 64` |
 | `AIRKVM_EDITION` | `self_hosted` or `cloud`. No default outside development and test — see below |
+| `COORDINATOR_HOSTS` | The host name(s) operators reach the service by, comma-separated (`kvm.example.net`; a leading dot, `.example.net`, also matches subdomains; an IPv6 address must be bracketed, `[::1]`). Every other `Host` gets a 403, except `/up` for health checks. Without it a DNS-rebinding page could reach the first-boot setup page |
 
 **The three URLs are not redundant, and this is the trap.** Rails applies
 `DATABASE_URL` to the *primary* database only — `url ||= ENV["DATABASE_URL"] if
@@ -99,6 +104,17 @@ checkout is ever the only way to decrypt something committed here.
 Optional, with safe defaults: `RAILS_MAX_THREADS`, `RAILS_LOG_LEVEL`, and
 `HTTP_PORT` (the port Thruster listens on in the image, 80 by default — not
 `PORT`, which Thruster sets for the server behind it).
+
+`TRUSTED_PROXIES` is optional in the sense that it has a safe default, but a
+real deployment needs it: the address (or CIDR) of the TLS proxy in front,
+comma-separated. Without it every client appears as that proxy and they all
+share one sign-in rate-limit bucket, so ten bad attempts from anyone lock every
+operator out for three minutes. Name the proxy itself rather than its subnet:
+a client inside a trusted range can choose its own address. A forwarded header
+from a peer that is not listed is ignored, never believed, and the first one
+from each such peer logs a warning naming it — so if the log says
+`X-Forwarded-For arrived from <address>, which is not a trusted proxy`, and that
+address is your proxy, add it here.
 Local overrides: `COORDINATOR_DB_HOST`, `COORDINATOR_DB_PORT`,
 `COORDINATOR_DB_USER`, `COORDINATOR_DB_PASSWORD` (development and test only —
 they are deliberately not in the `default:` anchor, so production cannot

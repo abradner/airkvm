@@ -7,8 +7,8 @@ module Authentication
   # and refuses a copy presented after it, so a stolen cookie re-sent later
   # fails verification before any lookup (spec/requests/sessions_spec.rb). That
   # is the one enforcement; there is deliberately no second age check on the
-  # sessions row. Seven days is a proposal: long enough not to nag on a
-  # homelab, short enough that a stolen cookie dies on its own. Changing a
+  # sessions row. Seven days, accepted 2026-11-09: long enough not to nag on
+  # a homelab, short enough that a stolen cookie dies on its own. Changing a
   # password ends every session regardless (User#end_all_sessions).
   SESSION_LIFETIME = 7.days
 
@@ -54,17 +54,16 @@ module Authentication
     # Not request.remote_ip on its own: Rails takes X-Forwarded-For at face
     # value whoever sent it — trusted_proxies only strips known proxies out of
     # the chain, it never asks whether the connecting peer IS one — so a client
-    # reaching Puma directly (a dev server, or anything on the container's
-    # network, since Puma listens behind Thruster on all interfaces) could name
-    # any address it liked. So the header is believed only when the peer is a
-    # trusted proxy (config/application.rb: loopback, i.e. the in-image
-    # Thruster), and then remote_ip's rightmost-untrusted walk applies.
+    # reaching Puma directly (a dev server, or a deployment that runs Puma
+    # without the image's BINDING=127.0.0.1) could name any address it liked.
+    # So the header is believed only when the peer is a trusted proxy
+    # (TrustedProxies.trusted?, config/trusted_proxies.rb: loopback, i.e. the
+    # in-image Thruster, plus TRUSTED_PROXIES), and then remote_ip's
+    # rightmost-untrusted walk applies. From any other peer it is ignored —
+    # fail closed — and the middleware there logs that it happened.
     def client_address
       peer = request.remote_addr
-      trusted = Rails.application.config.action_dispatch.trusted_proxies
-      trusted.any? { |proxy| proxy.include?(peer) } ? request.remote_ip : peer
-    rescue IPAddr::InvalidAddressError
-      peer
+      TrustedProxies.trusted?(peer) ? request.remote_ip : peer
     end
 
     def start_new_session_for(user)

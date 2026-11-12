@@ -17,6 +17,8 @@ require "action_view/railtie"
 # you've limited to :test, :development, or :production.
 Bundler.require(*Rails.groups)
 
+require_relative "trusted_proxies"
+
 module Coordinator
   class Application < Rails::Application
     # Initialize configuration defaults for originally generated Rails version.
@@ -33,18 +35,31 @@ module Coordinator
     # primary key a uuidv7() uuid, every *_id column a uuid — is
     # spec/db/primary_keys_spec.rb. Why v7, and what it gives away (creation
     # time), is in coordinator/AGENTS.md §4.
-    # Trust no proxy but loopback — the Thruster process the image runs in
-    # front of Puma. Rails' default trusts every private address, which on a
-    # self-hosted LAN is where the clients are, so a client's own
-    # X-Forwarded-For entries would be skipped over as "proxies". Behind a
-    # further reverse proxy, every client then shares the proxy's address — a
-    # stricter rate limit, not a looser one. This alone is not enough: see
-    # Authentication#client_address for the half Rails does not do.
-    config.action_dispatch.trusted_proxies = [ IPAddr.new("127.0.0.1"), IPAddr.new("::1") ]
-
     config.generators do |g|
       g.orm :active_record, primary_key_type: :uuid
     end
+
+    # Which peers may speak for a client through X-Forwarded-For: loopback
+    # (the Thruster process the image runs in front of Puma), plus whatever
+    # TRUSTED_PROXIES lists — the address or CIDR of the TLS proxy in front,
+    # comma-separated. Rails' default trusts every private address, which on a
+    # self-hosted LAN is where the clients are, so their own header entries
+    # would be skipped over as "proxies".
+    #
+    # Set TRUSTED_PROXIES whenever something sits in front of the container
+    # (the README requires a TLS proxy). Without it every client appears as
+    # that proxy's address and shares ONE sign-in rate-limit bucket, so anyone
+    # can lock every operator out with ten bad attempts per three minutes.
+    # Too broad a value is the opposite failure — clients inside it choose
+    # their own address — so name the proxy, not its subnet, where you can.
+    # Authentication#client_address is the other half, which Rails does not do.
+    #
+    # Fail closed, decided 2026-11-09: an unlisted proxy's header is ignored,
+    # never believed. TrustedProxies::UntrustedForwardingWarning logs the first
+    # request from each such peer, so the shared-bucket lockout above is
+    # diagnosable rather than silent (config/trusted_proxies.rb).
+    config.action_dispatch.trusted_proxies = TrustedProxies.from_env(ENV["TRUSTED_PROXIES"])
+    config.middleware.insert_before 0, TrustedProxies::UntrustedForwardingWarning
 
     # Configuration for the application, engines, and railties goes here.
     #

@@ -41,16 +41,23 @@ RSpec.describe "the coordinator scaffold" do
   # stops raising, stops naming what is missing, or starts refusing a complete
   # configuration.
   describe "production boot" do
-    def boot_production(edition: "self_hosted", **urls)
+    def boot_production(edition: "self_hosted", secret: :dummy, hosts: "kvm.example.net",
+                        script: "puts :booted", **urls)
       env = REQUIRED_DATABASE_URLS.to_h { |key| [ key, nil ] }.merge(urls.transform_keys(&:to_s))
-      env.merge!("RAILS_ENV" => "production", "SECRET_KEY_BASE_DUMMY" => "1",
-                 "AIRKVM_EDITION" => edition)
-      out, status = Open3.capture2e(env, "bin/rails", "runner", "puts :booted",
+      env.merge!("RAILS_ENV" => "production", "AIRKVM_EDITION" => edition,
+                 CoordinatorHosts::VARIABLE => hosts,
+                 "SECRET_KEY_BASE" => nil, "SECRET_KEY_BASE_DUMMY" => (secret == :dummy ? "1" : nil))
+      out, status = Open3.capture2e(env, "bin/rails", "runner", script,
                                     chdir: Rails.root.to_s)
       [ out, status ]
     end
 
-    let(:url) { "postgres://boot-spec-stand-in/unused" }
+    def all_urls = { DATABASE_URL: url, CACHE_DATABASE_URL: url, QUEUE_DATABASE_URL: url }
+
+    # A closed local port, so anything that does try to connect is refused at
+    # once. A name that does not resolve made a regression in the host check
+    # below fail only after the connect gave up — five minutes, measured.
+    let(:url) { "postgres://127.0.0.1:1/unused" }
 
     it "refuses to start with no database URLs, naming all three" do
       out, status = boot_production
@@ -68,6 +75,40 @@ RSpec.describe "the coordinator scaffold" do
       out, status = boot_production(edition: nil, DATABASE_URL: url, CACHE_DATABASE_URL: url, QUEUE_DATABASE_URL: url)
       expect(status).not_to be_success
       expect(out).to include("AIRKVM_EDITION is not set")
+    end
+
+    it "refuses to start without SECRET_KEY_BASE — there is no credentials file to fall back on" do
+      out, status = boot_production(secret: nil, DATABASE_URL: url, CACHE_DATABASE_URL: url, QUEUE_DATABASE_URL: url)
+      expect(status).not_to be_success
+      expect(out).to include("Missing `secret_key_base`")
+    end
+
+    it "refuses to start without COORDINATOR_HOSTS, even with everything else set (#88)" do
+      out, status = boot_production(hosts: nil, **all_urls)
+      expect(status).not_to be_success
+      expect(out).to include("Missing required configuration: COORDINATOR_HOSTS")
+    end
+
+    it "refuses a COORDINATOR_HOSTS that names no host (blank entries do not count)" do
+      out, status = boot_production(hosts: " , ", **all_urls)
+      expect(status).not_to be_success
+      expect(out).to include("Missing required configuration: COORDINATOR_HOSTS")
+    end
+
+    # The boot refusal is only worth having if the list is then enforced. Rack
+    # requests straight into the booted production app: HostAuthorization sits
+    # ahead of everything that would touch the (stand-in) database.
+    it "answers only the hosts it was given, and /up to anyone" do
+      script = <<~RUBY
+        %w[https://evil.example/setup/new https://kvm.example.net/up https://evil.example/up].each do |url|
+          puts "\#{url} \#{Rails.application.call(Rack::MockRequest.env_for(url)).first}"
+        end
+      RUBY
+      out, status = boot_production(script:, **all_urls)
+      expect(status).to be_success, out
+      expect(out).to include("https://evil.example/setup/new 403")
+      expect(out).to include("https://kvm.example.net/up 200")
+      expect(out).to include("https://evil.example/up 200")
     end
 
     it "starts with all three (the positive control: the check is not simply always failing)" do

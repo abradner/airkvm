@@ -25,7 +25,7 @@ device enrolment yet — issue #68's next bullet.
 |---|---|---|
 | Runtime | Rails 8.1, Ruby 4.0.6 | pinned exactly in the root `mise.toml`; `.ruby-version` and the Dockerfile agree |
 | Database | Postgres 18 | dev container on **port 25433**; production needs three URLs (below) |
-| Keys | UUIDv7 everywhere | native `uuidv7()` in Postgres 18 — see §4 |
+| Keys | UUIDv7 on every application (primary-database) table | native `uuidv7()` in Postgres 18; the Solid Cache/Queue databases keep their gems' bigint keys — see §4 |
 | Tests | rspec, factory_bot, capybara + cuprite | cuprite drives system Chromium over CDP, and **works on this Pi** despite root §6.1's `--headless` hang (probed 2026-09-26, §6.1 below). No system specs exist yet |
 | Lint | rubocop-omakase, brakeman, bundler-audit, `importmap audit` | four tools; `co:lint` runs all of them |
 | Metrics | yabeda, `/metrics` on port 9394 | loopback by default; see §6.1 for the control socket |
@@ -58,6 +58,11 @@ cloud edition it is always a 404. `FirstBoot.complete!` takes a Postgres advisor
 re-checks under it, because until used the page is open to anyone who can reach the service; the
 re-check depends on READ COMMITTED (see the comment there).
 
+**Constraint on any future account deletion** (accepted with the derived design, 2026-11-09): it
+must refuse to delete the last Account, or it must re-gate `/setup` — a stored completion marker —
+in the same change. Without one of the two, deleting the last Account hands the install to
+whoever reaches `/setup` next.
+
 ### Sessions and sign-in
 
 - Sessions last `Authentication::SESSION_LIFETIME` (7 days) from sign-in. The expiry is signed
@@ -66,8 +71,12 @@ re-check depends on READ COMMITTED (see the comment there).
 - **Never use `request.remote_ip` for anything security-relevant; use `client_address`.** Rails
   believes `X-Forwarded-For` from any peer — `trusted_proxies` only strips known proxies from the
   chain — so a client reaching Puma directly names its own address. `client_address` believes
-  the header only when the peer is loopback (the in-image Thruster, verified to append the peer it
-  saw). Sign-in is rate-limited both by that address and by email address.
+  the header only when the peer is a trusted proxy: loopback (the in-image Thruster, verified to
+  append the peer it saw) plus whatever `TRUSTED_PROXIES` names. **Fail closed** (decided
+  2026-11-09): from any other peer the header is ignored, and the first such request per peer is
+  logged so an unlisted proxy is diagnosable (`config/trusted_proxies.rb`). Both ask the one
+  predicate, `TrustedProxies.trusted?`. Sign-in is rate-limited both by that address and by email
+  address.
 - TLS is the fronting proxy's job and is required: `assume_ssl` means the app cannot detect its
   absence (README).
 
@@ -83,7 +92,13 @@ data is*: no edition-only column, no edition-only table, no record that is tenan
 edition and global in the other. Both editions run the same migrations against the same schema.
 Code that branches on the edition to add or drop a column is the seam being misused.
 
-### Every table has a UUIDv7 primary key, and every reference is a uuid
+### Every application table has a UUIDv7 primary key, and every reference is a uuid
+
+**Scope: the primary database — the tables this app's migrations own.** The Solid Cache and Solid
+Queue databases (`db/cache_schema.rb`, `db/queue_schema.rb`) are framework-owned, use bigint keys
+and references, hold no tenant data, and are never exposed by id; they are left as their gems
+ship them, because rewriting a vendor schema would be a fork to maintain. The spec reads the
+primary database only, and that is the whole of what it enforces.
 
 v7 rather than bigint so ids are not enumerable — device and enrolment ids must not be guessable
 by counting — and rather than v4 because v7 is time-ordered, so inserts stay at the right-hand
@@ -112,10 +127,24 @@ Two cases it will flag that are not mistakes of yours:
   default, which Postgres fills with `gen_random_uuid()` (v4). Add `default: -> { "uuidv7()" }`
   to the generated migration before running it.
 
+### Secrets arrive as ENV, and nothing secret is committed — not even encrypted
+
+**The rule, decided 2026-11-09** (it was a proposal in #81): every secret the coordinator needs —
+`SECRET_KEY_BASE` today, and whatever comes next — reaches it as an environment variable, set by
+the gitops repo that deploys it. There is no `config/credentials.yml.enc`, no `master.key`, no
+`RAILS_MASTER_KEY`, and none is to be added. Why: an encrypted file in the repo is only as safe as
+a key file sitting in somebody's checkout, and that key becomes the one way to decrypt it — so
+the secret's real home is wherever that key happens to be. With ENV the deploying repo is the one
+source, and this tree holds no ciphertext to protect. A missing secret is required configuration
+and fails at boot, like the rest of this section. Build steps that need a stand-in get one scoped
+to the step (`bin/precompile-assets`), never baked into the image (root §8).
+
 ### Required configuration fails fast at boot
 
-`DATABASE_URL`, `CACHE_DATABASE_URL`, `QUEUE_DATABASE_URL` and `AIRKVM_EDITION` are required in
-production and raise at boot when missing (`config/initializers/`). None has a production
+`DATABASE_URL`, `CACHE_DATABASE_URL`, `QUEUE_DATABASE_URL`, `AIRKVM_EDITION`,
+`COORDINATOR_HOSTS` and `SECRET_KEY_BASE` are required in production and raise at boot when missing
+(`config/initializers/`, and Rails itself for the secret — there is no credentials file to fall
+back on). `spec/smoke/boot_spec.rb` boots production in a child process to pin each refusal. None has a production
 default, for reasons worth knowing before adding one:
 
 - **Three database URLs, not one.** Rails applies `DATABASE_URL` to the *primary* database
@@ -124,6 +153,9 @@ default, for reasons worth knowing before adding one:
 - **No default edition.** Both editions boot and serve normally, so a wrong guess does not fail
   — a cloud deploy running as `self_hosted` would expose the first-boot setup page instead. The
   local default is an allowlist (development and test), so staging fails closed.
+- **`COORDINATOR_HOSTS` is required, not optional-with-a-warning** (#88, decided 2026-11-09). It
+  populates `config.hosts`; unset, Rails answers any `Host`, which lets a DNS-rebinding page reach
+  the first-boot setup page (R-012). `/up` is exempt so health checks dialling an address work.
 
 ## 6. Development
 
@@ -185,7 +217,8 @@ CI runs it as its own job.
 
 ## 7. CI
 
-The `coordinator` job in the root `.github/workflows/ci.yml`: specs and `co:lint` against a
-`postgres:18` service on port 25433, matching the local config. A third job rather than steps in
+The `coordinator` job in the root `.github/workflows/ci.yml`: specs, `co:lint` and `co:precompile`
+(the image's asset step, by the script the Dockerfile runs) against a `postgres:18` service on port
+25433, matching the local config. A third job rather than steps in
 `checks`, because a `services:` block is per-job — the one case the root §7 billing logic cannot
 satisfy.

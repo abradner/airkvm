@@ -17,4 +17,5 @@ exec env \
   CACHE_DATABASE_URL=postgres://build-stand-in/unused \
   QUEUE_DATABASE_URL=postgres://build-stand-in/unused \
   AIRKVM_EDITION=self_hosted \
+  COORDINATOR_HOSTS=build-stand-in.invalid \
   ./bin/rails assets:precompile
