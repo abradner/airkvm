@@ -46,7 +46,7 @@ jobs:
       # also installs Ruby for the coordinator (a precompiled download, ~5s),
       # which this job does not use: accepted rather than keeping a second
       # hand-written tool list here that would drift from mise.toml.
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v5
       # mise refuses a config it has not been told to trust, and this one has a
       # templated [env] block, so it is not a config mise will read blindly.
       # One line here rather than discovering it as a red first run.
@@ -141,7 +141,7 @@ jobs:
       # not enough — `mise run` then auto-installed the other seven tools on
       # its first task (the job log showed it), which is what the job-level
       # MISE_TASK_RUN_AUTO_INSTALL=false above stops.
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v5
         with:
           install_args: ruby
       - run: mise trust
