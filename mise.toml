@@ -34,7 +34,7 @@ clang-format = "23.1.1"
 # that launcher and to install it. The console itself still has no build step,
 # no npm and no node_modules (§4): nothing in packages/console is compiled, and
 # the firmware embeds the literal files.
-node = "22"
+node = "26"
 "npm:typescript" = "7.0.2"
 # The coordinator (Rails). Exact, not "4.0": coordinator/.ruby-version and the
 # Dockerfile both say 4.0.6, and a floating pin here would be a second, later
