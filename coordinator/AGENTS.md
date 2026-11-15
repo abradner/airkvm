@@ -23,7 +23,7 @@ device enrolment yet — issue #68's next bullet.
 
 | Layer | Choice | Notes |
 |---|---|---|
-| Runtime | Rails 8.1, Ruby 4.0.6 | pinned exactly in the root `mise.toml`; `.ruby-version` and the Dockerfile agree |
+| Runtime | Rails 8.1, Ruby 4.0 | pinned exactly in the root `mise.toml`; `.ruby-version` and the Dockerfile agree |
 | Database | Postgres 18 | dev container on **port 25433**; production needs three URLs (below) |
 | Keys | UUIDv7 on every application (primary-database) table | native `uuidv7()` in Postgres 18; the Solid Cache/Queue databases keep their gems' bigint keys — see §4 |
 | Tests | rspec, factory_bot, capybara + cuprite | cuprite drives system Chromium over CDP, and **works on this Pi** despite root §6.1's `--headless` hang (probed 2026-09-26, §6.1 below). No system specs exist yet |

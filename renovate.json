@@ -2,5 +2,16 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended"
+  ],
+  "packageRules": [
+    {
+      "description": "The coordinator's Ruby is pinned in three files under three managers: mise.toml (mise), coordinator/.ruby-version (ruby-version) and the Dockerfile's RUBY_VERSION ARG (dockerfile). Renovate links none of them, so solo bumps land as separate PRs and leave the image on a different Ruby than CI. One group, one PR. Keep .ruby-version bare (4.0.9, not ruby-4.0.9): Renovate's ruby-version manager silently skips the prefixed form, verified by local dry-run 2026-11-15.",
+      "matchPackageNames": [
+        "ruby",
+        "ruby-version",
+        "docker.io/library/ruby"
+      ],
+      "groupName": "ruby"
+    }
   ]
 }
