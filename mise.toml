@@ -42,7 +42,7 @@ node = "26"
 # floating in another is two versions", which this repo has already paid for
 # once with clang-format. .ruby-version stays because `rails new` writes it and
 # non-mise tooling reads it; this file is what mise resolves.
-ruby = "4.0.6"
+ruby = "4.0.9"
 
 # ESP-IDF itself is not a mise-managed tool: it is a git checkout plus its own
 # installer that fetches per-target compilers. `mise run fw:setup` handles both and
