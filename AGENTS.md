@@ -31,7 +31,7 @@ This repo holds more than the firmware. The trees, and what each is:
 |---|---|---|
 | `firmware/` | The ESP-IDF firmware — `main/`, its host tests, its dev tools, its sdkconfigs | ESP-IDF v5.5, CMake/ninja |
 | `packages/console/` | The browser console the dongle serves. Shared, because the fleet coordinator will serve the same page (`docs/design/fleet.md`) | None — plain files, no build step (§4) |
-| `coordinator/` | The fleet coordination service — a Rails app. **Has its own `coordinator/AGENTS.md`; read it before working there.** | Rails 8.1, Ruby 4.0.6, Postgres 18 |
+| `coordinator/` | The fleet coordination service — a Rails app. **Has its own `coordinator/AGENTS.md`; read it before working there.** | Rails 8.1, Ruby 4.0 (exact pin in `mise.toml`), Postgres 18 |
 | `docs/` | Repo-wide: the boundary map and the design docs | — |
 
 `marketing/` (a static site) is still to come. The coordinator's design is `docs/design/fleet.md`;

@@ -37,12 +37,13 @@ clang-format = "23.1.1"
 node = "26"
 "npm:typescript" = "7.0.2"
 # The coordinator (Rails). Exact, not "4.0": coordinator/.ruby-version and the
-# Dockerfile both say 4.0.6, and a floating pin here would be a second, later
+# Dockerfile carry the same version, and a floating pin here would be a second, later
 # Ruby the moment 4.0.7 ships — §6.1's "a version pinned in one place and
 # floating in another is two versions", which this repo has already paid for
 # once with clang-format. .ruby-version stays because `rails new` writes it and
-# non-mise tooling reads it; this file is what mise resolves.
-ruby = "4.0.6"
+# non-mise tooling reads it; this file is what mise resolves. renovate.json
+# groups all three into one PR, so they cannot drift apart by bump.
+ruby = "4.0.9"
 
 # ESP-IDF itself is not a mise-managed tool: it is a git checkout plus its own
 # installer that fetches per-target compilers. `mise run fw:setup` handles both and
