@@ -43,7 +43,7 @@ node = "26"
 # once with clang-format. .ruby-version stays because `rails new` writes it and
 # non-mise tooling reads it; this file is what mise resolves. renovate.json
 # groups all three into one PR, so they cannot drift apart by bump.
-ruby = "4.0.9"
+ruby = "4.0.10"
 
 # ESP-IDF itself is not a mise-managed tool: it is a git checkout plus its own
 # installer that fetches per-target compilers. `mise run fw:setup` handles both and
