@@ -120,7 +120,7 @@ jobs:
       MISE_TASK_RUN_AUTO_INSTALL: "false"
     services:
       db:
-        image: postgres:18
+        image: postgres:19
         env:
           POSTGRES_USER: coordinator
           POSTGRES_PASSWORD: coordinator_dev
