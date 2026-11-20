@@ -13,7 +13,7 @@
 # to every machine on that network.
 services:
   db:
-    image: postgres:18
+    image: postgres:19
     environment:
       POSTGRES_USER: coordinator
       POSTGRES_PASSWORD: coordinator_dev
