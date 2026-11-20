@@ -27,7 +27,7 @@ python = "3.15.2"
 cmake = "4.5.0"
 ninja = "1.13.2"
 ruff = "0.17.5"
-clang-format = "23.1.1"
+clang-format = "23.1.6"
 # For the console's type checker only. TypeScript 7 IS the native (Go) compiler
 # — the separate @typescript/native-preview package was superseded — so `tsc`
 # here is a platform binary behind a thin launcher, and node is present to run
